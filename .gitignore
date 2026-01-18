@@ -9,6 +9,10 @@
 *.ilk
 *.exp
 *.lib
+*.js
+*.html
+*.wasm
+*-export
 
 ols.json
 odinfmt.json
