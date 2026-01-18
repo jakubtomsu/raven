@@ -1,0 +1,4076 @@
+#+vet explicit-allocators shadowing
+package raven
+
+import "base:intrinsics"
+import "core:strings"
+import "core:log"
+import "core:slice"
+import "core:path/filepath"
+import "core:math/linalg"
+import "core:math"
+import "base:runtime"
+import debug_trace "core:debug/trace"
+import stbi "vendor:stb/image"
+
+import "gpu"
+import "platform"
+import "rscn"
+import "audio"
+
+#assert(size_of(matrix[3, 3]f32) == (3 * 3 * size_of(f32)))
+
+// TODO: go through all TODOs
+
+// TODO: objects in scene data
+// TODO: asset_load and reload
+// TODO: consistent get_* and no get API!
+// TODO: VFS files and assets
+// TODO: multiple texture pools?
+// TODO: render tex binding
+// TODO: font state
+// TODO: audio
+// TODO: change layer draws
+// TODO: separate hash table size from backing array size
+// TODO: abstract log_error and log_warn etc to comptime disable logging?
+// TODO: mouse x rect functions and unify rects
+// TODO: resolve degrees/radians! USE ONLY ONE EVERYWHERE
+// TODO: compress vertex and instance data more
+// TODO: custom default context, with a custom default logger and a debug/trace assert proc
+
+// ARTICLES
+// - blog post about two level bit sets
+// - open/container-less datastructures as building blocks
+// - MM style functional timestep
+
+RELEASE :: #config(RAVEN_RELEASE, false)
+
+// Enable internal logs. Mostly useful for debugging internals.
+LOG_INTERNAL :: #config(RAVEN_LOG_INTERNAL, false)
+
+MAX_GROUPS :: 64
+MAX_TEXTURES :: 256
+MAX_MESHES :: 1024
+MAX_OBJECTS :: 1024 * 4
+MAX_SPLINES :: 1024
+
+MAX_WATCHED_DIRS :: 8
+MAX_DRAW_LAYERS :: 32
+MAX_RENDER_TEXTURES :: 64
+MAX_TEXTURE_RESOURCES :: 64
+MAX_SHADERS :: 64
+MAX_FILES :: 1024
+
+MAX_TEXTURE_POOLS :: 8
+MAX_TEXTURE_POOL_SLICES :: 64
+
+MAX_BIND_STATE_DEPTH :: 64
+
+// This is the actual swapchain used for rendering directly to screen.
+DEFAULT_RENDER_TEXTURE :: Render_Texture_Handle{MAX_RENDER_TEXTURES - 1, 0}
+
+HASH_SEED :: #config(RAVEN_HASH_SEED, 0xcbf29ce484222325)
+MAX_PROBE_DIST :: #config(RAVEN_MAX_TABLE_PROBE_DIST, 16)
+
+HASH_ALG :: "fnv64a"
+
+Vec2 :: [2]f32
+Vec3 :: [3]f32
+Vec4 :: [4]f32
+IVec2 :: [2]i32
+IVec3 :: [3]i32
+IVec4 :: [4]i32
+Mat3 :: matrix[3, 3]f32
+Mat4 :: matrix[4, 4]f32
+Quat :: quaternion128
+
+Hash :: u64
+
+HANDLE_INDEX_INVALID :: ~Handle_Index(0)
+
+Handle_Index :: u16
+Handle_Gen :: u8
+
+Handle :: struct {
+    index:  Handle_Index,
+    gen:    Handle_Gen,
+}
+
+Group_Handle :: distinct Handle
+Object_Handle :: distinct Handle
+Mesh_Handle :: distinct Handle
+Texture_Handle :: distinct Handle
+Texture_Resource_Handle :: distinct Handle
+Spline_Handle :: distinct Handle
+Render_Texture_Handle :: distinct Handle
+Vertex_Shader_Handle :: distinct Handle
+Pixel_Shader_Handle :: distinct Handle
+
+Rect :: struct {
+    min:    Vec2,
+    max:    Vec2,
+}
+
+#assert(len(Blend_Mode) <= 4)
+// NOTE: if you want an Alpha Clip mode, you must do it yourself in a shader with 'discard'.
+Blend_Mode :: enum u8 {
+    Opaque = 0,
+    Alpha, // Regular alpha transparency.
+    Add, // Additive blend mode, only makes things brighter.
+    Premultiplied_Alpha, // For certain sprites.
+}
+
+#assert(len(Fill_Mode) <= 4)
+Fill_Mode :: enum u8 {
+    All, // Fill both front and back. Default for simplicity.
+    Front, // Fill the default front side of the triangles.
+    Back, // Inverted
+    Wire, // Two-sided wireframe mode
+}
+
+
+_state: ^State
+
+State :: struct {
+    is_dynamic:             bool,
+    start_time:             u64,
+    curr_time:              u64,
+    last_time:              u64,
+    frame_dur_ns:           u64,
+    frame_index:            u64,
+    screen_size:            [2]i32,
+    allocator:              runtime.Allocator,
+    window:                 platform.Window,
+    dpi_scale:              f32,
+
+    debug_trace_ctx:        debug_trace.Context,
+
+    uploaded_gpu_draws:     bool,
+
+    input:                  Input,
+
+    bind_state:             Bind_State,
+    bind_states:            [MAX_BIND_STATE_DEPTH]Bind_State,
+    bind_states_len:        i32,
+
+    default_mesh:           Mesh_Handle,
+    default_texture:        Texture_Handle,
+    default_font_texture:   Texture_Handle,
+    error_texture:          Texture_Handle,
+    default_sprite_vs:      Vertex_Shader_Handle,
+    default_vs:             Vertex_Shader_Handle,
+    default_ps:             Pixel_Shader_Handle,
+
+    draw_batch_consts:      gpu.Resource_Handle,
+    sprite_inst_buf:        gpu.Resource_Handle,
+    mesh_inst_buf:          gpu.Resource_Handle,
+    quad_ibuf:              gpu.Resource_Handle,
+
+    watched_dirs_num:       i32,
+    watched_dirs:           [MAX_WATCHED_DIRS]Watched_Dir,
+
+    draw_layers:            [MAX_DRAW_LAYERS]Draw_Layer,
+    draw_layers_consts:     gpu.Resource_Handle,
+
+    groups_used:            bit_set[0..<MAX_GROUPS],
+    groups_gen:             [MAX_GROUPS]Handle_Gen,
+    groups:                 [MAX_GROUPS]Group,
+
+    render_textures_used:   bit_set[0..<MAX_RENDER_TEXTURES],
+    render_textures_gen:    [MAX_RENDER_TEXTURES]Handle_Gen,
+    render_textures:        [MAX_RENDER_TEXTURES]Render_Texture,
+
+    objects_hash:           [MAX_OBJECTS]Hash,
+    objects_gen:            [MAX_OBJECTS]Handle_Gen,
+    objects:                [MAX_OBJECTS]Object,
+
+    meshes_hash:            [MAX_MESHES]Hash,
+    meshes_gen:             [MAX_MESHES]Handle_Gen,
+    meshes:                 [MAX_MESHES]Mesh,
+
+    splines_hash:           [MAX_SPLINES]Hash,
+    splines_gen:            [MAX_SPLINES]Handle_Gen,
+    splines:                [MAX_SPLINES]Spline,
+
+    textures_hash:          [MAX_TEXTURES]Hash,
+    textures_gen:           [MAX_TEXTURES]Handle_Gen,
+    textures:               [MAX_TEXTURES]Texture,
+    texture_pools:          [MAX_TEXTURE_POOLS]Texture_Pool,
+    texture_pools_len:      i32,
+
+    pixel_shaders_hash:     [MAX_SHADERS]Hash,
+    pixel_shaders_gen:      [MAX_SHADERS]Handle_Gen,
+    pixel_shaders:          [MAX_SHADERS]Pixel_Shader,
+
+    vertex_shaders_hash:    [MAX_SHADERS]Hash,
+    vertex_shaders_gen:     [MAX_SHADERS]Handle_Gen,
+    vertex_shaders:         [MAX_SHADERS]Vertex_Shader,
+
+    files_hash:             [MAX_FILES]Hash,
+    files:                  [MAX_FILES]File,
+
+    platform_state:         platform.State,
+    gpu_state:              gpu.State,
+    audio_state:            audio.State,
+}
+
+// VFS file
+File :: struct {
+    flags:          bit_set[File_Flag],
+    watched_dir:    u8,
+    data:           []byte,
+}
+
+File_Flag :: enum u8 {
+    Dirty,
+    Changed, // Waiting to get loaded
+    Dynamically_Allocated, // must use _state.allocator
+}
+
+Watched_Dir :: struct {
+    path_len:   i32,
+    path:       [256]byte,
+    watcher:    platform.File_Watcher,
+}
+
+Pixel_Shader :: distinct Shader
+Vertex_Shader :: distinct Shader
+Shader :: struct {
+    shader: gpu.Shader_Handle,
+}
+
+
+// Data Scope
+// Collection of data with one lifetime.
+Group :: struct {
+    spline_vert_num:    i32,
+    mesh_vert_num:      i32,
+    mesh_index_num:     i32,
+    object_child_num:   i32,
+
+    object_buf:         []Object,
+    object_child_buf:   []Object_Handle,
+    spline_vert_buf:    []Spline_Vertex,
+
+    vbuf:               gpu.Resource_Handle,
+    ibuf:               gpu.Resource_Handle,
+}
+
+Object_Kind :: rscn.Object_Kind
+
+Object :: struct {
+    kind:               Object_Kind,
+
+    // TODO
+    // Format like "Enemy:Foo0"?
+    name_prefix:        Hash,
+    name:               [16]u8,
+
+    group:              Group_Handle,
+
+    // Depends on 'kind' - either mesh or spline handle.
+    data_handle:        Handle,
+    texture:            Texture_Handle,
+
+    parent:             Object_Handle,
+    child_offset:       i32,
+    child_num:          i32,
+
+    param:              u64, // user param
+
+    local_pos:          Vec3,
+    local_rot:          Mat3,
+    local_scale:        Vec3,
+
+    // TODO
+    world_pos:          Vec3,
+    world_rot:          Mat3,
+    world_scale:        Vec3,
+}
+
+Mesh :: struct {
+    group:          Group_Handle,
+
+    vert_num:       i32,
+    vert_offs:      i32,
+    index_num:      i32,
+    index_offs:     i32,
+
+    param:          u64, // user param
+
+    bounds_min:     Vec3,
+    bounds_max:     Vec3,
+}
+
+Spline :: struct {
+    group:          Group_Handle,
+
+    vert_num:       i32,
+    vert_offs:      i32,
+
+    param:          u64, // user param
+
+    bounds_min:     Vec3,
+    bounds_max:     Vec3,
+}
+
+
+Mesh_Index :: u16 // GPU Vertex Index
+Spline_Vertex :: rscn.Spline_Vertex
+
+#assert(size_of(Mesh_Vertex) == 28)
+Mesh_Vertex :: struct {
+    pos:    [3]f32,
+    uv:     [2]f32,
+    normal: [3]u8 `gpu:"normalized"`,
+    p0:     u8,
+    color:  [3]u8 `gpu:"normalized"`,
+    p1:     u8,
+}
+
+
+Texture_Pool :: struct {
+    slices_used:    bit_set[0..<MAX_TEXTURE_POOL_SLICES],
+    size:           IVec2,
+    slices:         i32,
+    resource:       gpu.Resource_Handle,
+}
+
+Texture :: struct {
+    size:       [2]u16,
+    pool_index: u8,
+    slice:      u8,
+    resource:   gpu.Resource_Handle,
+}
+
+Texture_Data :: struct {
+    size:   [2]i32,
+    pixels: [][4]u8,
+}
+
+
+Bind_State :: struct {
+    draw_layer:         u8,
+    blend:              Blend_Mode,
+    fill:               Fill_Mode,
+    depth_test:         bool,
+    depth_write:        bool,
+    texture_mode:       Bind_Texture_Mode,
+    texture:            u8,
+    texture_slice:      u8,
+    texture_size:       [2]u16, // cached
+    pixel_shader:       u8,
+    vertex_shader:      u8,
+}
+
+Bind_Texture_Mode :: enum u8 {
+    Non_Pooled,
+    Pooled,
+    Render_Texture,
+}
+
+
+// NOTE: the dynamic arrays must be allocated with temp_allocator.
+// Beware of the default append() behavior.
+Draw_Layer :: struct {
+    camera:             Camera,
+    flags:              bit_set[Draw_Layer_Flag],
+
+    sprite_offs:        u32,
+    mesh_offs:          u32,
+
+    last_sprites_len:   i32,
+    last_meshes_len:    i32,
+
+    sprites:            #soa[dynamic]Sprite_Draw,
+    meshes:             #soa[dynamic]Mesh_Draw,
+    triangles:          #soa[dynamic]Triangle_Draw,
+}
+
+Draw_Layer_Flag :: enum u8 {
+    No_Cull,
+    No_Sort,
+}
+
+Draw_Layer_Constants :: struct #all_or_none {
+    view_proj:  Mat4,
+    cam_pos:    Vec3,
+}
+
+#assert(size_of(Draw_Batch_Constants) == 16)
+Draw_Batch_Constants :: struct #align(16) {
+    instance_offset:    u32,
+    vertex_offset:      u32,
+}
+
+
+Render_Texture :: struct #all_or_none {
+    size:   IVec2,
+    color:  gpu.Resource_Handle,
+    depth:  gpu.Resource_Handle,
+}
+
+Sprite_Draw :: struct #all_or_none {
+    key:    Sprite_Sort_Key,
+    inst:   Sprite_Inst,
+}
+
+// NOTE: no sprite vertex shader.
+// Top bits are higher priority when sorting.
+Sprite_Sort_Key :: bit_field u64 {
+    dist:           u16 | 14,
+    fill:           Fill_Mode  | 2,
+    depth_write:    bool | 1,
+    depth_test:     bool | 1,
+    blend:          Blend_Mode | 2,
+    texture_mode:   Bind_Texture_Mode | 2,
+    texture:        u8 | 8,
+    ps:             u8 | 6,
+}
+
+// GPU Data
+Sprite_Inst :: struct #all_or_none {
+    pos:        [3]f32,
+    color:      [4]u8,
+    mat_x:      [3]f32,
+    uv_min_x:   f32,
+    mat_y:      [3]f32,
+    uv_min_y:   f32,
+    uv_size:    [2]f32,
+    tex_slice:  u8,
+}
+
+Mesh_Draw :: struct #all_or_none {
+    key:    Mesh_Sort_Key,
+    inst:   Mesh_Inst,
+    extra:  Mesh_Draw_Extra,
+}
+
+Mesh_Draw_Extra :: struct #all_or_none {
+    index:  u16,
+}
+
+#assert(MAX_TEXTURES <= 256)
+#assert(MAX_SHADERS <= 64)
+#assert(MAX_GROUPS <= 64)
+
+// NOTE: we *could* probably shrink sort dist to 8 bits
+Mesh_Sort_Key :: bit_field u64 {
+    dist:           u16 | 16,
+    index_num:      u16 | 16,
+    blend:          Blend_Mode | 2,
+    fill:           Fill_Mode | 2,
+    depth_write:    bool | 1,
+    depth_test:     bool | 1,
+    group:          u8 | 6,
+    ps:             u8 | 5,
+    vs:             u8 | 5,
+    texture:        u8 | 8,
+    texture_mode:   Bind_Texture_Mode | 2,
+}
+
+Mesh_Inst :: struct #all_or_none {
+    pos:        Vec3,
+    mat_x:      Vec3,
+    mat_y:      Vec3,
+    mat_z:      Vec3,
+    col:        [4]u8,
+    vert_offs:  u32,
+    tex_slice:  u8,
+    _pad0:      [3]u8,
+    param:      u32, // user param
+}
+
+Triangle_Sort_Key :: bit_field u64 {
+    dist:           u16 | 16,
+    blend:          Blend_Mode | 2,
+    fill:           Fill_Mode | 2,
+    depth_write:    bool | 1,
+    depth_test:     bool | 1,
+    ps:             u8 | 6,
+    vs:             u8 | 6,
+    texture:        u8 | 6,
+}
+
+Triangle_Draw :: struct #all_or_none {
+    key:    Triangle_Sort_Key,
+    offs:   u32,
+}
+
+DEFAULT_SAMPLERS :: [2]gpu.Sampler_Desc{
+    0 = {
+        filter = .Unfiltered,
+        bounds = {.Wrap, .Wrap, .Wrap},
+        mip_max = 10,
+    },
+    // 1 = {
+    //     filter = .Filtered,
+    //     bounds = .Wrap,
+    //     mip_max = 10,
+    // },
+}
+
+// MARK: Base
+
+set_state_ptr :: proc(state: ^State) {
+    _state = state
+    platform._state = &_state.platform_state
+    gpu._state = &_state.gpu_state
+    audio._state = &_state.audio_state
+}
+
+get_state_ptr :: proc() -> (state: ^State) {
+    return _state
+}
+
+@(require_results)
+is_initialized :: proc "contextless" () -> bool {
+    if _state == nil {
+        return false
+    }
+
+    return true
+}
+
+Step_Proc :: #type proc "contextless" (_prev_data: rawptr) -> (data: rawptr)
+
+// Default runner for a raven app.
+// This is completely optional to use, it's just simple default.
+// Calling this does nothing when compiling as a DLL, it's the responsibility
+// of whoever loaded the DLL (e.g. hotreload runner) to call the app.
+// NOTE: Things like reload never get called in this mode.
+run_main_loop :: proc(_step_proc: Step_Proc) {
+    when ODIN_BUILD_MODE != .Dynamic {
+        prev: rawptr
+        for {
+            prev = _step_proc(prev)
+            if prev == nil {
+                break
+            }
+        }
+    }
+}
+
+
+
+// No-op if already initialized.
+init :: proc(name := "Raven App", style: platform.Window_Style = .Regular, allocator := context.allocator) {
+    if _state != nil {
+        return
+    }
+
+    state := new(State, allocator)
+    state.is_dynamic = true
+
+    platform.init(&state.platform_state)
+
+    // platform.set_dpi_aware()
+
+    window := platform.create_window(name, style = style)
+
+    gpu.init(&state.gpu_state, platform.get_native_window_ptr(window))
+
+    audio.init(&state.audio_state)
+
+    init_ex(state, window, allocator)
+}
+
+
+init_ex :: proc(state: ^State, window: platform.Window, allocator: runtime.Allocator) {
+    if _state != nil {
+        return
+    }
+
+    assert(state != nil)
+    assert(platform._state != nil)
+    assert(gpu._state != nil)
+    assert(audio._state != nil)
+
+    log.info("Initializing Raven...")
+
+    _state = state
+
+    // TODO: more safety checking in the entire init function
+
+    _state.allocator = allocator
+    _state.window = window
+    _state.start_time = platform.get_time_ns()
+
+    debug_trace.init(&_state.debug_trace_ctx)
+
+    _state.screen_size = platform.get_window_frame_rect(window).size
+
+    // pool128_ok := create_texture_pool(128, 64)
+    // assert(pool128_ok)
+
+    // Swapchain
+    _state.render_textures_used += {int(DEFAULT_RENDER_TEXTURE.index)}
+    _state.render_textures_gen[DEFAULT_RENDER_TEXTURE.index] = DEFAULT_RENDER_TEXTURE.gen
+    _state.render_textures[DEFAULT_RENDER_TEXTURE.index] = Render_Texture{
+        size = _state.screen_size,
+        color = gpu.update_swapchain(platform.get_native_window_ptr(window), _state.screen_size) or_else panic("gpu"),
+        depth = gpu.create_texture_2d("rv-def-rentex-depth", .D_F32, _state.screen_size, render_texture = true) or_else panic("gpu"),
+    }
+
+    _state.sprite_inst_buf = gpu.create_buffer("rv-sprite-inst-buf",
+        stride = size_of(Sprite_Inst),
+        size = size_of(Sprite_Inst) * 1024 * 32,
+        usage = .Dynamic,
+    ) or_else panic("gpu")
+
+    _state.mesh_inst_buf = gpu.create_buffer("rv-mesh-inst-buf",
+        stride = size_of(Mesh_Inst),
+        size = size_of(Mesh_Inst) * 1024 * 32,
+        usage = .Dynamic,
+    ) or_else panic("gpu")
+
+    _state.draw_batch_consts = gpu.create_constants("rv-draw-batch-consts", size_of(Draw_Batch_Constants)) or_else panic("gpu")
+
+    _state.draw_layers_consts = gpu.create_constants("rv-layer-consts", size_of(Draw_Layer_Constants), MAX_DRAW_LAYERS) or_else panic("gpu")
+
+    quad_indices := [6]u16{
+        0, 1, 2,
+        1, 3, 2,
+    }
+
+    _state.quad_ibuf = gpu.create_index_buffer("rv-quad-index-buf", data = gpu.slice_bytes(quad_indices[:])) or_else panic("gpu")
+
+    // insert_mesh_by_name("Cube", )
+
+    // _ = create_group(
+    //     max_spline_verts = 0,
+    //     max_total_children = 0,
+    // )
+
+    _state.default_texture = create_texture_from_encoded_data(
+        "default",
+        #load("data/default.png"),
+    ) or_else panic("Failed to load default texture")
+
+    _state.error_texture = create_texture_from_encoded_data(
+        "error",
+        #load("data/error.png"),
+    ) or_else panic("Failed to load error texture")
+
+    _ = create_texture_from_encoded_data(
+        "thick",
+        #load("data/CGA8x8thick.png"),
+    ) or_else panic("Failed to load default font texture")
+
+    _ = create_texture_from_encoded_data(
+        "thin",
+        #load("data/CGA8x8thin.png"),
+    ) or_else panic("Failed to load default font texture")
+
+    default_sprite_vs: []byte
+    default_vs: []byte
+    default_ps: []byte
+
+    switch gpu.BACKEND {
+    case gpu.BACKEND_D3D11:
+
+        INCL :: #load("data/raven.hlsli", string)
+
+        default_sprite_vs = transmute([]byte)(INCL + #load("data/default_sprite.vs.hlsl", string))
+        default_vs = transmute([]byte)(INCL + #load("data/default.vs.hlsl", string))
+        default_ps = transmute([]byte)(INCL + #load("data/default.ps.hlsl", string))
+
+    case gpu.BACKEND_WGPU:
+
+        INCL :: #load("data/raven.wgsl", string)
+
+        default_sprite_vs = transmute([]byte)(INCL + #load("data/default_sprite.vs.wgsl", string))
+        // default_vs = transmute([]byte)(INCL + #load("data/default.vs.wgsl", string))
+        default_ps = transmute([]byte)(INCL + #load("data/default.ps.wgsl", string))
+
+    case:
+        panic("GPU backend not supported or unknown")
+    }
+
+    _state.default_sprite_vs = create_vertex_shader("default_sprite", default_sprite_vs) or_else panic("Failed to load default sprite vertex shader")
+    // _state.default_vs = create_vertex_shader("default", default_vs) or_else panic("Failed to load default vertex shader")
+    _state.default_ps = create_pixel_shader("default", default_ps) or_else panic("Failed to load default pixel shader")
+
+    log.info("Raven initialized successfully")
+}
+
+shutdown :: proc() {
+    if _state == nil {
+        return
+    }
+
+    audio.shutdown()
+    gpu.shutdown()
+    platform.shutdown()
+
+    if _state.is_dynamic {
+        free(_state, _state.allocator)
+    }
+
+    _state = nil
+}
+
+new_frame :: proc(present_frame := true, vsync := true) -> (keep_running: bool) {
+    assert(_state != nil)
+
+    keep_running = true
+
+    free_all(context.temp_allocator)
+    // In case big file allocations happened...
+    defer free_all(context.temp_allocator)
+
+    if _state.frame_index != 0 {
+        gpu.end_frame(sync = vsync)
+    }
+
+    gpu.begin_frame()
+
+    audio.update()
+
+    assert(_state.bind_states_len == 0, "Looks like you forgot pop_binds() somewhere")
+    _state.frame_index += 1
+    _state.uploaded_gpu_draws = false
+
+    time_ns := platform.get_time_ns()
+    _state.curr_time = time_ns
+
+    _state.frame_dur_ns = time_ns - _state.last_time
+
+    _state.last_time = time_ns
+
+    _clear_draw_layers()
+
+    _state.dpi_scale = platform.window_dpi_scale(_state.window)
+    // log.info("DPI scale: ", _state.dpi_scale)
+
+    _state.input.mouse_delta = 0
+    _state.input.scroll_delta = 0
+    _state.input.keys_pressed = {}
+    _state.input.keys_repeated = {}
+    _state.input.keys_released = {}
+    _state.input.mouse_buttons_pressed = {}
+    _state.input.mouse_buttons_repeated = {}
+    _state.input.mouse_buttons_released = {}
+
+    for event in platform.poll_window_events(_state.window) {
+        switch v in event {
+        case platform.Event_Exit:
+            keep_running = false
+
+        case platform.Event_Key:
+            if v.pressed {
+                if v.key not_in _state.input.keys_down {
+                    _state.input.keys_pressed += {v.key}
+                    _state.input.keys_buffered += {v.key}
+                    _state.input.keys_timer[v.key] = 0
+                } else {
+                    _state.input.keys_repeated += {v.key}
+                }
+                _state.input.keys_down += {v.key}
+            } else {
+                _state.input.keys_down -= {v.key}
+                _state.input.keys_released += {v.key}
+            }
+
+        case platform.Event_Mouse_Button:
+            if v.pressed {
+                if v.button not_in _state.input.mouse_buttons_down {
+                    _state.input.mouse_buttons_pressed += {v.button}
+                    _state.input.mouse_buttons_buffered += {v.button}
+                    _state.input.mouse_buttons_timer[v.button] = 0
+                } else {
+                    _state.input.mouse_buttons_repeated += {v.button}
+                }
+                _state.input.mouse_buttons_down += {v.button}
+            } else {
+                _state.input.mouse_buttons_down -= {v.button}
+                _state.input.mouse_buttons_released += {v.button}
+            }
+
+        case platform.Event_Mouse:
+            _state.input.mouse_delta.x += f32(v.move.x)
+            _state.input.mouse_delta.y += f32(v.move.y)
+            _state.input.mouse_pos.x = f32(v.pos.x)
+            _state.input.mouse_pos.y = f32(v.pos.y)
+
+        case platform.Event_Scroll:
+            _state.input.scroll_delta += v.amount
+
+        case platform.Event_Window_Size:
+        }
+    }
+
+    changed_files := make([dynamic]string, 0, 64, context.temp_allocator)
+
+    for i in 0..<_state.watched_dirs_num {
+        dir := &_state.watched_dirs[i]
+
+        path := string(dir.path[:dir.path_len])
+
+        changes := platform.watch_file_changes(&dir.watcher)
+
+        for change in changes {
+            log.info("changed file:", change)
+
+            file_path := filepath.join({path, change}, context.temp_allocator)
+
+            data, ok := platform.read_file_by_path(file_path, allocator = _state.allocator)
+
+            if !ok {
+                log_internal("Failed to hotreload file {}", file_path)
+                continue
+            }
+
+            if file, file_ok := get_internal_file_by_hash(hash_name(change)); file_ok {
+                append(&changed_files, change)
+
+                if .Dynamically_Allocated in file.flags {
+                    delete(file.data, _state.allocator)
+                }
+
+                file.flags += {.Dirty, .Dynamically_Allocated}
+                file.data = data
+            } else {
+                // NEW file
+                create_file_by_name(change, data, flags = {.Dynamically_Allocated})
+            }
+        }
+    }
+
+    for change in changed_files {
+        load_asset(change, {})
+    }
+
+    _state.bind_states_len = 0
+    _state.bind_state = {}
+
+    bind_pixel_shader_by_handle({})
+    bind_vertex_shader_by_handle({})
+    bind_texture_by_handle({})
+
+    _state.screen_size = platform.get_window_frame_rect(_state.window).size
+
+    return keep_running
+}
+
+_clear_draw_layers :: proc() {
+    for &layer in _state.draw_layers {
+        layer.last_sprites_len = i32(len(layer.sprites))
+        layer.last_meshes_len = i32(len(layer.meshes))
+        layer.sprites = {}
+        layer.meshes = {}
+    }
+}
+
+default_context :: proc "contextless" () -> (result: runtime.Context) {
+    result = runtime.default_context()
+    result.assertion_failure_proc = _assertion_failure_proc
+    // result.logger =
+    // result.allocator = tracking_allocator
+    return result
+}
+
+
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// MARK: Util
+//
+
+// Frame's delta time
+@(require_results)
+get_frame_time :: proc() -> f32 {
+    return f32(f64(_state.frame_dur_ns) * 1e-9)
+}
+
+@(require_results)
+get_frame_index :: proc() -> u64 {
+    return _state.frame_index
+}
+
+@(require_results)
+get_time :: proc() -> f32 {
+    return f32(f64(_state.curr_time - _state.start_time) * 1e-9)
+}
+
+@(require_results)
+atlas_cell :: proc(split: [2]i32, coord: [2]i32, scale: [2]f32 = 1.0) -> Rect {
+    assert(split.x >= 1)
+    assert(split.y >= 1)
+
+    p := Vec2{
+        linalg.fract(f32(coord.x) / f32(split.x)),
+        linalg.fract(f32(coord.y) / f32(split.y)),
+    }
+
+    return {
+        min = p,
+        max = p + {
+            scale.x / f32(split.x),
+            scale.y / f32(split.y),
+        },
+    }
+}
+
+@(require_results)
+atlas_slot :: proc(split: [2]i32, #any_int index: i32) -> Rect {
+    assert(split.x >= 1)
+    assert(split.y >= 1)
+
+    coord := [2]i32{
+        index % split.x,
+        index / split.x,
+    }
+
+    return atlas_cell(split, coord)
+}
+
+@(require_results)
+font_cell :: proc(coord: [2]i32) -> Rect {
+    return atlas_cell(16, coord)
+}
+
+@(require_results)
+font_slot :: proc(#any_int index: i32) -> Rect {
+    return atlas_slot(16, index)
+}
+
+@(require_results)
+hash_name :: #force_inline proc "contextless" (name: string) -> Hash {
+    hash := hash_fnv64a(transmute([]byte)name, seed = HASH_SEED)
+    return Hash(hash == 0 ? 1 : hash)
+}
+
+@(require_results)
+hash_const_name :: #force_inline proc "contextless" ($Name: string) -> Hash {
+    hash: u64 = #hash(Name, HASH_ALG)
+    return Hash(hash == 0 ? 1 : hash)
+}
+
+@(require_results)
+get_screen_size :: proc() -> [2]f32 {
+    return {f32(_state.screen_size.x), f32(_state.screen_size.y)}
+}
+
+@(require_results)
+get_viewport :: proc() -> [3]f32 {
+    return {f32(_state.screen_size.x), f32(_state.screen_size.y), 1.0}
+}
+
+@(require_results)
+make_3d_perspective_camera :: proc(pos: Vec3, rot: Quat, fov: f32) -> Camera {
+    return {
+        pos = pos,
+        rot = rot,
+        projection = perspective_projection(
+            get_screen_size(),
+            fov = clamp(fov, 0.0001, math.PI * 0.95),
+        ),
+    }
+}
+
+@(require_results)
+make_2d_camera :: proc(center: Vec3 = 0, fov: f32 = 1.0, angle: f32 = 0) -> Camera {
+    screen := get_screen_size()
+    return {
+        pos = center,
+        rot = linalg.quaternion_angle_axis_f32(angle, {0, 0, 1}),
+        projection = orthographic_projection(
+            left  = -fov * screen.x * 0.5,
+            right = fov * screen.x * 0.5,
+            top = fov * screen.y * 0.5,
+            bottom = -fov * screen.y * 0.5,
+            near = 1,
+            far = 0,
+        ),
+    }
+}
+
+@(require_results)
+make_screen_camera :: proc(offset: Vec3 = 0) -> Camera {
+    screen := get_screen_size()
+    return {
+        pos = offset,
+        rot = 1,
+        projection = orthographic_projection(
+            left = 0,
+            right = screen.x,
+            top = screen.y,
+            bottom = 0,
+            near = 1,
+            far = 0,
+        ),
+    }
+}
+
+
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// MARK: Scene
+//
+
+load_scene :: proc(name: string, dst_group: Group_Handle) -> bool {
+    bin_name := strings.concatenate({name, ".bin"}, context.temp_allocator)
+    txt_data := get_file_by_name(name) or_return
+    bin_data := get_file_by_name(bin_name) or_return
+
+    return load_scene_from_data(string(txt_data), bin_data, dst_group)
+}
+
+load_scene_from_data :: proc(txt: string, bin: []byte, dst_group: Group_Handle) -> bool {
+    assert(len(txt) >= 5)
+    assert(len(bin) >= 5)
+
+    parser := rscn.make_parser(txt)
+
+    header, header_ok := rscn.parse_header(&parser)
+    if !header_ok {
+        log.error("Failed to load scene: Header error")
+        return false
+    }
+
+    vert_buf := slice.reinterpret([]rscn.Mesh_Vertex, bin[header.mesh_vert_offs:])[:header.mesh_vert_num]
+    index_buf := slice.reinterpret([]u16, bin[header.mesh_index_offs:])[:header.mesh_index_num]
+    spline_vert_buf := slice.reinterpret([]rscn.Spline_Vertex, bin[header.spline_vert_offs:])[:header.spline_vert_num]
+
+    group: ^Group
+    group_handle: Group_Handle
+
+    if dst_group != {} {
+        ok: bool
+        group, ok = get_group_state(dst_group)
+        group_handle = dst_group
+
+        if !ok {
+            log.error("Failed to load scene: Invalid target group handle")
+            return false
+        }
+
+        // APPEND TO GPU
+
+    } else {
+        verts := make([]Mesh_Vertex, len(vert_buf), context.temp_allocator)
+        for i in 0..<len(verts) {
+            v := vert_buf[i]
+            verts[i] = {
+                pos = v.pos,
+                uv = v.uv,
+                normal = v.normal,
+                color = v.color,
+            }
+        }
+
+        ok: bool
+        group_handle, ok = create_group(
+            max_total_children  = i32(header.object_num),
+            max_spline_verts    = i32(header.spline_vert_num),
+            vertex_data         = verts,
+            index_data          = index_buf,
+        )
+
+        if !ok {
+            log.error("Failed to load scene: Couldn't create group")
+            return false
+        }
+
+        group, _ = get_group_state(group_handle)
+
+        assert(group != nil)
+    }
+
+    object_list := make([]Object_Handle, header.object_num, context.temp_allocator)
+    mesh_list := make([]Mesh_Handle, header.object_num, context.temp_allocator)
+    spline_list := make([]Spline_Handle, header.object_num, context.temp_allocator)
+
+    object_counter := 0
+    mesh_counter := 0
+    spline_counter := 0
+
+    for elem in rscn.parse_next_elem(&parser) {
+        switch v in elem {
+        case rscn.Comment:
+
+        case rscn.Image:
+            _, ok := get_texture_by_name(v.path)
+            if ok {
+                // Ignore existing textures.
+                // Watcher should handle the data updates.
+                continue
+            }
+
+            if !load_asset(v.path, {}) {
+                log.error("Failed to load scene texture")
+            }
+
+        case rscn.Mesh:
+            index := mesh_counter
+            mesh_counter += 1
+
+            mesh: Mesh
+            mesh.group = group_handle
+
+            mesh.vert_num = i32(v.vert_num)
+            mesh.index_num = i32(v.index_num)
+            mesh.vert_offs = i32(v.vert_start) + group.mesh_vert_num
+            mesh.index_offs = i32(v.index_start) + group.mesh_index_num
+
+            verts := vert_buf[v.vert_start:][:v.vert_num]
+            // indexes := index_buf[v.index_start:][:v.index_num]
+
+            mesh.bounds_min = max(f32)
+            mesh.bounds_max = min(f32)
+            for vert in verts {
+                mesh.bounds_min = linalg.min(mesh.bounds_min, vert.pos)
+                mesh.bounds_max = linalg.max(mesh.bounds_max, vert.pos)
+            }
+
+            handle, handle_ok := insert_mesh_by_name(v.name, mesh)
+            if !handle_ok {
+                log.error("Failed to insert mesh, table is full")
+                return false
+            }
+
+            mesh_list[index] = handle
+
+        case rscn.Spline:
+            index := spline_counter
+            spline_counter += 1
+
+            spline: Spline
+            spline.group = group_handle
+
+            spline.vert_num = i32(v.vert_num)
+            spline.vert_offs = group.spline_vert_num + i32(v.vert_start)
+
+            verts := spline_vert_buf[v.vert_start:][:v.vert_num]
+
+            if v.vert_num > (len(group.spline_vert_buf) - int(group.spline_vert_num)) {
+                log.error("Failed to create spline, spline vertex buffer can't fit the data")
+                continue
+            }
+
+            // NOTE: consider vert radius?
+            spline.bounds_min = max(f32)
+            spline.bounds_max = min(f32)
+            for vert, i in verts {
+                spline.bounds_min = linalg.min(spline.bounds_min, vert.pos)
+                spline.bounds_max = linalg.max(spline.bounds_max, vert.pos)
+
+                group.spline_vert_buf[group.spline_vert_num + i32(i)] = vert
+            }
+
+            handle, handle_ok := insert_spline_by_name(v.name, spline)
+            if !handle_ok {
+                log.error("Failed to insert spline, table is full")
+                return false
+            }
+
+            group.spline_vert_num += i32(len(verts))
+
+            spline_list[index] = handle
+
+        case rscn.Object:
+            index := object_counter
+            object_counter += 1
+
+            object: Object
+            object.group = group_handle
+
+            object.kind = v.kind
+            object.parent.index = v.parent == -1 ? HANDLE_INDEX_INVALID : Handle_Index(v.parent) // TEMP
+
+            switch v.kind {
+            case .Empty:
+                object.data_handle = {}
+
+            case .Mesh:
+                object.data_handle.index = v.mesh_index == -1 ? HANDLE_INDEX_INVALID : Handle_Index(v.mesh_index) // TEMP
+
+            case .Spline:
+                object.data_handle.index = v.spline_index == -1 ? HANDLE_INDEX_INVALID : Handle_Index(v.spline_index) // TEMP
+            }
+
+            handle, handle_ok := insert_object_by_name(v.name, object)
+            if !handle_ok {
+                log.error("Failed to insert object, table is full")
+                return false
+            }
+
+            object_list[index] = handle
+        }
+    }
+
+    // Resolve indices -> handles
+
+    // NOTE: the 2nd pass might be unnecessary if the data is ordered the right way? enforce it in rscn?
+    for handle in object_list {
+        obj := get_internal_object(handle) or_continue
+
+        if obj.parent.index == HANDLE_INDEX_INVALID {
+            continue
+        }
+
+        obj.parent = object_list[obj.parent.index]
+
+        if parent, parent_ok := get_internal_object(obj.parent); parent_ok {
+            parent.child_num += 1
+        }
+
+        switch obj.kind {
+        case .Empty:
+
+        case .Mesh:
+            obj.data_handle = Handle(mesh_list[obj.data_handle.index])
+
+        case .Spline:
+            obj.data_handle = Handle(spline_list[obj.data_handle.index])
+        }
+    }
+
+
+    // Reserve child array space
+    child_offset := group.object_child_num
+    for handle in object_list {
+        obj := get_internal_object(handle) or_continue
+
+        obj.child_offset = child_offset
+
+        if child_offset + obj.child_num > i32(len(group.object_child_buf)) {
+            log.error("Group child buffer is too small to contain all children")
+            obj.child_num = 0
+            continue
+        }
+
+        child_offset += obj.child_num
+    }
+
+    group.object_child_num = child_offset
+
+    // Fill child array
+    for handle in object_list {
+        obj := get_internal_object(handle) or_continue
+
+        parent := get_internal_object(obj.parent) or_continue
+
+        group.object_child_buf[parent.child_offset] = handle
+        parent.child_offset += 1
+    }
+
+    // Reset child offsets (this is a bit weird, be careful)
+    for handle in object_list {
+        obj := get_internal_object(handle) or_continue
+        obj.child_offset -= obj.child_num
+    }
+
+    return true
+}
+
+
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// MARK: Input
+//
+
+MAX_GAMEPADS :: platform.MAX_GAMEPADS
+
+Key :: platform.Key
+Mouse_Button :: platform.Mouse_Button
+Gamepad_Button :: platform.Gamepad_Button
+
+Input :: struct {
+    mouse_delta:            [2]f32,
+    mouse_pos:              [2]f32,
+    scroll_delta:           [2]f32,
+
+    keys_down:              bit_set[Key],
+    keys_pressed:           bit_set[Key],
+    keys_released:          bit_set[Key],
+    keys_repeated:          bit_set[Key],
+    keys_buffered:          bit_set[Key],
+    keys_timer:             [Key]f32,
+
+    mouse_buttons_down:     bit_set[Mouse_Button],
+    mouse_buttons_pressed:  bit_set[Mouse_Button],
+    mouse_buttons_released: bit_set[Mouse_Button],
+    mouse_buttons_repeated: bit_set[Mouse_Button],
+    mouse_buttons_buffered: bit_set[Mouse_Button],
+    mouse_buttons_timer:    [Mouse_Button]f32,
+
+    gamepads:               [MAX_GAMEPADS]Input_Gamepad,
+}
+
+Input_Digital_Buffer :: struct($E: typeid) where intrinsics.type_is_enum(E) {
+    down:       bit_set[E],
+    pressed:    bit_set[E],
+    released:   bit_set[E],
+    repeated:   bit_set[E],
+    buffered:   bit_set[E],
+    timer:      [E]f32,
+}
+
+Input_Gamepad :: struct {
+    buttons_down:       bit_set[Gamepad_Button],
+    buttons_pressed:    bit_set[Gamepad_Button],
+    buttons_released:   bit_set[Gamepad_Button],
+    buttons_repeated:   bit_set[Gamepad_Button],
+    buttons_buffered:   bit_set[Gamepad_Button],
+    buttons_timer:      [Gamepad_Button]f32,
+}
+
+// TODO: uniform input system
+// Input_Code :: union {
+//     Key,
+//     Mouse_Button,
+//     Gamepad_Button,
+// }
+
+// input_axis :: proc(code: Input_Code) -> f32 {
+
+// }
+
+// input_down :: proc(inp: Input_Code) -> bool {
+
+// }
+
+
+mouse_pos :: proc() -> [2]f32 {
+    return _state.input.mouse_pos
+}
+
+mouse_delta :: proc() -> [2]f32 {
+    return _state.input.mouse_delta
+}
+
+scroll_delta :: proc() -> [2]f32 {
+    return _state.input.scroll_delta
+}
+
+
+key_down :: proc(key: Key) -> bool {
+    return key in _state.input.keys_down
+}
+
+// Down time is 0 on pressed.
+key_down_time :: proc(key: Key) -> f32 {
+    return _state.input.keys_timer[key]
+}
+
+key_pressed :: proc(key: Key, buf: f32 = 0) -> bool {
+    if key in _state.input.keys_pressed {
+        return true
+    }
+
+    if buf > 0.0001 &&
+        key in _state.input.keys_buffered &&
+        _state.input.keys_timer[key] <= buf
+    {
+        _state.input.keys_buffered -= {key}
+        return true
+    }
+
+    return false
+}
+
+key_repeated :: proc(key: Key) -> bool {
+    return key in _state.input.keys_repeated
+}
+
+key_released :: proc(key: Key) -> bool {
+    return key in _state.input.keys_released
+}
+
+
+
+mouse_down :: proc(button: Mouse_Button) -> bool {
+    return button in _state.input.mouse_buttons_down
+}
+
+// Down time is 0 on pressed.
+mouse_down_time :: proc(button: Mouse_Button) -> f32 {
+    return _state.input.mouse_buttons_timer[button]
+}
+
+mouse_pressed :: proc(button: Mouse_Button, buf: f32 = 0) -> bool {
+    if button in _state.input.mouse_buttons_pressed {
+        return true
+    }
+
+    if buf > 0.0001 &&
+        button in _state.input.mouse_buttons_buffered &&
+        _state.input.mouse_buttons_timer[button] <= buf
+    {
+        _state.input.mouse_buttons_buffered -= {button}
+        return true
+    }
+
+    return false
+}
+
+mouse_repeated :: proc(button: Mouse_Button) -> bool {
+    return button in _state.input.mouse_buttons_repeated
+}
+
+mouse_released :: proc(button: Mouse_Button) -> bool {
+    return button in _state.input.mouse_buttons_released
+}
+
+
+
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// MARK: Lookups
+//
+
+get_children :: proc(handle: Object_Handle, loc := #caller_location) -> ([]Object_Handle, bool) #optional_ok {
+    obj, obj_ok := get_internal_object(handle)
+    if !obj_ok {
+        log.error("Failed to get object's children: invalid handle", location = loc)
+        return nil, false
+    }
+
+    group, group_ok := get_group_state(obj.group)
+    if !group_ok {
+        log.error("Failed to get object's children: object's group handle is invalid")
+        return nil, false
+    }
+
+    return group.object_child_buf[obj.child_offset:][:obj.child_num], true
+}
+
+get_child_by_name :: proc(handle: Object_Handle, name: string) -> (result: Object_Handle, ok: bool) #optional_ok {
+    children := get_children(handle) or_return
+
+    hash := hash_name(name)
+
+    for ch in children {
+        if _state.objects_hash[ch.index] != hash {
+            continue
+        }
+
+        if _state.objects_gen[ch.index] != ch.gen {
+            continue
+        }
+
+        return ch, true
+    }
+
+    return {}, false
+}
+
+
+@(require_results)
+get_mesh :: proc($Name: string) -> (result: Mesh_Handle, ok: bool) #optional_ok {
+    return get_mesh_by_hash(hash_const_name(Name))
+}
+
+@(require_results)
+get_mesh_by_name :: proc(name: string) -> (result: Mesh_Handle, ok: bool) #optional_ok {
+    return get_mesh_by_hash(hash_name(name))
+}
+
+@(require_results)
+get_mesh_by_hash :: proc(hash: Hash) -> (result: Mesh_Handle, ok: bool) #optional_ok {
+    index := _table_lookup_hash(&_state.meshes_hash, hash) or_return
+    return {
+        index = Handle_Index(index),
+        gen = _state.meshes_gen[index],
+    }, true
+}
+
+
+@(require_results)
+get_object :: proc($Name: string) -> (result: Object_Handle, ok: bool) #optional_ok {
+    return get_object_by_hash(hash_const_name(Name))
+}
+
+@(require_results)
+get_object_by_name :: proc(name: string) -> (result: Object_Handle, ok: bool) #optional_ok {
+    return get_object_by_hash(hash_name(name))
+}
+
+@(require_results)
+get_object_by_hash :: proc(hash: Hash) -> (result: Object_Handle, ok: bool) #optional_ok {
+    index := _table_lookup_hash(&_state.objects_hash, hash) or_return
+    return {
+        index = Handle_Index(index),
+        gen = _state.objects_gen[index],
+    }, true
+}
+
+
+
+@(require_results)
+get_texture :: proc($Name: string) -> (result: Texture_Handle, ok: bool) #optional_ok {
+    return get_texture_by_hash(hash_const_name(Name))
+}
+
+@(require_results)
+get_texture_by_name :: proc(name: string) -> (result: Texture_Handle, ok: bool) #optional_ok {
+    return get_texture_by_hash(hash_name(name))
+}
+
+@(require_results)
+get_texture_by_hash :: proc(hash: Hash) -> (result: Texture_Handle, ok: bool) #optional_ok {
+    index := _table_lookup_hash(&_state.textures_hash, hash) or_return
+    return {
+        index = Handle_Index(index),
+        gen = _state.textures_gen[index],
+    }, true
+}
+
+
+
+@(require_results)
+get_spline :: proc($Name: string) -> (result: Spline_Handle, ok: bool) #optional_ok {
+    return get_spline_by_hash(hash_const_name(Name))
+}
+
+@(require_results)
+get_spline_by_name :: proc(name: string) -> (result: Spline_Handle, ok: bool) #optional_ok {
+    return get_spline_by_hash(hash_name(name))
+}
+
+@(require_results)
+get_spline_by_hash :: proc(hash: Hash) -> (result: Spline_Handle, ok: bool) #optional_ok {
+    index := _table_lookup_hash(&_state.splines_hash, hash) or_return
+    return {
+        index = Handle_Index(index),
+        gen = _state.splines_gen[index],
+    }, true
+}
+
+
+
+@(require_results)
+get_vertex_shader :: proc($Name: string) -> (result: Vertex_Shader_Handle, ok: bool) #optional_ok {
+    return get_vertex_shader_by_hash(hash_const_name(Name))
+}
+
+@(require_results)
+get_vertex_shader_by_name :: proc(name: string) -> (result: Vertex_Shader_Handle, ok: bool) #optional_ok {
+    return get_vertex_shader_by_hash(hash_name(name))
+}
+
+@(require_results)
+get_vertex_shader_by_hash :: proc(hash: Hash) -> (result: Vertex_Shader_Handle, ok: bool) #optional_ok {
+    index := _table_lookup_hash(&_state.vertex_shaders_hash, hash) or_return
+    return {
+        index = Handle_Index(index),
+        gen = _state.vertex_shaders_gen[index],
+    }, true
+}
+
+
+@(require_results)
+get_pixel_shader :: proc($Name: string) -> (result: Pixel_Shader_Handle, ok: bool) #optional_ok {
+    return get_pixel_shader_by_hash(hash_const_name(Name))
+}
+
+@(require_results)
+get_pixel_shader_by_name :: proc(name: string) -> (result: Pixel_Shader_Handle, ok: bool) #optional_ok {
+    return get_pixel_shader_by_hash(hash_name(name))
+}
+
+@(require_results)
+get_pixel_shader_by_hash :: proc(hash: Hash) -> (result: Pixel_Shader_Handle, ok: bool) #optional_ok {
+    index := _table_lookup_hash(&_state.pixel_shaders_hash, hash) or_return
+    return {
+        index = Handle_Index(index),
+        gen = _state.pixel_shaders_gen[index],
+    }, true
+}
+
+
+
+
+@(require_results)
+get_internal_draw_layer :: proc(index: i32) -> (result: ^Draw_Layer, ok: bool) {
+    if index < 0 || index >= MAX_DRAW_LAYERS {
+        return nil, false
+    }
+    return &_state.draw_layers[index], true
+}
+
+@(require_results)
+get_internal_mesh :: proc(handle: Mesh_Handle) -> (result: ^Mesh, ok: bool) {
+    return _table_get(&_state.meshes, _state.meshes_gen, handle)
+}
+
+@(require_results)
+get_internal_object :: proc(handle: Object_Handle) -> (result: ^Object, ok: bool) {
+    return _table_get(&_state.objects, _state.objects_gen, handle)
+}
+
+@(require_results)
+get_internal_spline :: proc(handle: Spline_Handle) -> (result: ^Spline, ok: bool) {
+    return _table_get(&_state.splines, _state.splines_gen, handle)
+}
+
+@(require_results)
+get_internal_vertex_shader :: proc(handle: Vertex_Shader_Handle) -> (result: ^Vertex_Shader, ok: bool) {
+    return _table_get(&_state.vertex_shaders, _state.vertex_shaders_gen, handle)
+}
+
+@(require_results)
+get_internal_pixel_shader :: proc(handle: Pixel_Shader_Handle) -> (result: ^Pixel_Shader, ok: bool) {
+    return _table_get(&_state.pixel_shaders, _state.pixel_shaders_gen, handle)
+}
+
+
+
+
+@(require_results)
+insert_mesh_by_name :: proc(name: string, mesh: Mesh) -> (result: Mesh_Handle, ok: bool) {
+    return insert_mesh_by_hash(hash_name(name), mesh)
+}
+
+@(require_results)
+insert_object_by_name :: proc(name: string, object: Object) -> (result: Object_Handle, ok: bool) {
+    return insert_object_by_hash(hash_name(name), object)
+}
+
+@(require_results)
+insert_spline_by_name :: proc(name: string, spline: Spline) -> (result: Spline_Handle, ok: bool) {
+    return insert_spline_by_hash(hash_name(name), spline)
+}
+
+@(require_results)
+insert_vertex_shader_by_name :: proc(name: string, shader: Vertex_Shader) -> (result: Vertex_Shader_Handle, ok: bool) {
+    return insert_vertex_shader_by_hash(hash_name(name), shader)
+}
+
+@(require_results)
+insert_pixel_shader_by_name :: proc(name: string, shader: Pixel_Shader) -> (result: Pixel_Shader_Handle, ok: bool) {
+    return insert_pixel_shader_by_hash(hash_name(name), shader)
+}
+
+
+@(require_results)
+insert_mesh_by_hash :: proc(hash: Hash, mesh: Mesh) -> (result: Mesh_Handle, ok: bool) {
+    index, _ := _table_insert_hash(&_state.meshes_hash, hash) or_return
+
+    _state.meshes[index] = mesh
+
+    result = {
+        index = Handle_Index(index),
+        gen = _state.meshes_gen[index],
+    }
+
+    return result, true
+}
+
+@(require_results)
+insert_object_by_hash :: proc(hash: Hash, object: Object) -> (result: Object_Handle, ok: bool) {
+    index, _ := _table_insert_hash(&_state.objects_hash, hash) or_return
+
+    _state.objects[index] = object
+
+    result = {
+        index = Handle_Index(index),
+        gen = _state.objects_gen[index],
+    }
+
+    return result, true
+}
+
+@(require_results)
+insert_spline_by_hash :: proc(hash: Hash, spline: Spline) -> (result: Spline_Handle, ok: bool) {
+    index, _ := _table_insert_hash(&_state.splines_hash, hash) or_return
+
+    _state.splines[index] = spline
+
+    result = {
+        index = Handle_Index(index),
+        gen = _state.splines_gen[index],
+    }
+
+    return result, true
+}
+
+@(require_results)
+insert_vertex_shader_by_hash :: proc(hash: Hash, shader: Vertex_Shader) -> (result: Vertex_Shader_Handle, ok: bool) {
+    index, _ := _table_insert_hash(&_state.vertex_shaders_hash, hash) or_return
+
+    _state.vertex_shaders[index] = shader
+
+    result = {
+        index = Handle_Index(index),
+        gen = _state.vertex_shaders_gen[index],
+    }
+
+    return result, true
+}
+
+
+@(require_results)
+insert_pixel_shader_by_hash :: proc(hash: Hash, shader: Pixel_Shader) -> (result: Pixel_Shader_Handle, ok: bool) {
+    index, _ := _table_insert_hash(&_state.pixel_shaders_hash, hash) or_return
+
+    _state.pixel_shaders[index] = shader
+
+    result = {
+        index = Handle_Index(index),
+        gen = _state.pixel_shaders_gen[index],
+    }
+
+    return result, true
+}
+
+
+
+@(require_results)
+_table_insert_hash :: proc(table: ^[$N]Hash, hash: u64) -> (result: int, prev: Hash, ok: bool) {
+    start_index := int(hash) %% N
+
+    for offs in 0..<MAX_PROBE_DIST {
+        index := (start_index + offs) %% N
+        if index == 0 {
+            continue
+        }
+
+        h := table[index]
+
+        if h == 0 || h == hash {
+            table[index] = hash
+            return index, h, true
+        }
+    }
+
+    return 0, 0, false
+}
+
+@(require_results)
+_table_lookup_hash :: proc(table: ^[$N]Hash, hash: u64) -> (int, bool) {
+    start_index := int(hash) %% N
+
+    for offs in 0..<MAX_PROBE_DIST {
+        index := (start_index + offs) %% N
+        if table[index] == hash {
+            return index, true
+        }
+    }
+
+    return {}, false
+}
+
+@(require_results)
+_table_get :: proc(table: ^[$N]$T, table_gen: [N]Handle_Gen, handle: $H/Handle) -> (^T, bool) #no_bounds_check {
+    if handle.index <= 0 || handle.index >= N {
+        return nil, false
+    }
+
+    if handle.gen != table_gen[handle.index] {
+        return nil, false
+    }
+
+    return &table[handle.index], true
+}
+
+
+
+
+
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// MARK: Group
+//
+
+@(require_results)
+get_group_state :: proc(handle: Group_Handle) -> (result: ^Group, ok: bool) {
+    return _table_get(&_state.groups, _state.groups_gen, handle)
+}
+
+@(require_results)
+create_group :: proc(
+    max_mesh_verts:     i32 = 1024 * 16,
+    max_mesh_indices:   i32 = 1024 * 32,
+    max_spline_verts:   i32 = 1024,
+    max_total_children: i32 = 1024,
+    vertex_data:        []Mesh_Vertex = {},
+    index_data:         []Mesh_Index = {},
+) -> (result: Group_Handle, ok: bool) #optional_ok {
+    used_set := (transmute(u64)_state.groups_used) | 1
+    index := intrinsics.count_trailing_zeros(~used_set)
+    if index == 64 {
+        log.error("Failed to create group: There is already max number of groups")
+        return {}, false
+    }
+
+    group := &_state.groups[index]
+
+    _state.groups_used += {int(index)}
+
+    group^ = Group{
+        object_child_buf    = make([]Object_Handle, max_total_children, _state.allocator),
+        spline_vert_buf     = make([]Spline_Vertex, max_spline_verts, _state.allocator),
+    }
+
+    // TODO: allow creating mutable groups with default data..?
+    if vertex_data != nil {
+        group.vbuf, ok = gpu.create_buffer("rv-group-vert-buf",
+            stride  = size_of(Mesh_Vertex),
+            // size    = size_of(Mesh_Vertex) * len(vertex_data),
+            usage   = .Immutable,
+            data    = gpu.slice_bytes(vertex_data),
+        )
+    } else {
+        group.vbuf, ok = gpu.create_buffer("rv-group-vert-buf",
+            stride  = size_of(Mesh_Vertex),
+            size    = size_of(Mesh_Vertex) * max_mesh_verts,
+            usage   = .Default,
+        )
+    }
+
+    assert(ok)
+
+    if index_data != nil {
+        group.ibuf, ok = gpu.create_index_buffer("rv-group-index-buf",
+            // size = size_of(Mesh_Index) * len(index_data),
+            data = gpu.slice_bytes(index_data),
+            usage = .Immutable,
+        )
+    } else {
+        group.ibuf, ok = gpu.create_index_buffer("rv-group-index-buf",
+            size = size_of(Mesh_Index) * max_mesh_indices,
+            usage = .Default,
+        )
+    }
+
+    assert(ok)
+
+    handle := Group_Handle{
+        index = Handle_Index(index),
+        gen = _state.groups_gen[index],
+    }
+
+    return handle, true
+}
+
+clear_group :: proc(handle: Group_Handle) {
+    group, group_ok := get_group_state(handle)
+    if !group_ok {
+        return
+    }
+
+    group.mesh_index_num = 0
+    group.mesh_vert_num = 0
+}
+
+destroy_group :: proc(handle: Group_Handle) {
+    group, group_ok := get_group_state(handle)
+    if !group_ok {
+        return
+    }
+
+    gpu.destroy_resource(group.vbuf)
+    gpu.destroy_resource(group.ibuf)
+
+    for i in 0..<MAX_MESHES {
+        mesh := &_state.meshes[i]
+        if mesh.group != handle {
+            continue
+        }
+
+        mesh^ = {}
+        _state.meshes_hash[i] = 0
+        _state.meshes_gen[i] += 1
+    }
+
+
+    for i in 0..<MAX_OBJECTS {
+        object := &_state.objects[i]
+        if object.group != handle {
+            continue
+        }
+
+        object^ = {}
+        _state.objects_hash[i] = 0
+        _state.objects_gen[i] += 1
+    }
+
+    for i in 0..<MAX_SPLINES {
+        spline := &_state.splines[i]
+        if spline.group != handle {
+            continue
+        }
+
+        spline^ = {}
+        _state.splines_hash[i] = 0
+        _state.splines_gen[i] += 1
+    }
+
+    delete(group.spline_vert_buf, _state.allocator)
+    delete(group.object_child_buf, _state.allocator)
+
+    _state.groups[handle.index] = {}
+    _state.groups_gen[handle.index] += 1
+    _state.groups_used -= {int(handle.index)}
+}
+
+
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// MARK: Textures
+//
+
+// Texture pool allows for better batching when textures are the same size.
+// When you create textures with the same size after this call they will get inserted into the pool.
+// NOTE: Strongly prefer square and power-of-two sizes for texture pools.
+// NOTE: A texture pool may not be destroyed.
+// NOTE: Beware of the memory consumed by high-res texture pools!
+create_texture_pool :: proc(size: IVec2, slices: i32) -> (ok: bool) {
+    if _state.texture_pools_len >= len(_state.texture_pools) {
+        log.error("Failed to create texture pool, too many texture pools")
+        return false
+    }
+
+    pool: Texture_Pool
+    pool.size = size
+    pool.slices = slices
+    pool.resource, ok = gpu.create_texture_2d("rv-tex-pool",
+        format = .RGBA_U8_Norm,
+        size = size,
+        array_depth = slices,
+    )
+
+    assert(ok)
+
+    if pool.resource == {} {
+        log.errorf("Failed to create %ix%ix%i texture pool GPU resource", size.x, size.y, slices)
+        return false
+    }
+
+    index := _state.texture_pools_len
+    _state.texture_pools[index] = pool
+    _state.texture_pools_len += 1
+
+    return true
+}
+
+get_internal_texture :: proc(handle: Texture_Handle) -> (result: ^Texture, ok: bool) {
+    return _table_get(&_state.textures, _state.textures_gen, handle)
+}
+
+create_texture_from_encoded_data :: proc(name: string, data: []byte) -> (result: Texture_Handle, ok: bool) {
+    tex, tex_ok := decode_texture_data(data)
+    if !tex_ok {
+        log.errorf("Failed to decode texture '%s'", name)
+    }
+
+    result, ok = create_texture_from_data(name, tex)
+
+    destroy_decoded_texture_data(&tex)
+
+    return result, ok
+}
+
+create_texture_from_data :: proc(name: string, data: Texture_Data) -> (result: Texture_Handle, ok: bool) {
+    assert(data.size.x > 0)
+    assert(data.size.y > 0)
+    assert(len(data.pixels) == int(data.size.x * data.size.y))
+
+    hash := hash_name(name)
+
+    index, prev := _table_insert_hash(&_state.textures_hash, hash) or_return
+
+    texture := &_state.textures[index]
+
+    create_resource := true
+
+    for &pool, pool_index in _state.texture_pools[:_state.texture_pools_len] {
+        if pool.size != data.size {
+            continue
+        }
+
+        full_set := (u64(1) << u64(pool.slices)) - 1
+
+        used_set := (transmute(u64)pool.slices_used)
+
+        if full_set == used_set {
+            log_internal("Pool {} is full", pool_index)
+            continue
+        }
+
+        slice_index := intrinsics.count_trailing_zeros(~used_set)
+
+        assert(slice_index < 64)
+
+        log.infof("Creating pooled texture '%s' of size %ix%i", name, data.size.x, data.size.y)
+
+        create_resource = false
+
+        pool.slices_used += {int(slice_index)}
+
+        texture^ = Texture{
+            size = {u16(data.size.x), u16(data.size.y)},
+            pool_index = u8(pool_index),
+            slice = u8(slice_index),
+            resource = {},
+        }
+
+        gpu.update_texture_2d(
+            pool.resource,
+            gpu.slice_bytes(data.pixels),
+            slice_index,
+        )
+
+        break
+    }
+
+    if create_resource {
+        log.infof("Creating non-pooled texture '%s' of size %ix%i", name, data.size.x, data.size.y)
+
+        // Already exists, replace the old one.
+        // Possibly a name hash collision.
+        if prev == hash {
+            gpu.destroy_resource(texture.resource)
+            texture^ = {}
+        }
+
+
+
+        res, res_ok := gpu.create_texture_2d(strings.concatenate({"rv-tex-", name}, context.temp_allocator),
+            format = .RGBA_U8_Norm,
+            size = data.size,
+            usage = .Immutable,
+            data = gpu.slice_bytes(data.pixels),
+        )
+
+        assert(res_ok)
+
+        texture^ = Texture{
+            size = {u16(data.size.x), u16(data.size.y)},
+            pool_index = max(u8),
+            slice = 0,
+            resource = res,
+        }
+    }
+
+    result = {
+        index = Handle_Index(index),
+        gen = _state.textures_gen[index],
+    }
+
+    return result, true
+}
+
+destroy_texture :: proc(handle: Texture_Handle) {
+    texture, texture_ok := get_internal_texture(handle)
+    if !texture_ok {
+        return
+    }
+
+    gpu.destroy_resource(texture.resource)
+    texture^ = {}
+
+    _state.textures_gen[handle.index] += 1
+    _state.textures_hash[handle.index] = 0
+}
+
+
+@(require_results)
+decode_texture_data :: proc(data: []byte) -> (result: Texture_Data, ok: bool) {
+    size: [2]i32
+    channels: i32
+
+    data := stbi.load_from_memory(
+        buffer = raw_data(data),
+        len = i32(len(data)),
+        x = &size.x,
+        y = &size.y,
+        channels_in_file = &channels,
+        desired_channels = 4,
+    )
+
+    if data == nil {
+        log.errorf("Failed to decode texture: %s", stbi.failure_reason())
+        return {}, false
+    }
+
+    result = {
+        size = size,
+        pixels = (cast([^][4]u8)data)[:size.x * size.y],
+    }
+
+    return result, true
+}
+
+// NOTE: this is potentially unsafe.
+destroy_decoded_texture_data :: proc(data: ^Texture_Data) {
+    stbi.image_free(raw_data(data.pixels))
+    data^ = {}
+}
+
+
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// MARK: Shaders
+//
+// Two ways to create:
+// - from source: run shaderprep with VFS includes. Primarily for development.
+// - from native: load HLSL/GLSL or whatever directly. Primarily for pakfiles.
+//
+
+
+@(require_results)
+create_vertex_shader :: proc(name: string, data: []byte) -> (result: Vertex_Shader_Handle, ok: bool) {
+    shader: Vertex_Shader
+
+    shader.shader, ok = gpu.create_shader(name, data, .Vertex)
+
+    if !ok {
+        log.error("RV: Failed to create vertex shader")
+        return
+    }
+
+    // TODO: if this fails the shader gets leaked.
+    // TODO: fix for ALL table inserts, including rscn loading and custom mesh creation etc.
+    return insert_vertex_shader_by_name(name, shader)
+}
+
+
+@(require_results)
+create_pixel_shader :: proc(name: string, data: []byte) -> (result: Pixel_Shader_Handle, ok: bool) {
+    shader: Pixel_Shader
+
+    shader.shader, ok = gpu.create_shader(name, data, .Pixel)
+
+    if !ok {
+        log.error("RV: Failed to create pixel shader")
+        return
+    }
+
+    return insert_pixel_shader_by_name(name, shader)
+}
+
+
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// MARK: Files
+//
+
+// Registers all files.
+// Loads all assets.
+// TODO: flag to keep/flush the file data.
+// TODO: flag to only register the file.
+// TODO: file blacklist?
+load_asset_directory :: proc(path: string, watch := true) {
+    iter: platform.Directory_Iter
+
+    if !platform.is_directory(path) {
+        log.error("Cannot load data, '%s' is not a valid directory path", path)
+    }
+
+    pattern := strings.concatenate({path, "\\*"}, context.temp_allocator)
+
+    files := make([dynamic]string, 0, 64, context.temp_allocator)
+
+    for name in platform.iter_directory(&iter, pattern, context.temp_allocator) {
+        full := filepath.join({path, name}, context.temp_allocator)
+
+        if !platform.is_file(full) {
+            continue
+        }
+
+        data, data_ok := platform.read_file_by_path(
+            full,
+            allocator = _state.allocator,
+        )
+
+        if !data_ok {
+            log.errorf("Failed to load file '%s' from directory '%s'", name, path)
+            continue
+        }
+
+        create_file_by_name(name, data, flags = {.Dynamically_Allocated})
+
+        append(&files, name)
+    }
+
+    for file in files {
+        load_asset(file, {})
+    }
+
+    watch_block: if watch {
+        // Add dir to watched paths
+
+        if _state.watched_dirs_num > MAX_WATCHED_DIRS {
+            log.error("Failed to watch data directory, too many watched directories")
+            return
+        }
+
+        index := _state.watched_dirs_num
+        dir := &_state.watched_dirs[index]
+
+        if !platform.init_file_watcher(&dir.watcher, path, recursive = false) {
+            intrinsics.mem_zero(dir, size_of(Watched_Dir))
+            break watch_block
+        }
+
+        dir.path_len = i32(copy(dir.path[:], path))
+
+        _state.watched_dirs_num += 1
+    }
+}
+
+load_constant_asset_directory :: proc(files: []runtime.Load_Directory_File) -> (all_ok: bool) {
+    all_ok = true
+
+    for file in files {
+        log.info(file.name)
+        if !create_file_by_name(file.name, file.data, flags = {}) {
+            log.error("Failed to create file '%s' from a constant directory", file.name)
+            continue
+        }
+    }
+
+    for file in files {
+        load_asset(file.name, {})
+    }
+
+    return all_ok
+}
+
+load_asset :: proc(name: string, dst_group: Group_Handle) -> bool {
+    if strings.has_suffix(name, ".png") {
+        data, data_ok := get_file_by_name(name)
+        if !data_ok {
+            log.errorf("Failed to load texture '%s', file not found", name)
+            return false
+        }
+        _, ok := create_texture_from_encoded_data(name[:len(name) - 4], data)
+        return ok
+    } else if strings.has_suffix(name, ".rscn") {
+        return load_scene(name, dst_group = dst_group)
+    }
+    // TODO
+    // else if strings.has_suffix(name, ".wav") {
+    // } else if strings.has_suffix(name, ".hlsl") {
+    // }
+
+    return true
+}
+
+get_file_by_name :: proc(name: string, flush := true) -> (data: []byte, ok: bool) {
+    return get_file_by_hash(hash_name(name), flush = flush)
+}
+
+get_file_by_hash :: proc(hash: Hash, flush := true) -> (data: []byte, ok: bool) {
+    index :=_table_lookup_hash(&_state.files_hash, hash) or_return
+
+    file := &_state.files[index]
+
+    if flush {
+        if .Dirty in file.flags {
+            file.flags -= {.Dirty}
+            return file.data, true
+        } else {
+            return {}, false
+        }
+    }
+
+    return file.data, true
+}
+
+
+create_file_by_name :: proc(name: string, data: []byte, flags: bit_set[File_Flag]) -> bool {
+    log.infof("Creating file '%s' of size %M (%i bytes)", name, len(data), len(data))
+    return create_file_by_hash(hash_name(name), data, flags)
+}
+
+create_file_by_hash :: proc(hash: Hash, data: []byte, flags: bit_set[File_Flag]) -> bool {
+    index, _, ok := _table_insert_hash(&_state.files_hash, hash)
+    if !ok {
+        return false
+    }
+
+    _state.files[index] = File{
+        data = data,
+        flags = flags + {.Dirty},
+    }
+
+    return true
+}
+
+get_internal_file_by_hash :: proc(hash: Hash) -> (file: ^File, ok: bool) {
+    index := _table_lookup_hash(&_state.files_hash, hash) or_return
+    return &_state.files[index], true
+}
+
+
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// MARK: Render Texture
+//
+
+@(require_results)
+create_render_texture :: proc(size: [2]i32, depth := true) -> (result: Render_Texture_Handle, ok: bool) {
+    assert(size.x > 0)
+    assert(size.y > 0)
+    assert(size.x <= 4096) // arbitrary
+    assert(size.y <= 4096)
+
+    used_set := (transmute(u64)_state.render_textures_used) | 1
+    index := intrinsics.count_trailing_zeros(~used_set)
+    if index == 64 {
+        log.error("Failed to create render texture: there is already max number of render textures")
+        return {}, false
+    }
+
+    tex := &_state.render_textures[index]
+
+    tex.color, ok = gpu.create_texture_2d("rv-render-tex",
+        format = .RGBA_U8_Norm, // HDR option in the future?
+        size = size,
+        render_texture = true,
+    )
+
+    assert(ok)
+
+    if tex.color != {} {
+        log.error("Failed to create render texture color buffer")
+        return {}, false
+    }
+
+    if depth {
+        // WARNING: depth SRVs not yet implemented in gpu package
+        tex.depth, ok = gpu.create_texture_2d("rv-depth-tex",
+            format = .D_F32,
+            size = size,
+            render_texture = true,
+        )
+
+        assert(ok)
+
+        if tex.depth == {} {
+            log.error("Failed to create render texture depth buffer")
+            return {}, false
+        }
+    }
+
+    result = Render_Texture_Handle{
+        index = Handle_Index(index),
+        gen = _state.render_textures_gen[index],
+    }
+
+    _state.render_textures_used += {int(index)}
+
+    return result, true
+}
+
+destroy_render_texture :: proc(handle: Render_Texture_Handle) {
+    assert(handle.index != DEFAULT_RENDER_TEXTURE.index)
+    tex, tex_ok := get_internal_render_texture(handle)
+    if !tex_ok {
+        // Completely fine, No-op
+        return
+    }
+
+    _destroy_render_texture(tex)
+
+    _state.render_textures_gen[handle.index] += 1
+    _state.render_textures_used -= {int(handle.index)}
+}
+
+_destroy_render_texture :: proc(tex: ^Render_Texture) {
+    gpu.destroy_resource(tex.color)
+    gpu.destroy_resource(tex.depth)
+    tex^ = {}
+}
+
+resize_render_texture :: proc(handle: Render_Texture_Handle, size: [2]i32) {
+    assert(handle.index != DEFAULT_RENDER_TEXTURE.index)
+    _, tex_ok := get_internal_render_texture(handle)
+    if !tex_ok {
+        log.warn("Trying to resize invalid render texture")
+        return
+    }
+}
+
+@(require_results)
+get_internal_render_texture :: proc(handle: Render_Texture_Handle) -> (result: ^Render_Texture, ok: bool) {
+    return _table_get(&_state.render_textures, _state.render_textures_gen, handle)
+}
+
+@(require_results)
+get_render_texture_size :: proc(handle: Render_Texture_Handle) -> (result: [2]i32, ok: bool) {
+    rt := get_internal_render_texture(handle) or_return
+    return rt.size.xy, true
+}
+
+
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// MARK: Bind
+//
+
+@(deferred_none = pop_binds)
+scope_binds :: proc() -> bool {
+    push_binds()
+    return true
+}
+
+push_binds :: proc() {
+    if _state.bind_states_len >= MAX_BIND_STATE_DEPTH {
+        log.error("Cannot set bind state, reached max depth")
+        return
+    }
+
+    _state.bind_states[_state.bind_states_len] = _state.bind_state
+    _state.bind_states_len += 1
+}
+
+pop_binds :: proc() {
+    assert(_state.bind_states_len > 0)
+    _state.bind_states_len -= 1
+    _state.bind_state = _state.bind_states[_state.bind_states_len]
+}
+
+@(require_results)
+get_binds :: proc() -> Bind_State {
+    return _state.bind_state
+}
+
+// NOTE: be very careful when changing fields in Bind_State.
+// This proc should be used mostly to revert state returned by 'get_binds'
+set_binds :: proc(binds: Bind_State) {
+    _state.bind_state = binds
+}
+
+bind_layer :: proc(#any_int layer: i32) {
+    assert(layer >= 0 && layer <= MAX_DRAW_LAYERS)
+    _state.bind_state.draw_layer = u8(layer)
+}
+
+bind_blend :: proc(blend: Blend_Mode) {
+    _state.bind_state.blend = blend
+}
+
+bind_fill :: proc(fill: Fill_Mode) {
+    _state.bind_state.fill = fill
+}
+
+bind_depth_write :: proc(write: bool) {
+    _state.bind_state.depth_write = write
+}
+
+bind_depth_test :: proc(test: bool) {
+    _state.bind_state.depth_test = test
+}
+
+bind_pixel_shader :: proc {
+    bind_pixel_shader_by_name,
+    bind_pixel_shader_by_handle,
+}
+
+bind_vertex_shader :: proc {
+    bind_vertex_shader_by_name,
+    bind_vertex_shader_by_handle,
+}
+
+bind_texture :: proc {
+    bind_texture_by_const,
+    bind_texture_by_name,
+    bind_texture_by_handle,
+    bind_render_texture_by_handle,
+}
+
+
+bind_pixel_shader_by_name :: proc(name: string) -> bool {
+    bind_pixel_shader_by_handle(get_pixel_shader_by_name(name))
+    return true
+}
+
+bind_vertex_shader_by_name :: proc(name: string) -> bool {
+    bind_vertex_shader_by_handle(get_vertex_shader_by_name(name))
+    return true
+}
+
+bind_texture_by_const :: proc($Name: string) -> bool {
+    bind_texture_by_handle(get_texture_by_hash(hash_const_name(Name)))
+    return true
+}
+
+bind_texture_by_name :: proc(name: string) -> bool {
+    bind_texture_by_handle(get_texture_by_name(name))
+    return true
+}
+
+
+bind_pixel_shader_by_handle :: proc(handle: Pixel_Shader_Handle) {
+    if _, ok := get_internal_pixel_shader(handle); ok {
+        _state.bind_state.pixel_shader = u8(handle.index)
+    } else {
+        _state.bind_state.pixel_shader = u8(_state.default_ps.index)
+    }
+}
+
+bind_vertex_shader_by_handle :: proc(handle: Vertex_Shader_Handle) {
+    if _, ok := get_internal_vertex_shader(handle); ok {
+        _state.bind_state.vertex_shader = u8(handle.index)
+    } else {
+        _state.bind_state.vertex_shader = u8(_state.default_vs.index)
+    }
+}
+
+bind_texture_by_handle :: proc(handle: Texture_Handle) {
+    if !_bind_texture(handle) {
+        _bind_texture(_state.error_texture)
+    }
+}
+
+_bind_texture :: proc(handle: Texture_Handle) -> bool {
+    tex := get_internal_texture(handle) or_return
+    if tex.resource != {} {
+        // Standalone tex
+        _state.bind_state.texture_mode = .Non_Pooled
+        _state.bind_state.texture = u8(handle.index)
+        _state.bind_state.texture_slice = 0
+        _state.bind_state.texture_size = tex.size
+    } else {
+        // Pool slice index
+        pool := _state.texture_pools[tex.pool_index]
+        assert(int(tex.slice) < int(pool.slices))
+        assert(int(tex.slice) in pool.slices_used)
+
+        _state.bind_state.texture_mode = .Pooled
+        _state.bind_state.texture = u8(tex.pool_index)
+        _state.bind_state.texture_slice = u8(tex.slice)
+        _state.bind_state.texture_size = {
+            u16(pool.size.x),
+            u16(pool.size.y),
+        }
+    }
+    return true
+}
+
+// Bind render texture for READING like a regular texture.
+// In order to WRITE to a render texture, use layers.
+bind_render_texture_by_handle :: proc(handle: Render_Texture_Handle) {
+    assert(handle != DEFAULT_RENDER_TEXTURE)
+    tex, tex_ok := get_internal_render_texture(handle)
+    if !tex_ok {
+        _bind_texture(_state.error_texture)
+        return
+    }
+    assert(tex.color != {})
+
+    _state.bind_state.texture_mode = .Render_Texture
+    _state.bind_state.texture = u8(handle.index)
+    _state.bind_state.texture_slice = 0
+    _state.bind_state.texture_size = {
+        u16(tex.size.x),
+        u16(tex.size.y),
+    }
+}
+
+
+// TODO: separate the render texture.
+// NOTE: Prefer calling this before any draw_* commands.
+// But the params persist between frames.
+set_layer_params :: proc(
+    #any_int layer: i32,
+    camera:         Camera,
+    flags:          bit_set[Draw_Layer_Flag] = {},
+) {
+    layer, layer_ok := get_internal_draw_layer(layer)
+    if !layer_ok {
+        log.error("Invalid layer index")
+        assert(false)
+        return
+    }
+
+    layer.flags = flags
+    layer.camera = camera
+}
+
+
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// MARK: Draw
+//
+
+// TODO
+Sprite_Scaling :: enum u8 {
+    Default = 0,
+    Absolute,
+}
+
+// NOTE: sprites ignore vertex shader bindings.
+// TODO: anchor
+// TODO: angle
+// TODO: sprite_ex
+// TODO: scaling by pixels or absolute
+// TODO: draw line
+draw_sprite :: proc(
+    pos:    Vec3,
+    rect:   Rect = {0, 1},
+    scale:  Vec2 = 1,
+    col:    Vec4 = 1,
+    rot:    Quat = 1,
+    anchor: Vec2 = 0,
+    angle:  f32 = 0,
+) {
+    UV_EPS :: (1.0 / 8192.0)
+
+    if col.a < 0.01 || abs(scale.x * scale.y) < 0.0001 {
+        return
+    }
+
+    mat := linalg.matrix3_from_quaternion_f32(rot *
+        linalg.quaternion_angle_axis_f32(math.to_radians_f32(angle), {0, 0, 1}))
+
+    draw_layer := &_state.draw_layers[_state.bind_state.draw_layer]
+
+    rect_size := rect_full_size(rect)
+
+    inst := Sprite_Inst{
+        pos = pos,
+        mat_x = mat[0] * scale.x * +0.5 * f32(_state.bind_state.texture_size.x) * rect_size.x,
+        mat_y = mat[1] * scale.y * -0.5 * f32(_state.bind_state.texture_size.y) * rect_size.y,
+        uv_min_x = rect.min.x + UV_EPS,
+        uv_min_y = rect.min.y + UV_EPS,
+        uv_size = rect_size - UV_EPS * 2,
+        color = {
+            u8(clamp(col.r * 255, 0, 255)),
+            u8(clamp(col.g * 255, 0, 255)),
+            u8(clamp(col.b * 255, 0, 255)),
+            u8(clamp(col.a * 255, 0, 255)),
+        },
+        tex_slice = _state.bind_state.texture_slice,
+    }
+
+    if len(draw_layer.sprites) == 0 {
+        draw_layer.sprites = make_soa_dynamic_array_len_cap(#soa[dynamic]Sprite_Draw,
+            0, draw_layer.last_sprites_len, context.temp_allocator)
+    }
+
+    key := Sprite_Sort_Key{
+        texture     = _state.bind_state.texture,
+        ps          = _state.bind_state.pixel_shader,
+        blend       = _state.bind_state.blend,
+        fill        = _state.bind_state.fill,
+        depth_test  = _state.bind_state.depth_test,
+        depth_write = _state.bind_state.depth_write,
+    }
+
+    append_soa_elem(&draw_layer.sprites, Sprite_Draw{
+        key = key,
+        inst = inst,
+    })
+}
+
+
+Draw_Text_Iter :: struct {
+
+}
+
+draw_text_iter :: proc() {
+
+}
+
+draw_text_next :: proc() -> (ok: bool) {
+    return false
+}
+
+draw_text :: proc(
+    text:       string,
+    pos:        [3]f32,
+    scale:      Vec2 = 1,
+    anchor:     Vec2 = 0,
+    spacing:    Vec2 = 0,
+    col:        Vec4 = 1,
+    rot:        Quat = 1,
+) {
+    char_size := IVec2{
+        i32(_state.bind_state.texture_size.x) / 16,
+        i32(_state.bind_state.texture_size.y) / 16,
+    }
+
+    full_size := calc_text_size(
+        text = text,
+        scale = scale,
+        char_size = char_size,
+        spacing = spacing,
+    )
+
+    mat := linalg.matrix3_from_quaternion_f32(rot)
+
+    center := pos - (mat[0] * full_size.x * anchor.x + mat[1] * full_size.y * anchor.y)
+
+    offs: Vec2
+
+    // draw_sprite(
+    //     center + mat[2] * 0.001 + {full_size.x * 0.5, full_size.y * 0.5, 0},
+    //     rect = {0, 1.0/128.0},
+    //     scale = full_size,
+    //     col = RED,
+    // )
+
+    for r in text {
+        if rune_is_drawable(r) {
+            ch := rune_to_char(r)
+
+            p := center + (
+                mat[0] * offs.x +
+                mat[1] * offs.y
+            )
+
+            draw_sprite(
+                pos = p,
+                rect = font_slot(ch),
+                scale = scale,
+                col = col,
+                rot = rot,
+            )
+        }
+
+        offs = text_glyph_apply(offs, r, scale = scale, char_size = char_size, spacing = spacing)
+    }
+
+}
+
+rune_is_drawable :: proc(r: rune) -> bool {
+    switch r {
+    case ' ', '\n', '\t':
+        return false
+    }
+    return true
+}
+
+calc_text_size :: proc(text: string, scale: Vec2, char_size: IVec2 = 8, spacing: Vec2 = 0) -> Vec2 {
+    offs: Vec2
+
+    size: Vec2
+
+    for r in text {
+        offs = text_glyph_apply(offs, r, scale = scale, char_size = char_size, spacing = spacing)
+        size = {
+            max(size.x, offs.x),
+            max(size.y, offs.y),
+        }
+    }
+
+    return size + {0, (f32(char_size.y) + spacing.y) * scale.y}
+}
+
+text_glyph_apply :: proc(offs: Vec2, r: rune, scale: Vec2, char_size: IVec2 = 8, spacing: Vec2 = 0) -> Vec2 {
+    offs := offs
+
+    switch r {
+    case '\n':
+        offs.x = 0
+        offs.y -= scale.y * (f32(char_size.y) + spacing.y)
+        return offs
+
+    case '\t':
+        tab_size := scale.x * (f32(char_size.x) + spacing.x) * 4
+        offs.x = math.ceil_f32(offs.x / tab_size + 1) * tab_size
+        return offs
+    }
+
+    offs.x += scale.x * (f32(char_size.x) + spacing.x)
+
+    return offs
+}
+
+draw_mesh_by_handle :: proc(
+    handle:     Mesh_Handle,
+    pos:        Vec3,
+    rot:        Quat = 1,
+    scale:      Vec3 = 1,
+    col:        Vec4 = 1,
+    param:      u32 = 0,
+) {
+    mesh, mesh_ok := get_internal_mesh(handle)
+    if !mesh_ok {
+        return
+    }
+
+    draw: Mesh_Draw
+
+    mat := linalg.matrix3_from_quaternion_f32(rot)
+
+    draw.key = {
+        index_num   = u16(mesh.index_num),
+        group       = u8(mesh.group.index),
+        texture     = _state.bind_state.texture,
+        ps          = _state.bind_state.pixel_shader,
+        vs          = _state.bind_state.vertex_shader,
+        fill        = _state.bind_state.fill,
+        blend       = _state.bind_state.blend,
+        depth_test  = _state.bind_state.depth_test,
+        depth_write = _state.bind_state.depth_write,
+    }
+
+    draw.inst = {
+        pos = pos,
+        mat_x = mat[0] * scale.x,
+        mat_y = mat[1] * scale.y,
+        mat_z = mat[2] * scale.z,
+        col = {
+            u8(clamp(col.r * 255, 0, 255)),
+            u8(clamp(col.g * 255, 0, 255)),
+            u8(clamp(col.b * 255, 0, 255)),
+            u8(clamp(col.a * 255, 0, 255)),
+        },
+        tex_slice = _state.bind_state.texture_slice,
+        vert_offs = u32(mesh.vert_offs),
+        _pad0 = 0,
+        param = param,
+    }
+
+    draw.extra = {
+        index = handle.index,
+    }
+
+    draw_layer := &_state.draw_layers[_state.bind_state.draw_layer]
+
+    if len(draw_layer.meshes) == 0 {
+        draw_layer.meshes = make_soa_dynamic_array_len_cap(#soa[dynamic]Mesh_Draw,
+            0, draw_layer.last_meshes_len, context.temp_allocator)
+    }
+
+    append_soa_elem(&draw_layer.meshes, draw)
+}
+
+draw_line :: proc() {
+
+}
+
+draw_triangle :: proc() {}
+
+
+// MARK: GPU Draw
+
+// This takes all the draw_* command data and uploads them to GPU buffers.
+// Call render_gpu_layer(...) to actually draw.
+// NOTE: until the start of the next frame, all draw_* commands after this call will be ignored.
+@(optimization_mode="favor_size")
+upload_gpu_layers :: proc() {
+    assert(!_state.uploaded_gpu_draws)
+    _state.uploaded_gpu_draws = true
+
+    consts_buf: [MAX_DRAW_LAYERS]Draw_Layer_Constants
+
+    for &layer, i in _state.draw_layers {
+        if len(layer.sprites) == 0 && len(layer.meshes) == 0 {
+            continue
+        }
+
+        const_data: Draw_Layer_Constants = {
+            view_proj = calc_camera_world_to_clip_matrix(layer.camera),
+            cam_pos = layer.camera.pos,
+        }
+
+        consts_buf[i] = const_data
+
+    }
+
+    gpu.update_constants(_state.draw_layers_consts, gpu.ptr_bytes(&consts_buf))
+
+
+    // Prepare sprites
+
+    total_sprite_instances := 0
+
+    for &layer, _ in _state.draw_layers {
+        if len(layer.sprites) == 0 {
+            continue
+        }
+
+        if .No_Cull not_in layer.flags {
+            MAX_SPRITE_DIST :: (1 << 14) - 1
+
+            frustum := calc_camera_frustum(layer.camera)
+
+            far_plane := frustum.planes[FRUSTUM_FAR_PLANE_INDEX]
+
+            sprite_dist_factor := f32(MAX_SPRITE_DIST) / far_plane.w
+
+            forw := linalg.quaternion128_mul_vector3(layer.camera.rot, Vec3{0, 0, 1})
+
+            for sprite_index := len(layer.sprites) - 1; sprite_index >= 0; sprite_index -= 1 {
+                inst := layer.sprites.inst[sprite_index]
+                key := &layer.sprites.key[sprite_index]
+
+                bounds_rad :=
+                    linalg.abs(inst.mat_x) +
+                    linalg.abs(inst.mat_y)
+
+                dist := linalg.dot(forw, inst.pos - layer.camera.pos)
+                key.dist = ~u16(dist * sprite_dist_factor)
+
+                if !is_box_in_frustum(frustum, inst.pos, bounds_rad) {
+                    unordered_remove_soa(&layer.sprites, sprite_index)
+                }
+            }
+        }
+
+        instances := layer.sprites.inst[:len(layer.sprites)]
+
+        if .No_Sort not_in layer.flags {
+            keys := layer.sprites.key[:len(layer.sprites)]
+
+            #assert(size_of(u64) == size_of(Sprite_Sort_Key))
+            indices := slice.sort_with_indices(transmute([]u64)keys, context.temp_allocator)
+            slice.sort_from_permutation_indices(instances, indices)
+        }
+
+        total_sprite_instances += len(layer.sprites)
+    }
+
+    // GPU Upload sprites
+
+    sprite_upload_buf, sprite_upload_err := runtime.mem_alloc_non_zeroed(size_of(Sprite_Inst) * total_sprite_instances, alignment = 64, allocator = context.temp_allocator)
+    sprite_upload_offs := 0
+
+    assert(sprite_upload_err == nil)
+
+    for &layer, _ in _state.draw_layers {
+        if len(layer.sprites) == 0 {
+            continue
+        }
+
+        assert(sprite_upload_offs < len(sprite_upload_buf))
+
+        instances := layer.sprites.inst[:len(layer.sprites)]
+
+        uploaded_bytes := copy_slice(sprite_upload_buf[sprite_upload_offs:], gpu.slice_bytes(instances))
+        total_bytes := size_of(Sprite_Inst) * len(layer.sprites)
+
+        if uploaded_bytes != total_bytes {
+            log.error("Failed to upload all sprite instances")
+            footer := raw_soa_footer_dynamic_array(&layer.sprites)
+            footer.len = uploaded_bytes / size_of(Sprite_Inst)
+        } else {
+            layer.sprite_offs = u32(sprite_upload_offs)
+            sprite_upload_offs += total_bytes
+        }
+    }
+
+
+    gpu.update_buffer(_state.sprite_inst_buf, sprite_upload_buf)
+
+
+    //
+    // Upload meshes
+    //
+
+    // vram_mesh_buf := slice.reinterpret([]Mesh_Inst, gpu.map_buffer(_state.mesh_inst_buf))
+    // vram_mesh_offs := 0
+
+    // assert(len(vram_mesh_buf) > 0)
+
+    // for &layer, _ in _state.draw_layers {
+    //     if len(layer.meshes) == 0 {
+    //         continue
+    //     }
+
+    //     assert(vram_mesh_offs < len(vram_mesh_buf))
+
+    //     if .No_Cull not_in layer.flags {
+    //         MAX_MESH_DIST :: (1 << 16) - 1
+
+    //         frustum := calc_camera_frustum(layer.camera)
+    //         far_plane := frustum.planes[FRUSTUM_FAR_PLANE_INDEX]
+    //         mesh_dist_factor := f32(MAX_MESH_DIST) / far_plane.w
+    //         forw := linalg.quaternion128_mul_vector3(layer.camera.rot, Vec3{0, 0, 1})
+
+    //         for mesh_index := len(layer.meshes) - 1; mesh_index >= 0; mesh_index -= 1 {
+    //             inst := layer.meshes.inst[mesh_index]
+    //             key := &layer.meshes.key[mesh_index]
+    //             extra := layer.meshes.extra[mesh_index]
+
+    //             mesh := _state.meshes[extra.index]
+
+    //             box_rad :=
+    //                 (linalg.abs(inst.mat_x) * max(abs(mesh.bounds_min.x), abs(mesh.bounds_max.x))) +
+    //                 (linalg.abs(inst.mat_y) * max(abs(mesh.bounds_min.y), abs(mesh.bounds_max.y))) +
+    //                 (linalg.abs(inst.mat_z) * max(abs(mesh.bounds_min.z), abs(mesh.bounds_max.z)))
+
+    //             dist := linalg.dot(forw, inst.pos - layer.camera.pos)
+    //             // NOTE: should this get inverted for opaque meshes to minimize overdraw?
+    //             // What about Z prepass?
+    //             key.dist = ~u16(dist * mesh_dist_factor) // invert
+
+    //             if !is_box_in_frustum(frustum, inst.pos, box_rad) {
+    //                 unordered_remove_soa(&layer.meshes, mesh_index)
+    //             }
+    //         }
+    //     }
+
+    //     instances := layer.meshes.inst[:len(layer.meshes)]
+
+    //     if .No_Sort not_in layer.flags {
+    //         keys := layer.meshes.key[:len(layer.meshes)]
+    //         #assert(size_of(u64) == size_of(Mesh_Sort_Key))
+    //         indices := slice.sort_with_indices(transmute([]u64)keys, context.temp_allocator)
+    //         slice.sort_from_permutation_indices(instances, indices)
+    //     }
+
+    //     num := copy_slice(vram_mesh_buf[vram_mesh_offs:], instances)
+
+    //     if num != len(instances) {
+    //         log.error("Failed to upload all mesh instances")
+    //         footer := raw_soa_footer_dynamic_array(&layer.meshes)
+    //         footer.len = num
+    //     } else {
+    //         layer.mesh_offs = u32(vram_mesh_offs)
+    //         vram_mesh_offs += num
+    //     }
+    // }
+
+    // gpu.unmap_buffer(_state.mesh_inst_buf)
+}
+
+
+
+@(optimization_mode="favor_size")
+render_gpu_layer :: proc(
+    #any_int index: i32,
+    ren_tex_handle: Render_Texture_Handle,
+    clear_color:    Maybe(Vec3),
+    clear_depth:    bool,
+) {
+    assert(ren_tex_handle != {})
+    assert(_state.uploaded_gpu_draws, "You must call upload_gpu_layers() to submit draw data to VRAM before any actual rendering")
+
+    layer := _state.draw_layers[index]
+
+    ren_tex, ren_tex_ok := get_internal_render_texture(ren_tex_handle)
+    if !ren_tex_ok {
+        log.error("Trying to submit GPU commands of an invalid render texture:", ren_tex_handle)
+        return
+    }
+
+    if len(layer.sprites) == 0 && len(layer.meshes) == 0 {
+        return
+    }
+
+    clear_color_val: [4]f32 = {0, 0, 0, 1}
+    clear_color_val.rgb = clear_color.? or_else {}
+    pass_desc := gpu.Pass_Desc{
+        colors = {
+            0 = {
+                resource = ren_tex.color,
+                clear_mode = clear_color == nil ? .Keep : .Clear,
+                clear_val = clear_color_val,
+            },
+        },
+        depth = {
+            resource = ren_tex.depth,
+            clear_mode = clear_depth ? .Clear : .Keep,
+            clear_val = 0.0,
+        },
+    }
+
+    gpu.begin_pass(pass_desc)
+
+    // BIG WARNING:
+    // On certain GPU backends, the pipeline state has to be baked and a new pipeline has to be created,
+    // when it's not already in pipeline cache.
+    // For this reason a lot of care should be taken to minimize possible states.
+    pip_desc := gpu.Pipeline_Desc {
+        color_format = {
+            0 = .RGBA_U8_Norm,
+        },
+        depth_format = .D_F32,
+        constants = {
+            0 = _state.draw_batch_consts,
+            1 = _state.draw_layers_consts,
+        },
+    }
+
+    for smp, i in DEFAULT_SAMPLERS {
+        pip_desc.samplers[i] = smp
+    }
+
+
+    //
+    // Sprites
+    //
+
+    instance_num: i32 = 0
+    instance_offs: i32 = 0
+
+    if len(layer.sprites) > 0 {
+
+        pip_desc.index = {
+            resource = _state.quad_ibuf,
+            format = .U16,
+        }
+
+        pip_desc.topo = .Triangles
+
+        pip_desc.cull = .None
+        pip_desc.fill = .Invalid
+
+        pip_desc.vs = _state.vertex_shaders[_state.default_sprite_vs.index].shader
+
+        pip_desc.resources = {
+            0 = _state.sprite_inst_buf,
+        }
+
+        prev_key: Sprite_Sort_Key = {}
+
+        for i in 0..=len(layer.sprites) {
+            flush: bool
+            key: Sprite_Sort_Key
+
+            // End
+            if i == len(layer.sprites) {
+                flush = true
+                key = prev_key
+            } else {
+                key = layer.sprites.key[i]
+
+                cmp_curr := key
+                cmp_prev := prev_key
+                cmp_curr.dist = 0
+                cmp_prev.dist = 0
+
+                flush = i > 0 && cmp_curr != cmp_prev
+            }
+
+            // Flush the draw commands BEFORE this one
+            if flush {
+                log_internal("Sprite Drawcall with %i instances at offset %i", instance_num, instance_offs)
+
+                pipeline, pipeline_ok := gpu.create_pipeline("sprite-pip", pip_desc)
+                if !pipeline_ok {
+                    panic("Failed to create GPU pipeline")
+                }
+
+                gpu.begin_pipeline(pipeline)
+
+                // consts := Draw_Batch_Constants{
+                //     instance_offset = layer.sprite_offs + u32(instance_offs),
+                //     vertex_offset = 0,
+                // }
+
+                // // THIS SHIT WONT WORK ON WEBGPU
+                // // Emulate push constants??
+                // gpu.update_constants(_state.draw_batch_consts, gpu.ptr_bytes(&consts))
+
+                gpu.draw_indexed(
+                    index_num = 6,
+                    instance_num = instance_num,
+                    index_offset = 0,
+                    const_offsets = {
+                        0 = 0,
+                        1 = u32(index),
+                    },
+                )
+
+                instance_offs += instance_num
+                instance_num = 0
+            }
+
+            if i == len(layer.sprites) {
+                break
+            }
+
+            instance_num += 1
+
+            if i == 0 || flush {
+                pip_desc.blends[0] = _gpu_blend_mode_desc(key.blend)
+                pip_desc.cull, pip_desc.fill = _gpu_fill_mode(key.fill)
+                pip_desc.depth_comparison = key.depth_test ? .Greater_Equal : .Always
+                pip_desc.depth_write = key.depth_write
+
+                if key.texture != prev_key.texture {
+                    res: gpu.Resource_Handle
+
+                    if key.texture == 0 {
+                        // res = _state.texture_pool.resource
+                    } else {
+                        res = _state.textures[key.texture].resource
+                    }
+
+                    pip_desc.resources[2] = res
+                }
+
+                if key.ps != prev_key.ps {
+                    assert(key.ps != 0)
+                    pip_desc.ps = _state.pixel_shaders[key.ps].shader
+                }
+            }
+
+            prev_key = key
+        }
+    }
+
+
+    //
+    // Meshes
+    //
+
+    // instance_num = 0
+    // instance_offs = 0
+
+    // if len(layer.meshes) > 0 {
+    //     gpu.set_resource(0, _state.mesh_inst_buf)
+
+    //     prev_key: Mesh_Sort_Key = {}
+
+    //     for i in 0..=len(layer.meshes) {
+    //         flush: bool
+    //         key: Mesh_Sort_Key
+
+    //         // End
+    //         if i == len(layer.meshes) {
+    //             flush = true
+    //             key = prev_key
+    //         } else {
+    //             key = layer.meshes.key[i]
+    //             flush =
+    //                 i > 0 && (
+    //                 key.blend != prev_key.blend ||
+    //                 key.fill != prev_key.fill ||
+    //                 key.index_num != prev_key.index_num ||
+    //                 key.depth_test != prev_key.depth_test ||
+    //                 key.depth_write != prev_key.depth_write ||
+    //                 key.group != prev_key.group ||
+    //                 key.texture != prev_key.texture ||
+    //                 key.ps != prev_key.ps ||
+    //                 key.vs != prev_key.vs
+    //             )
+    //         }
+
+    //         // Flush the draw commands BEFORE this one
+    //         if flush {
+    //             // log.infof("Mesh Drawcall with %i indices and %i instances at offset %i", key.index_num, instance_num, instance_offs)
+
+    //             consts := Draw_Batch_Constants{
+    //                 instance_offset = layer.mesh_offs + u32(instance_offs),
+    //                 vertex_offset = 0,
+    //             }
+
+    //             gpu.update_constants(_state.draw_batch_consts, gpu.ptr_bytes(&consts))
+
+    //             gpu.draw_indexed(
+    //                 index_num = key.index_num,
+    //                 instance_num = instance_num,
+    //                 index_offset = 0,
+    //             )
+
+    //             instance_offs = i32(i)
+    //             instance_num = 0
+    //         }
+
+    //         if i == len(layer.meshes) {
+    //             break
+    //         }
+
+    //         instance_num += 1
+
+    //         if i == 0 || key.blend != prev_key.blend {
+    //             _set_gpu_blend_mode(key.blend)
+    //         }
+
+    //         if i == 0 || key.fill != prev_key.fill {
+    //             _set_gpu_fill_mode(key.fill)
+    //         }
+
+    //         if i == 0 || key.depth_test != prev_key.depth_test || key.depth_write != prev_key.depth_write {
+    //             gpu.set_depth_comparison(key.depth_test ? .Greater_Equal : .Always)
+    //             gpu.set_depth_write(key.depth_write)
+    //         }
+
+    //         if i == 0 || key.group != prev_key.group {
+    //             assert(key.group != 0)
+    //             group := &_state.groups[key.group]
+    //             assert(group.ibuf != {})
+    //             assert(group.vbuf != {})
+    //             gpu.set_index_buffer(group.ibuf, .U16)
+    //             gpu.set_resource(1, group.vbuf)
+    //         }
+
+    //         if i == 0 || key.texture != prev_key.texture {
+    //             res: gpu.Resource_Handle
+    //             if key.texture == 0 {
+    //                 // res = _state.texture_pool.resource
+    //                 // assert(res != {})
+    //             } else {
+    //                 res = _state.textures[key.texture].resource
+    //                 assert(res != {})
+    //             }
+    //             gpu.set_resource(0, res)
+    //         }
+
+    //         if i == 0 || key.ps != prev_key.ps {
+    //             assert(key.ps != 0)
+    //             ps := _state.pixel_shaders[key.ps]
+    //             gpu.set_shader(ps.shader)
+    //         }
+
+    //         if i == 0 || key.vs != prev_key.vs {
+    //             assert(key.vs != 0)
+    //             vs := _state.vertex_shaders[key.vs]
+    //             gpu.set_shader(vs.shader)
+    //         }
+
+    //         prev_key = key
+    //     }
+    // }
+}
+
+
+_gpu_blend_mode_desc :: proc(blend: Blend_Mode) -> gpu.Blend_Desc {
+    switch blend {
+    case .Opaque:
+        return gpu.BLEND_OPAQUE
+    case .Add:
+        return gpu.BLEND_ADDITIVE
+    case .Alpha:
+        return gpu.BLEND_ALPHA
+    case .Premultiplied_Alpha:
+        return gpu.BLEND_PREMULTIPLIED_ALPHA
+    }
+    return gpu.BLEND_OPAQUE
+}
+
+_gpu_fill_mode :: proc(fill: Fill_Mode) -> (gpu.Cull_Mode, gpu.Fill_Mode) {
+    switch fill {
+    case .Front:
+        return .Back, .Solid
+    case .Back:
+        return .Front, .Solid
+    case .All:
+        return .None, .Solid
+    case .Wire:
+        return .None, .Wireframe
+    }
+    return .Invalid, .Invalid
+}
+
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// MARK: Camera
+//
+
+Camera :: struct {
+    pos:        Vec3,
+    rot:        Quat,
+    // View to clip transform.
+    // NDC box is -1..1 on X and Y, and 0..1 on Z axis.
+    projection: Mat4,
+}
+
+FRUSTUM_FAR_PLANE_INDEX :: 5
+
+Frustum :: struct {
+    planes:     [6]Vec4, // xyz normal, w offset
+    corners:    [8]Vec3,
+    bounds_min: Vec3,
+    bounds_max: Vec3,
+}
+
+orthographic_projection :: proc(left, right, top, bottom, near, far: f32) -> (result: Mat4) {
+    // D3D11, LH 0..1 NDC
+    // https://learn.microsoft.com/en-us/windows/win32/direct3d9/d3dxmatrixorthooffcenterlh
+
+    result[0, 0] = 2 / (right - left)
+    result[1, 1] = 2 / (top - bottom)
+    result[2, 2] = 1 / (far - near)
+    result[0, 3] = (left + right) / (left - right)
+    result[1, 3] = (top + bottom) / (bottom - top)
+    result[2, 3] = near / (near - far)
+    result[3, 3] = 1
+
+    return result
+}
+
+// left handed reverse Z
+// https://iolite-engine.com/blog_posts/reverse_z_cheatsheet
+// NOTE: use Greater depth comparison!
+perspective_projection :: proc(screen: Vec2, fov: f32, near: f32 = 0.01, far: f32 = 1000.0) -> (result: Mat4) {
+    assert(fov > 0)
+    assert(screen.x > 0)
+    assert(screen.y > 0)
+
+    aspect := screen.x / screen.y
+    tan_half_fovy := math.tan(0.5 * fov)
+    result[0, 0] = 1.0 / (tan_half_fovy * aspect)
+    result[1, 1] = 1.0 / tan_half_fovy
+    result[2, 2] = -near / (far - near)
+    result[2, 3] = (far * near) / (far - near)
+    result[3, 2] = 1
+
+    return result
+}
+
+calc_camera_world_to_view_matrix :: proc(camera: Camera) -> (result: Mat4) {
+    result =
+        linalg.matrix4_from_quaternion_f32(linalg.quaternion_inverse(camera.rot)) *
+        linalg.matrix4_translate_f32(-camera.pos)
+    return result
+}
+
+calc_camera_world_to_clip_matrix :: proc(camera: Camera) -> (result: Mat4) {
+    result = camera.projection * calc_camera_world_to_view_matrix(camera)
+    return result
+}
+
+calc_camera_frustum :: proc(cam: Camera) -> Frustum {
+    mvp := calc_camera_world_to_clip_matrix(cam)
+    inv := linalg.matrix4_inverse_f32(mvp)
+    return calc_matrix_frustum(inv)
+}
+
+calc_matrix_frustum :: proc(clip_to_world: Mat4) -> (result: Frustum) {
+    // https://iquilezles.org/articles/frustumcorrect/
+    // https://iquilezles.org/articles/frustum/
+
+    fru := [8]Vec4{
+        0 = clip_to_world * Vec4{-1, -1,  0, 1.0},
+        1 = clip_to_world * Vec4{+1, -1,  0, 1.0},
+        2 = clip_to_world * Vec4{-1, +1,  0, 1.0},
+        3 = clip_to_world * Vec4{+1, +1,  0, 1.0},
+        4 = clip_to_world * Vec4{-1, -1, +1, 1.0},
+        5 = clip_to_world * Vec4{+1, -1, +1, 1.0},
+        6 = clip_to_world * Vec4{-1, +1, +1, 1.0},
+        7 = clip_to_world * Vec4{+1, +1, +1, 1.0},
+    }
+
+    for p, i in fru {
+        result.corners[i] = p.xyz / p.w
+    }
+
+    result.bounds_min = max(f32)
+    result.bounds_max = min(f32)
+
+    for p in result.corners {
+        result.bounds_min = linalg.min(result.bounds_min, p)
+        result.bounds_max = linalg.max(result.bounds_max, p)
+    }
+
+    center: Vec3
+    for p in result.corners {
+        center += p
+    }
+    center *= 1.0 / 8.0
+
+    result.planes = {
+        _tri_plane(center, result.corners[4], result.corners[6], result.corners[5]),
+        _tri_plane(center, result.corners[0], result.corners[4], result.corners[1]),
+        _tri_plane(center, result.corners[2], result.corners[3], result.corners[6]),
+        _tri_plane(center, result.corners[0], result.corners[2], result.corners[4]),
+        _tri_plane(center, result.corners[1], result.corners[5], result.corners[3]),
+        _tri_plane(center, result.corners[0], result.corners[1], result.corners[2]),
+    }
+
+    return result
+
+    _tri_plane :: proc(center: Vec3, a, b, c: Vec3) -> Vec4 {
+        normal := linalg.normalize0(linalg.cross(b - a, c - a))
+
+        if linalg.dot(a - center, normal) < 0 {
+            normal = -normal
+        }
+
+        return {
+            normal.x,
+            normal.y,
+            normal.z,
+            linalg.dot(normal, a),
+        }
+    }
+}
+
+is_box_in_frustum :: proc(fru: Frustum, pos: Vec3, rad: Vec3) -> bool #no_bounds_check {
+    EPS :: 1
+
+    if pos.x < fru.bounds_min.x - rad.x - EPS ||
+       pos.y < fru.bounds_min.y - rad.y - EPS ||
+       pos.z < fru.bounds_min.z - rad.z - EPS ||
+       pos.x > fru.bounds_max.x + rad.x + EPS ||
+       pos.y > fru.bounds_max.y + rad.y + EPS ||
+       pos.z > fru.bounds_max.z + rad.z + EPS
+    {
+        return false
+    }
+
+    for plane in fru.planes {
+        rad_on_normal := rad.x * abs(plane.x) + rad.y * abs(plane.y) + rad.z * abs(plane.z)
+        dist := linalg.dot(plane.xyz, pos) - plane.w - rad_on_normal
+        if dist > EPS {
+            return false
+        }
+    }
+
+    return true
+}
+
+
+// world_to_screen :: proc(pos: Vec3, cam: Camera) -> Vec3 {
+//     cam_mvp := calc_camera_world_to_clip_matrix(cam)
+
+//     p := cam_mvp * Vec4{pos.x, pos.y, pos.z, 1.0}
+//     p.xyz /= p.w
+
+//     // p.x = (p.x / f32(get_screen_size().x)) * 2.0 - 1.0
+//     // p.y = 1.0 - 2.0 * (p.y / f32(get_screen_size().y))
+
+//     unimplemented()
+
+//     // return p
+// }
+
+// Returns the ray direction.
+screen_to_world_ray :: proc(pos: Vec2, cam: Camera) -> Vec3 {
+    cam_mvp := calc_camera_world_to_clip_matrix(cam)
+    cam_inv := linalg.matrix4_inverse_f32(cam_mvp)
+
+    p := pos
+
+    p.x = (p.x / f32(get_screen_size().x)) * 2.0 - 1.0
+    p.y = 1.0 - 2.0 * (p.y / f32(get_screen_size().y))
+
+    p0 := cam_inv * Vec4{p.x, p.y, 0.0, 1.0}
+    p1 := cam_inv * Vec4{p.x, p.y, 1.0, 1.0}
+    p0.xyz /= p0.w
+    p1.xyz /= p1.w
+
+    return linalg.normalize0(p1.xyz - p0.xyz)
+}
+
+
+
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// MARK: Misc
+//
+
+@(optimization_mode="favor_size")
+hash_fnv64a :: proc "contextless" (data: []byte, seed: u64) -> u64 {
+	h: u64 = seed
+	for b in data {
+		h = (h ~ u64(b)) * 0x100000001b3
+	}
+	return h
+}
+
+@(disabled=!LOG_INTERNAL)
+log_internal :: proc(format: string, args: ..any, loc := #caller_location) {
+    when LOG_INTERNAL {
+        log.debugf(format, args = args, location = loc)
+    }
+}
+
+_assertion_failure_proc :: proc(prefix, message: string, loc: runtime.Source_Code_Location) -> ! {
+    // based on runtime.default_assertion_contextless_failure_proc
+
+    runtime.print_caller_location(loc)
+    runtime.print_string(" ")
+    runtime.print_string(prefix)
+    if len(message) > 0 {
+        runtime.print_string(": ")
+        runtime.print_string(message)
+    }
+    runtime.print_byte('\n')
+
+    when ODIN_DEBUG {
+        ctx := &_state.debug_trace_ctx
+        if !debug_trace.in_resolve(ctx) {
+            buf: [64]debug_trace.Frame
+            runtime.print_string("Debug Stack Trace:\n")
+            frames := debug_trace.frames(ctx, skip = 0, frames_buffer = buf[:])
+            for f, i in frames {
+                fl := debug_trace.resolve(ctx, f, context.temp_allocator)
+                if fl.loc.file_path == "" && fl.loc.line == 0 {
+                    continue
+                }
+                runtime.print_int(i)
+                runtime.print_string(" : ")
+                runtime.print_caller_location(fl.loc)
+                runtime.print_string(" ")
+                runtime.print_string(fl.loc.procedure)
+                runtime.print_byte('\n')
+            }
+        }
+    }
+
+    runtime.trap()
+}
+
+
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Counters
+//
+// This is a super lightweight way to measure stats and report them to the outside world.
+//
+
+// Counter_Kind :: enum u8 {
+//     Invalid,
+//     Upload_Ns,
+//     Total_Draw_Layer_Ns,
+//     Sprite_Draw_Calls,
+//     Mesh_Draw_Calls,
+// }
+
+// counter_add :: proc()
+
+
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Rect
+//
+
+rect_center :: proc(r: Rect) -> Vec2 {
+    return (r.min + r.max) * 0.5
+}
+
+rect_from_box :: proc(pos: Vec2, half_size: Vec2) -> Rect {
+    return {pos - half_size, pos + half_size}
+}
+
+rect_anchor :: proc(r: Rect, anchor: Vec2) -> Vec2 {
+    return {lerp(r.min.x, r.max.x, anchor.x), lerp(r.min.y, r.max.y, anchor.y)}
+}
+
+rect_full_size :: #force_inline proc(r: Rect) -> Vec2 {
+    return r.max - r.min
+}
+
+rect_expand :: proc(r: Rect, a: Vec2) -> Rect {
+    return {r.min - a, r.max + a}
+}
+
+rect_scale :: proc(r: Rect, a: Vec2) -> Rect {
+    size := rect_full_size(r) * 0.5
+    center := rect_center(r)
+    return {center - size * a, center + size * a}
+}
+
+rect_contains_point :: proc(r: Rect, p: Vec2) -> bool {
+    return p.x > r.min.x && p.y > r.min.y && p.x < r.max.x && p.y < r.max.y
+}
+
+rect_clamp_point :: proc(r: Rect, p: Vec2) -> Vec2 {
+    return {clamp(p.x, r.min.x, r.max.x), clamp(p.y, r.min.y, r.max.y)}
+}
+
+rect_closest_point :: rect_clamp_point
+
+
+// limit to maximum half size
+rect_max_size :: proc(r: Rect, amount: Vec2) -> Rect {
+    size := rect_full_size(r) * 0.5
+    return rect_from_box(rect_center(r), Vec2{min(size.x, amount.x), min(size.y, amount.y)})
+}
+
+// limit to minimum half size
+rect_min_size :: proc(r: Rect, amount: Vec2) -> Rect {
+    size := rect_full_size(r) * 0.5
+    return rect_from_box(rect_center(r), Vec2{max(size.x, amount.x), max(size.y, amount.y)})
+}
+
+rect_cut_left :: proc(r: ^Rect, a: f32) -> Rect {
+    minx := r.min.x
+    r.min.x = min(r.max.x, r.min.x + a)
+    return {{minx, r.min.y}, {r.min.x, r.max.y}}
+}
+
+rect_cut_right :: proc(r: ^Rect, a: f32) -> Rect {
+    maxx := r.max.x
+    r.max.x = max(r.min.x, r.max.x - a)
+    return {{r.max.x, r.min.y}, {maxx, r.max.y}}
+}
+
+rect_cut_top :: proc(r: ^Rect, a: f32) -> Rect {
+    miny := r.min.y
+    r.min.y = min(r.max.y, r.min.y + a)
+    return {{r.min.x, miny}, {r.max.x, r.min.y}}
+}
+
+rect_cut_bottom :: proc(r: ^Rect, a: f32) -> Rect {
+    maxy := r.max.y
+    r.max.y = max(r.min.y, r.max.y - a)
+    return {{r.min.x, r.max.y}, {r.max.x, maxy}}
+}
+
+rect_get_cut_left :: proc(r: Rect, a: f32) -> Rect {
+    return {{r.min.x, r.min.y}, {min(r.max.x, r.min.x + a), r.max.y}}
+}
+
+rect_get_cut_right :: proc(r: Rect, a: f32) -> Rect {
+    return {{max(r.min.x, r.max.x - a), r.min.y}, {r.max.x, r.max.y}}
+}
+
+rect_get_cut_top :: proc(r: Rect, a: f32) -> Rect {
+    return {{r.min.x, r.min.y}, {r.max.x, min(r.max.y, r.min.y + a)}}
+}
+
+rect_get_cut_bottom :: proc(r: Rect, a: f32) -> Rect {
+    return {{r.min.x, max(r.min.y, r.max.y - a)}, {r.max.x, r.max.y}}
+}
+
+rect_split_left :: proc(r: ^Rect, t: f32) -> Rect {
+    return rect_cut_left(r, (r.max.x - r.min.x) * t)
+}
+
+rect_split_right :: proc(r: ^Rect, t: f32) -> Rect {
+    return rect_cut_right(r, (r.max.x - r.min.x) * t)
+}
+
+rect_split_top :: proc(r: ^Rect, t: f32) -> Rect {
+    return rect_cut_top(r, (r.max.y - r.min.y) * t)
+}
+
+rect_split_bottom :: proc(r: ^Rect, t: f32) -> Rect {
+    return rect_cut_bottom(r, (r.max.y - r.min.y) * t)
+}
+
+
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// MARK: CP437 encoding
+// Extended ASCII encoding, all 256 characters are valid visual glyphs.
+//
+// https://en.wikipedia.org/wiki/Code_page_437
+//
+
+// Unicode -> CP437. Use when iterating over a string.
+rune_to_char :: proc(r: rune) -> u8 {
+    switch r {
+    // ASCII
+    case ' '..='~': return u8(r)
+
+    case: fallthrough
+
+    case '�': return 0
+    case '☺': return 1
+    case '☻': return 2
+    case '♥': return 3
+    case '♦': return 4
+    case '♣': return 5
+    case '♠': return 6
+    case '•': return 7
+    case '◘': return 8
+    case '○': return 9
+    case '◙': return 10
+    case '♂': return 11
+    case '♀': return 12
+    case '♪': return 13
+    case '♫': return 14
+    case '☼': return 15
+    case '►': return 16
+    case '◄': return 17
+    case '↕': return 18
+    case '‼': return 19
+    case '¶': return 20
+    case '§': return 21
+    case '▬': return 22
+    case '↨': return 23
+    case '↑': return 24
+    case '↓': return 25
+    case '→': return 26
+    case '←': return 27
+    case '∟': return 28
+    case '↔': return 29
+    case '▲': return 30
+    case '▼': return 31
+    case '⌂': return 127
+    case 'Ç': return 128
+    case 'ü': return 129
+    case 'é': return 130
+    case 'â': return 131
+    case 'ä': return 132
+    case 'à': return 133
+    case 'å': return 134
+    case 'ç': return 135
+    case 'ê': return 136
+    case 'ë': return 137
+    case 'è': return 138
+    case 'ï': return 139
+    case 'î': return 140
+    case 'ì': return 141
+    case 'Ä': return 142
+    case 'Å': return 143
+    case 'É': return 144
+    case 'æ': return 145
+    case 'Æ': return 146
+    case 'ô': return 147
+    case 'ö': return 148
+    case 'ò': return 149
+    case 'û': return 150
+    case 'ù': return 151
+    case 'ÿ': return 152
+    case 'Ö': return 153
+    case 'Ü': return 154
+    case '¢': return 155
+    case '£': return 156
+    case '¥': return 157
+    case '₧': return 158
+    case 'ƒ': return 159
+    case 'á': return 160
+    case 'í': return 161
+    case 'ó': return 162
+    case 'ú': return 163
+    case 'ñ': return 164
+    case 'Ñ': return 165
+    case 'ª': return 166
+    case 'º': return 167
+    case '¿': return 168
+    case '⌐': return 169
+    case '¬': return 170
+    case '½': return 171
+    case '¼': return 172
+    case '¡': return 173
+    case '«': return 174
+    case '»': return 175
+    case '░': return 176
+    case '▒': return 177
+    case '▓': return 178
+    case '│': return 179
+    case '┤': return 180
+    case '╡': return 181
+    case '╢': return 182
+    case '╖': return 183
+    case '╕': return 184
+    case '╣': return 185
+    case '║': return 186
+    case '╗': return 187
+    case '╝': return 188
+    case '╜': return 189
+    case '╛': return 190
+    case '┐': return 191
+    case '└': return 192
+    case '┴': return 193
+    case '┬': return 194
+    case '├': return 195
+    case '─': return 196
+    case '┼': return 197
+    case '╞': return 198
+    case '╟': return 199
+    case '╚': return 200
+    case '╔': return 201
+    case '╩': return 202
+    case '╦': return 203
+    case '╠': return 204
+    case '═': return 205
+    case '╬': return 206
+    case '╧': return 207
+    case '╨': return 208
+    case '╤': return 209
+    case '╥': return 210
+    case '╙': return 211
+    case '╘': return 212
+    case '╒': return 213
+    case '╓': return 214
+    case '╫': return 215
+    case '╪': return 216
+    case '┘': return 217
+    case '┌': return 218
+    case '█': return 219
+    case '▄': return 220
+    case '▌': return 221
+    case '▐': return 222
+    case '▀': return 223
+    case 'α': return 224
+    case 'ß': return 225
+    case 'Γ': return 226
+    case 'π': return 227
+    case 'Σ': return 228
+    case 'σ': return 229
+    case 'µ': return 230
+    case 'τ': return 231
+    case 'Φ': return 232
+    case 'Θ': return 233
+    case 'Ω': return 234
+    case 'δ': return 235
+    case '∞': return 236
+    case 'φ': return 237
+    case 'ε': return 238
+    case '∩': return 239
+    case '≡': return 240
+    case '±': return 241
+    case '≥': return 242
+    case '≤': return 243
+    case '⌠': return 244
+    case '⌡': return 245
+    case '÷': return 246
+    case '≈': return 247
+    case '°': return 248
+    case '∙': return 249
+    case '·': return 250
+    case '√': return 251
+    case 'ⁿ': return 252
+    case '²': return 253
+    case '■': return 254
+    case 0x00A0: return 255 // non breaking space
+    }
+}
+
+// CP437 -> Unicode. Use when iterating over encoded text to print it.
+char_to_rune :: proc(ch: u8) -> rune {
+    switch ch {
+    // ASCII
+    case '!'..='~':
+        return rune(ch)
+
+    case: fallthrough
+    case 0: return '�'
+    case 1: return '☺'
+    case 2: return '☻'
+    case 3: return '♥'
+    case 4: return '♦'
+    case 5: return '♣'
+    case 6: return '♠'
+    case 7: return '•'
+    case 8: return '◘'
+    case 9: return '○'
+    case 10: return '◙'
+    case 11: return '♂'
+    case 12: return '♀'
+    case 13: return '♪'
+    case 14: return '♫'
+    case 15: return '☼'
+    case 16: return '►'
+    case 17: return '◄'
+    case 18: return '↕'
+    case 19: return '‼'
+    case 20: return '¶'
+    case 21: return '§'
+    case 22: return '▬'
+    case 23: return '↨'
+    case 24: return '↑'
+    case 25: return '↓'
+    case 26: return '→'
+    case 27: return '←'
+    case 28: return '∟'
+    case 29: return '↔'
+    case 30: return '▲'
+    case 31: return '▼'
+    case 127: return '⌂'
+    case 128: return 'Ç'
+    case 129: return 'ü'
+    case 130: return 'é'
+    case 131: return 'â'
+    case 132: return 'ä'
+    case 133: return 'à'
+    case 134: return 'å'
+    case 135: return 'ç'
+    case 136: return 'ê'
+    case 137: return 'ë'
+    case 138: return 'è'
+    case 139: return 'ï'
+    case 140: return 'î'
+    case 141: return 'ì'
+    case 142: return 'Ä'
+    case 143: return 'Å'
+    case 144: return 'É'
+    case 145: return 'æ'
+    case 146: return 'Æ'
+    case 147: return 'ô'
+    case 148: return 'ö'
+    case 149: return 'ò'
+    case 150: return 'û'
+    case 151: return 'ù'
+    case 152: return 'ÿ'
+    case 153: return 'Ö'
+    case 154: return 'Ü'
+    case 155: return '¢'
+    case 156: return '£'
+    case 157: return '¥'
+    case 158: return '₧'
+    case 159: return 'ƒ'
+    case 160: return 'á'
+    case 161: return 'í'
+    case 162: return 'ó'
+    case 163: return 'ú'
+    case 164: return 'ñ'
+    case 165: return 'Ñ'
+    case 166: return 'ª'
+    case 167: return 'º'
+    case 168: return '¿'
+    case 169: return '⌐'
+    case 170: return '¬'
+    case 171: return '½'
+    case 172: return '¼'
+    case 173: return '¡'
+    case 174: return '«'
+    case 175: return '»'
+    case 176: return '░'
+    case 177: return '▒'
+    case 178: return '▓'
+    case 179: return '│'
+    case 180: return '┤'
+    case 181: return '╡'
+    case 182: return '╢'
+    case 183: return '╖'
+    case 184: return '╕'
+    case 185: return '╣'
+    case 186: return '║'
+    case 187: return '╗'
+    case 188: return '╝'
+    case 189: return '╜'
+    case 190: return '╛'
+    case 191: return '┐'
+    case 192: return '└'
+    case 193: return '┴'
+    case 194: return '┬'
+    case 195: return '├'
+    case 196: return '─'
+    case 197: return '┼'
+    case 198: return '╞'
+    case 199: return '╟'
+    case 200: return '╚'
+    case 201: return '╔'
+    case 202: return '╩'
+    case 203: return '╦'
+    case 204: return '╠'
+    case 205: return '═'
+    case 206: return '╬'
+    case 207: return '╧'
+    case 208: return '╨'
+    case 209: return '╤'
+    case 210: return '╥'
+    case 211: return '╙'
+    case 212: return '╘'
+    case 213: return '╒'
+    case 214: return '╓'
+    case 215: return '╫'
+    case 216: return '╪'
+    case 217: return '┘'
+    case 218: return '┌'
+    case 219: return '█'
+    case 220: return '▄'
+    case 221: return '▌'
+    case 222: return '▐'
+    case 223: return '▀'
+    case 224: return 'α'
+    case 225: return 'ß'
+    case 226: return 'Γ'
+    case 227: return 'π'
+    case 228: return 'Σ'
+    case 229: return 'σ'
+    case 230: return 'µ'
+    case 231: return 'τ'
+    case 232: return 'Φ'
+    case 233: return 'Θ'
+    case 234: return 'Ω'
+    case 235: return 'δ'
+    case 236: return '∞'
+    case 237: return 'φ'
+    case 238: return 'ε'
+    case 239: return '∩'
+    case 240: return '≡'
+    case 241: return '±'
+    case 242: return '≥'
+    case 243: return '≤'
+    case 244: return '⌠'
+    case 245: return '⌡'
+    case 246: return '÷'
+    case 247: return '≈'
+    case 248: return '°'
+    case 249: return '∙'
+    case 250: return '·'
+    case 251: return '√'
+    case 252: return 'ⁿ'
+    case 253: return '²'
+    case 254: return '■'
+    case 255: return 0x00A0 // non breaking space
+    }
+}
