@@ -1,7 +1,7 @@
 // https://github.com/karl-zylinski/odin-raylib-hot-reload-game-template/blob/main/source/main_hot_reload/main_hot_reload.odin
 
 #+private=file
-package raven_builder
+package raven_build
 
 import "core:flags"
 import "core:fmt"
@@ -29,11 +29,13 @@ Hotreload_File :: struct {
     index:      int,
 }
 
-exec :: proc(str: string) {
+exec :: proc(str: string) -> bool {
     res := platform.run_shell_command(str)
     if 0 != res {
         fmt.printfln("Error: Command '%s' failed with exit code %i", str, res)
+        return false
     }
+    return true
 }
 
 get_package_name_from_path :: proc() {

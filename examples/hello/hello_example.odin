@@ -1,8 +1,16 @@
 package raven_example_hello
 
+import "core:terminal/ansi"
+import "core:reflect"
+import "base:runtime"
 import "core:log"
 import "core:math"
+import "core:fmt"
 import rv "../.."
+import "../../gpu"
+import "../../platform"
+import "../../audio"
+
 
 state: ^State
 State :: struct {
@@ -24,11 +32,25 @@ main :: proc() {
         rv.init("Raven Hello Example")
         state = new(State)
         state.raven = rv.get_state_ptr()
+
+        print_member_sizes(rv.State)
+        print_member_sizes(audio.State)
+        print_member_sizes(gpu.State)
     }
+
+    // fmt.printfln("size_of(rv.State) = %M", size_of(rv.State))
+    // fmt.printfln("size_of(gpu.State) = %M", size_of(gpu.State))
+    // fmt.printfln("size_of(platform.State) = %M", size_of(platform.State))
+    // fmt.printfln("size_of(audio.State) = %M", size_of(audio.State))
 
     rv.set_state_ptr(state.raven)
 
+    log.info("new frame")
+
     if !rv.new_frame() {
+        if !gpu._state.fully_initialized {
+            return state
+        }
         return nil
     }
 
@@ -80,4 +102,25 @@ main :: proc() {
     )
 
     return state
+}
+
+print_member_sizes :: proc($T: typeid) {
+    fmt.printfln("total = %M", size_of(T))
+    for field in reflect.struct_fields_zipped(T) {
+        col := ansi.RESET
+        factor := f64(field.type.size) / f64(size_of(T))
+        if factor > 0.2 {
+            col = ansi.FG_RED
+        } else if factor > 0.1 {
+            col = ansi.FG_YELLOW
+        } else if factor < 0.01 {
+            col = ansi.FG_GREEN
+        }
+
+        fmt.print(ansi.CSI)
+        fmt.print(col)
+        fmt.print(ansi.SGR)
+        fmt.printfln("  %s = %M (%.1f%%)", field.name, field.type.size, 100 * factor)
+        fmt.print(ansi.CSI + ansi.RESET + ansi.SGR)
+    }
 }

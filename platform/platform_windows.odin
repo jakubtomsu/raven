@@ -719,11 +719,16 @@ when BACKEND == BACKEND_WINDOWS {
     }
 
     _clone_file :: proc(path: string, new_path: string, fail_if_exists := true) -> bool {
-        return cast(bool)windows.CopyFileW(
+        windows.SetLastError(0)
+        result := cast(bool)windows.CopyFileW(
             windows.utf8_to_wstring(path, context.temp_allocator),
             windows.utf8_to_wstring(new_path, context.temp_allocator),
             cast(windows.BOOL)fail_if_exists,
         )
+        if !result {
+            _win32_log_last_error("CopyFileW")
+        }
+        return result
     }
 
     _create_directory :: proc(path: string) -> bool {

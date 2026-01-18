@@ -15,8 +15,6 @@ import d3d_compiler "vendor:directx/d3d_compiler"
 
 // TODO: all input constraints must be spelled out at the top if each proc in gpu.odin.
 
-BACKEND_D3D11 :: "D3D11"
-
 when BACKEND == BACKEND_D3D11 {
 
     _SAMPLER_CACHE_BUCKET :: 8

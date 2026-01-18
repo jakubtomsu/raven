@@ -7,9 +7,17 @@ import "base:runtime"
 
 // TODO: read audio thread timer
 
-BACKEND_DEFAULT :: "miniaudio"
 
 BACKEND :: #config(AUDIO_BACKEND, BACKEND_DEFAULT)
+
+BACKEND_DUMMY :: "Dummy"
+BACKEND_MINIAUDIO :: "miniaudio"
+
+when ODIN_OS == .JS {
+    BACKEND_DEFAULT :: BACKEND_DUMMY
+} else {
+    BACKEND_DEFAULT :: BACKEND_MINIAUDIO
+}
 
 MAX_GROUPS :: #config(AUDIO_MAX_GROUPS, 16)
 MAX_SOUNDS :: #config(AUDIO_MAX_SOUNDS, 1024)
@@ -34,7 +42,7 @@ Group_Handle :: distinct Handle
 
 _state: ^State
 
-State :: struct {
+State :: struct #align(64) {
     using native:   _State,
 
     groups:         [MAX_GROUPS]Group,

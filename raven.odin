@@ -50,7 +50,7 @@ LOG_INTERNAL :: #config(RAVEN_LOG_INTERNAL, false)
 MAX_GROUPS :: 64
 MAX_TEXTURES :: 256
 MAX_MESHES :: 1024
-MAX_OBJECTS :: 1024 * 4
+MAX_OBJECTS :: 1024
 MAX_SPLINES :: 1024
 
 MAX_WATCHED_DIRS :: 8
@@ -115,10 +115,10 @@ Rect :: struct {
 #assert(len(Blend_Mode) <= 4)
 // NOTE: if you want an Alpha Clip mode, you must do it yourself in a shader with 'discard'.
 Blend_Mode :: enum u8 {
-    Opaque = 0,
+    Opaque, // No blending
+    Premultiplied_Alpha, // For certain sprites.
     Alpha, // Regular alpha transparency.
     Add, // Additive blend mode, only makes things brighter.
-    Premultiplied_Alpha, // For certain sprites.
 }
 
 #assert(len(Fill_Mode) <= 4)
@@ -132,7 +132,7 @@ Fill_Mode :: enum u8 {
 
 _state: ^State
 
-State :: struct {
+State :: struct #align(64) {
     is_dynamic:             bool,
     start_time:             u64,
     curr_time:              u64,
@@ -143,6 +143,8 @@ State :: struct {
     allocator:              runtime.Allocator,
     window:                 platform.Window,
     dpi_scale:              f32,
+    step_proc:              Step_Proc,
+    step_result:            rawptr,
 
     debug_trace_ctx:        debug_trace.Context,
 
@@ -285,10 +287,10 @@ Object :: struct {
     local_rot:          Mat3,
     local_scale:        Vec3,
 
-    // TODO
-    world_pos:          Vec3,
-    world_rot:          Mat3,
-    world_scale:        Vec3,
+    // // TODO
+    // world_pos:          Vec3,
+    // world_rot:          Mat3,
+    // world_scale:        Vec3,
 }
 
 Mesh :: struct {
@@ -558,12 +560,26 @@ is_initialized :: proc "contextless" () -> bool {
 Step_Proc :: #type proc "contextless" (_prev_data: rawptr) -> (data: rawptr)
 
 // Default runner for a raven app.
-// This is completely optional to use, it's just simple default.
+// This is optional, but it's a good default.
 // Calling this does nothing when compiling as a DLL, it's the responsibility
 // of whoever loaded the DLL (e.g. hotreload runner) to call the app.
 // NOTE: Things like reload never get called in this mode.
 run_main_loop :: proc(_step_proc: Step_Proc) {
-    when ODIN_BUILD_MODE != .Dynamic {
+    when ODIN_OS == .JS {
+        runtime.print_string("Running main loop...\n")
+
+        prev := _step_proc(nil)
+
+        runtime.print_string("main loop inited\n")
+
+        if _state == nil {
+            return
+        }
+
+        _state.step_proc = _step_proc
+        _state.step_result = prev
+
+    } else when ODIN_BUILD_MODE != .Dynamic { // do nothing in DLLs
         prev: rawptr
         for {
             prev = _step_proc(prev)
@@ -571,6 +587,33 @@ run_main_loop :: proc(_step_proc: Step_Proc) {
                 break
             }
         }
+    }
+}
+
+when ODIN_OS == .JS {
+    @export step :: proc(dt: f32) -> (keep_running: bool) {
+        log.info("Step")
+
+        assert(_state != nil)
+        assert(_state.step_proc != nil)
+
+        screen := platform.get_window_frame_rect({}).size
+        swap, ok := gpu.update_swapchain(nil, screen)
+        assert(ok)
+
+        if !gpu._state.fully_initialized {
+            return true
+        }
+
+        prev := _state.step_proc(_state.step_result)
+
+        if prev == nil {
+            return false
+        }
+
+        _state.step_result = prev
+
+        return true
     }
 }
 
@@ -757,6 +800,9 @@ new_frame :: proc(present_frame := true, vsync := true) -> (keep_running: bool) 
     }
 
     gpu_skip_frame := gpu.begin_frame()
+    if gpu_skip_frame {
+        return false
+    }
 
     audio.update()
 
@@ -878,6 +924,7 @@ new_frame :: proc(present_frame := true, vsync := true) -> (keep_running: bool) 
     _state.bind_state = {
         pixel_shader = int_cast(u8, _state.default_ps.index),
         vertex_shader = int_cast(u8, _state.default_vs.index),
+        blend = .Opaque,
     }
 
     bind_pixel_shader_by_handle({})
@@ -3218,9 +3265,7 @@ render_gpu_layer :: proc(
     }
 
     for batch in layer.sprite_batches {
-        log.info(batch)
-
-        log_internal("Sprite batch drawcall with %i instances", batch.num)
+        // log_internal("Sprite batch drawcall with %i instances", batch.num)
 
         pip_desc.blends[0] = _gpu_blend_mode_desc(batch.key.blend)
         pip_desc.cull, pip_desc.fill = _gpu_fill_mode(batch.key.fill)

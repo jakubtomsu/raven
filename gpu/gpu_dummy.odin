@@ -3,8 +3,6 @@
 // This can be a starting point when writing a new backend from scratch.
 package raven_gpu
 
-BACKEND_DUMMY :: "Dummy"
-
 when BACKEND == BACKEND_DUMMY {
 
     _State :: struct { _: u8 }

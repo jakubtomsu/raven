@@ -1,14 +1,16 @@
-#+vet explicit-allocators unused style shadowing
-package raven_builder
+#+vet unused style shadowing
+package raven_build
 
 import "core:log"
 import "core:flags"
+import "core:strings"
 import "../platform"
 
 ODIN_EXE :: "odin"
 
 Command :: enum {
     export,
+    export_web,
     run_hot,
     build_hot,
 }
@@ -31,6 +33,9 @@ main :: proc() {
     switch fl.cmd {
     case .export:
         unimplemented()
+
+    case .export_web:
+        export_web(strings.concatenate({pkg_name, "-web-export"}), pkg_name, fl.pkg)
 
     case .run_hot:
         clean_hot(pkg_name)

@@ -8,7 +8,7 @@ _wgpu_create_native_surface :: proc(instance: wgpu.Instance, window: rawptr, ptr
         &wgpu.SurfaceDescriptor{
             nextInChain = &wgpu.SurfaceSourceCanvasHTMLSelector{
                 sType = .SurfaceSourceCanvasHTMLSelector,
-                selector = "#wgpu-canvas",
+                selector = "#raven-canvas",
             },
         },
     )

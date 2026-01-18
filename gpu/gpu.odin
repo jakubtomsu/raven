@@ -13,6 +13,10 @@ import "core:log"
 
 BACKEND :: #config(GPU_BACKEND, DEFAULT_BACKEND)
 
+BACKEND_D3D11 :: "D3D11"
+BACKEND_WGPU :: "WGPU"
+BACKEND_DUMMY :: "Dummy"
+
 DEBUG :: #config(GPU_DEBUG, ODIN_DEBUG)
 VALIDATION :: #config(GPU_VALIDATION, true)
 VALIDATION_STRICT :: #config(GPU_VALIDATION_STRICT, true)
@@ -48,7 +52,7 @@ RW_RESOURCE_BIND_SLOTS :: 32
 
 // If you ever hit the pipeline limit it's probably a good idea to investigate
 // *why* you have so many pipelines in the first place, before raising it.
-MAX_PIPELINES :: #config(GPU_MAX_PIPELINES, 1024)
+MAX_PIPELINES :: #config(GPU_MAX_PIPELINES, 256)
 MAX_RESOURCES :: #config(GPU_MAX_RESOURCES, 1024)
 MAX_SHADERS :: #config(GPU_MAX_SHADERS, 128)
 MAX_CONSTANTS :: #config(GPU_MAX_RESOURCES, 64)
@@ -59,7 +63,7 @@ MAX_HASH_PROBE_DIST :: 64
 // Holds all global state.
 _state: ^State
 
-State :: struct {
+State :: struct #align(64) {
     using native:           _State,
     allocator:              runtime.Allocator,
     swapchain_res:          Resource_Handle,

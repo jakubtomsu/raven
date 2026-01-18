@@ -561,8 +561,8 @@ file_exists :: proc(path: string) -> bool {
     return _file_exists(path)
 }
 
-clone_file :: proc(path: string, new_path: string, fail_if_exists := true) -> bool {
-    return _clone_file(path, new_path, fail_if_exists)
+clone_file :: proc(dst_path: string, src_path: string, fail_if_exists := false) -> bool {
+    return _clone_file(path = src_path, new_path = dst_path, fail_if_exists = fail_if_exists)
 }
 
 @(require_results)

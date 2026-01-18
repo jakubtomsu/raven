@@ -5,8 +5,6 @@ import "vendor:wgpu"
 import "base:runtime"
 import "base:intrinsics"
 
-BACKEND_WGPU :: "WGPU"
-
 when BACKEND == BACKEND_WGPU {
 
     _BIND_GROUP_CACHE_SIZE :: 512
