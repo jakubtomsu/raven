@@ -22,6 +22,5 @@ fn ps_main(
         discard;
     }
 
-    // return float4(col.r, 1, 1, 1);
     return vec4<f32>(col.r, 1.0, 1.0, 1.0);
 }

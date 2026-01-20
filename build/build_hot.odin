@@ -22,6 +22,7 @@ when ODIN_OS == .Windows {
 Hotreload_Module_API_Proc :: #type proc "contextless" () -> Hotreload_Module_API
 
 Hotreload_Module_API :: struct {
+    state_size: i64,
     init:       rawptr,
     shutdown:   rawptr,
     update:     rawptr,
@@ -192,7 +193,12 @@ hotreload_run :: proc(pkg: string, pkg_path: string) -> bool {
                 continue
             }
 
-            log.info("Hotreload: Loaded %s", new_file.path)
+            log.infof("Hotreload: Loaded %s", new_file.path)
+
+            if new_module.api.state_size != module.api.state_size {
+                log.errorf("Hotreload: State Size mismatch (new %i vs old %i). You cannot change the State struct layout during hotreload.", new_module.api.state_size, module.api.state_size)
+                return false
+            }
 
             append(&modules_to_unload, new_module.mod)
 

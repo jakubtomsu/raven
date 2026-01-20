@@ -62,7 +62,7 @@ struct VS_Out {
     @location(1) normal    : vec3<f32>,
     @location(2) uv        : vec2<f32>,
     @location(3) color     : vec4<f32>,
-    @location(4) tex_slice : u32,
+    @location(4)  @interpolate(flat) tex_slice : u32,
 };
 
 fn unpack_unorm8(val : u32) -> vec4<f32> {

@@ -26,6 +26,7 @@ main :: proc() {
 @export _module_api :: proc "contextless" () -> (result: rv.Module_API) {
     runtime.print_string("MODULE API\n")
     result = {
+        state_size = size_of(State),
         init = transmute(rv.Init_Proc)_init,
         shutdown = transmute(rv.Shutdown_Proc)_shutdown,
         update = transmute(rv.Update_Proc)_update,
@@ -51,7 +52,7 @@ _shutdown :: proc(prev_state: ^State) {
 }
 
 _update :: proc(prev_state: ^State) -> ^State {
-    log.info("Update")
+    // log.info("Update")
 
     state = prev_state
 

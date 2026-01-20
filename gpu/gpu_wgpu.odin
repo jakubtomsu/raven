@@ -300,7 +300,7 @@ when BACKEND == BACKEND_WGPU {
 
         // Already exists
         if prev != 0 {
-            return _state.bind_group_data[index], {}, true
+            return _state.bind_group_data[index], {index = Handle_Index(index), gen = 0}, true
         }
 
         result = _create_bind_group(desc) or_return
@@ -602,6 +602,9 @@ when BACKEND == BACKEND_WGPU {
             return {}, false
         }
 
+        assert(bind_group_handle != {})
+        assert(bind_group.group != nil)
+
         result.bind_group = bind_group_handle
 
         return result, true
@@ -710,7 +713,7 @@ when BACKEND == BACKEND_WGPU {
             viewFormats = &formats[0],
         }
 
-        log.info(tex_desc)
+        // log.info(tex_desc)
 
         result.tex = wgpu.DeviceCreateTexture(_state.device, &tex_desc)
 
@@ -1006,8 +1009,16 @@ when BACKEND == BACKEND_WGPU {
 
     _bind_constants_items :: proc(offsets: []u32) {
         curr_pip, curr_pip_ok := get_internal_pipeline(_state.curr_pipeline)
+
+        log.info(curr_pip)
+
         assert(curr_pip_ok)
+        assert(_state.bind_group_hash[curr_pip.bind_group.index] != 0)
+
+
         bind_group := _state.bind_group_data[curr_pip.bind_group.index]
+
+        assert(bind_group.group != nil)
 
         offsets_len := 0
         offsets_buf: [CONSTANTS_BIND_SLOTS]u32
@@ -1030,6 +1041,8 @@ when BACKEND == BACKEND_WGPU {
             offsets_buf[offsets_len] = offset * aligned_size
             offsets_len += 1
         }
+
+        // log.info("Binding group: ", bind_group.group, offsets_buf[:offsets_len])
 
         wgpu.RenderPassEncoderSetBindGroup(
             _state.render_pass_encoder,

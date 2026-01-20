@@ -474,7 +474,8 @@ Draw_Batch :: struct #all_or_none {
 
 // GPU Instance data
 
-Sprite_Inst :: struct #all_or_none {
+#assert(size_of(Sprite_Inst) == 64)
+Sprite_Inst :: struct #all_or_none #align(16) {
     pos:        [3]f32,
     color:      [4]u8,
     mat_x:      [3]f32,
@@ -570,7 +571,8 @@ Init_Proc ::       #type proc() -> rawptr
 Shutdown_Proc ::   #type proc(rawptr)
 Update_Proc ::     #type proc(rawptr) -> rawptr
 
-Module_API :: struct {
+Module_API :: struct #all_or_none {
+    state_size: i64,
     init:       Init_Proc,
     shutdown:   Shutdown_Proc,
     update:     Update_Proc,
@@ -596,11 +598,7 @@ run_module_loop :: proc(api: Module_API) {
         context = get_context()
 
         _state.module_api = api
-        _state.module_result = api.init(nil)
-
-        if _state.module_result == nil {
-            return
-        }
+        _state.module_result = api.init()
 
     } else when ODIN_OS == .Windows || ODIN_OS == .Linux || ODIN_OS == .Darwin {
 
@@ -650,7 +648,8 @@ when ODIN_OS == .JS {
         log.info("Step")
 
         assert(_state != nil)
-        assert(_state.step_proc != nil)
+        assert(_state.module_api.update != nil)
+        assert(_state.module_api.init != nil)
 
         // In case init returned nil
         if _state.module_result == nil {
@@ -1004,6 +1003,12 @@ begin_frame :: proc() -> (keep_running: bool) {
     // In case big file allocations happened...
     defer free_all(context.temp_allocator)
 
+    _state.screen_size = platform.get_window_frame_rect(_state.window).size
+
+    assert(_state.render_textures_gen[DEFAULT_RENDER_TEXTURE.index] == DEFAULT_RENDER_TEXTURE.gen)
+    _state.render_textures[DEFAULT_RENDER_TEXTURE.index].size = _state.screen_size
+    _state.render_textures[DEFAULT_RENDER_TEXTURE.index].color = gpu.update_swapchain(platform.get_native_window_ptr(_state.window), _state.screen_size) or_else panic("gpu")
+
     gpu_can_begin_frame := gpu.begin_frame()
     assert(gpu_can_begin_frame)
 
@@ -1133,12 +1138,6 @@ begin_frame :: proc() -> (keep_running: bool) {
     bind_pixel_shader_by_handle({})
     bind_vertex_shader_by_handle({})
     bind_texture_by_handle({})
-
-    _state.screen_size = platform.get_window_frame_rect(_state.window).size
-
-    assert(_state.render_textures_gen[DEFAULT_RENDER_TEXTURE.index] == DEFAULT_RENDER_TEXTURE.gen)
-    _state.render_textures[DEFAULT_RENDER_TEXTURE.index].size = _state.screen_size
-    _state.render_textures[DEFAULT_RENDER_TEXTURE.index].color = gpu.update_swapchain(platform.get_native_window_ptr(_state.window), _state.screen_size) or_else panic("gpu")
 
 
     return keep_running

@@ -37,6 +37,7 @@ struct Sprite_Inst {
     float  uv_min_y;
     float2 uv_size;
     uint   tex_slice;
+    uint   _pad;
 };
 
 struct Mesh_Inst {
