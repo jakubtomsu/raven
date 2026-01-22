@@ -1,3 +1,5 @@
+<div align="center">
+
 # raven
 A toolkit for making stylized 2D and 3D games in Odin
 
@@ -6,7 +8,9 @@ Do NOT use for anything serious yet.
 
 Inspired by Raylib, Sokol and PICO8.
 
-[Discord]
+[Discord](https://discord.com/invite/wn5jMMMYe4)
+
+</div>
 
 ## Goal
 A game library made specifically for small indie teams and fast iteration times.
