@@ -32,6 +32,8 @@ I will try to review everything when I can.
 
 For bigger PRs or any kind of new features, prefer
 
-## Docs
+# Docs
 
 TODO - minimal example,
+
+# Cheatsheet
