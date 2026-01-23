@@ -14,5 +14,11 @@
 *.wasm
 *-export
 
+*.blend
+*.blend1
+
+!data/default.rscn
+!data/default.rscn.bin
+
 ols.json
 odinfmt.json

@@ -42,7 +42,8 @@ import "ufmt"
 // TODO: resolve degrees/radians! USE ONLY ONE EVERYWHERE
 // TODO: compress vertex and instance data more
 // TODO: simple "profiling line" for CPU and GPU timing
-// TODO: More "summary" info when app exist - min/max/avg cpu/gpu frame time, num draws, ..?
+// TODO: More "summary" info when app exist - min/max/avg cpu/gpu frame time, num draws, temp allocs, ..?
+// TODO: batch meshes with *roughly* the same vertex count (e.g. buckets with multiple of 256, or pow2), do bounds check in the VS.
 
 // ARTICLES
 // - blog post about two level bit sets
@@ -167,6 +168,7 @@ State :: struct #align(64) {
     bind_states:            [MAX_BIND_STATE_DEPTH]Bind_State,
     bind_states_len:        i32,
 
+    default_group:          Group_Handle,
     default_mesh:           Mesh_Handle,
     default_texture:        Texture_Handle,
     default_font_texture:   Texture_Handle,
@@ -394,6 +396,7 @@ Draw_Layer :: struct {
     flags:                  bit_set[Draw_Layer_Flag],
 
     sprite_insts_base:      u32,
+    mesh_insts_base:        u32,
     triangle_insts_base:    u32,
 
     last_sprites_len:       i32,
@@ -442,7 +445,6 @@ Draw_Layer_Constants :: struct #all_or_none #align(16) {
 #assert(size_of(Draw_Batch_Constants) == 16)
 Draw_Batch_Constants :: struct #align(16) {
     instance_offset:    u32,
-    vertex_offset:      u32,
 }
 
 
@@ -475,9 +477,9 @@ Triangle_Draw :: struct #all_or_none {
 
 // CPU Data for a single draw call.
 Draw_Batch :: struct #all_or_none {
-    key:    Draw_Sort_Key,
-    offset: u32,
-    num:    u16,
+    key:            Draw_Sort_Key,
+    offset:         u32,
+    num:            u16,
 }
 
 // GPU Instance data
@@ -514,8 +516,9 @@ DRAW_SORT_DIST_BITS :: 14
 MAX_DRAW_SORT_KEY_DIST :: (1 << DRAW_SORT_DIST_BITS) - 1
 
 // NOTE: the sort distance could be packed in fewer bits.
-Draw_Sort_Key :: bit_field u64 {
-    index_num:      u16 | DRAW_SORT_DIST_BITS,
+Draw_Sort_Key :: bit_field [3]u32 {
+    index_num:      u16 | 16,
+    index_offs:     u32 | 32,
     fill:           Fill_Mode | 2,
     depth_write:    bool | 1,
     depth_test:     bool | 1,
@@ -524,7 +527,7 @@ Draw_Sort_Key :: bit_field u64 {
     group:          u8 | 6,
     ps:             u8 | 6,
     vs:             u8 | 6,
-    dist:           u16 | 16,
+    dist:           u16 | DRAW_SORT_DIST_BITS,
     blend:          Blend_Mode | 2,
 }
 
@@ -858,6 +861,13 @@ _finish_init :: proc() {
         depth = gpu.create_texture_2d("rv-def-rentex-depth", .D_F32, _state.screen_size, render_texture = true) or_else panic("gpu"),
     }
 
+    _state.default_group = create_group(
+        max_mesh_verts = 1024,
+        max_mesh_indices = 1024,
+        max_spline_verts = 0,
+        max_total_children = 0,
+    ) or_else panic("Default group")
+
     _state.sprite_inst_buf = gpu.create_buffer("rv-sprite-inst-buf",
         stride = size_of(Sprite_Inst),
         size = size_of(Sprite_Inst) * 1024 * 32,
@@ -898,16 +908,20 @@ _finish_init :: proc() {
 
     _state.quad_ibuf = gpu.create_index_buffer("rv-quad-index-buf", data = gpu.slice_bytes(quad_indices[:])) or_else panic("gpu")
 
-    // insert_mesh_by_name("Cube", )
-
-    // _ = create_group(
-    //     max_spline_verts = 0,
-    //     max_total_children = 0,
-    // )
 
     _state.default_texture = create_texture_from_encoded_data(
         "default",
         #load("data/default.png"),
+    ) or_else panic("Failed to load default texture")
+
+    _ = create_texture_from_encoded_data(
+        "white",
+        #load("data/white.png"),
+    ) or_else panic("Failed to load default texture")
+
+    _ = create_texture_from_encoded_data(
+        "uv_tex",
+        #load("data/uv_tex.png"),
     ) or_else panic("Failed to load default texture")
 
     _state.error_texture = create_texture_from_encoded_data(
@@ -953,6 +967,12 @@ _finish_init :: proc() {
     _state.default_sprite_vs = create_vertex_shader("default_sprite", default_sprite_vs) or_else panic("Failed to load default sprite vertex shader")
     _state.default_vs = create_vertex_shader("default", default_vs) or_else panic("Failed to load default vertex shader")
     _state.default_ps = create_pixel_shader("default", default_ps) or_else panic("Failed to load default pixel shader")
+
+    _state.default_group = load_scene_from_data(
+        #load("data/default.rscn", string),
+        #load("data/default.rscn.bin"),
+        dst_group = {},
+    ) or_else panic("Failed to load default scene")
 
     log.info("Raven initialized successfully")
 
@@ -1137,6 +1157,10 @@ begin_frame :: proc() -> (keep_running: bool) {
         }
     }
 
+    if _state.frame_index < 5 {
+        _state.input.mouse_delta = 0
+    }
+
     changed_files := make([dynamic]string, 0, 64, context.temp_allocator)
 
     for i in 0..<_state.watched_dirs_num {
@@ -1305,7 +1329,7 @@ get_viewport :: proc() -> [3]f32 {
 // MARK: Scene
 //
 
-load_scene :: proc(name: string, dst_group: Group_Handle) -> bool {
+load_scene :: proc(name: string, dst_group: Group_Handle) -> (result_group: Group_Handle, ok: bool) {
     bin_name := strings.concatenate({name, ".bin"}, context.temp_allocator)
     txt_data := get_file_by_name(name) or_return
     bin_data := get_file_by_name(bin_name) or_return
@@ -1313,16 +1337,18 @@ load_scene :: proc(name: string, dst_group: Group_Handle) -> bool {
     return load_scene_from_data(string(txt_data), bin_data, dst_group)
 }
 
-load_scene_from_data :: proc(txt: string, bin: []byte, dst_group: Group_Handle) -> bool {
-    assert(len(txt) >= 5)
-    assert(len(bin) >= 5)
+load_scene_from_data :: proc(txt: string, bin: []byte, dst_group: Group_Handle) -> (Group_Handle, bool) {
+    validate(len(txt) >= 5)
+    validate(len(bin) >= 5)
+
+    log.info("Loading Scene")
 
     parser := rscn.make_parser(txt)
 
-    header, header_ok := rscn.parse_header(&parser)
-    if !header_ok {
+    header, header_err := rscn.parse_header(&parser)
+    if header_err != .OK {
         log.error("Failed to load scene: Header error")
-        return false
+        return {}, false
     }
 
     vert_buf := slice.reinterpret([]rscn.Mesh_Vertex, bin[header.mesh_vert_offs:])[:header.mesh_vert_num]
@@ -1339,7 +1365,7 @@ load_scene_from_data :: proc(txt: string, bin: []byte, dst_group: Group_Handle) 
 
         if !ok {
             log.error("Failed to load scene: Invalid target group handle")
-            return false
+            return {}, false
         }
 
         // APPEND TO GPU
@@ -1366,7 +1392,7 @@ load_scene_from_data :: proc(txt: string, bin: []byte, dst_group: Group_Handle) 
 
         if !ok {
             log.error("Failed to load scene: Couldn't create group")
-            return false
+            return {}, false
         }
 
         group, _ = get_group_state(group_handle)
@@ -1382,7 +1408,19 @@ load_scene_from_data :: proc(txt: string, bin: []byte, dst_group: Group_Handle) 
     mesh_counter := 0
     spline_counter := 0
 
-    for elem in rscn.parse_next_elem(&parser) {
+    parse_loop: for {
+        elem, elem_err := rscn.parse_next_elem(&parser)
+        switch elem_err {
+        case .OK:
+
+        case .End:
+            break parse_loop
+
+        case .Error:
+            log.error("Failed to parse scene file")
+            break parse_loop
+        }
+
         switch v in elem {
         case rscn.Comment:
 
@@ -1399,6 +1437,8 @@ load_scene_from_data :: proc(txt: string, bin: []byte, dst_group: Group_Handle) 
             }
 
         case rscn.Mesh:
+            log.debug("Loading Mesh:", v.name)
+
             index := mesh_counter
             mesh_counter += 1
 
@@ -1423,12 +1463,14 @@ load_scene_from_data :: proc(txt: string, bin: []byte, dst_group: Group_Handle) 
             handle, handle_ok := insert_mesh_by_name(v.name, mesh)
             if !handle_ok {
                 log.error("Failed to insert mesh, table is full")
-                return false
+                return {}, false
             }
 
             mesh_list[index] = handle
 
         case rscn.Spline:
+            log.debug("Loading Spline:", v.name)
+
             index := spline_counter
             spline_counter += 1
 
@@ -1458,7 +1500,7 @@ load_scene_from_data :: proc(txt: string, bin: []byte, dst_group: Group_Handle) 
             handle, handle_ok := insert_spline_by_name(v.name, spline)
             if !handle_ok {
                 log.error("Failed to insert spline, table is full")
-                return false
+                return {}, false
             }
 
             group.spline_vert_num += i32(len(verts))
@@ -1466,6 +1508,8 @@ load_scene_from_data :: proc(txt: string, bin: []byte, dst_group: Group_Handle) 
             spline_list[index] = handle
 
         case rscn.Object:
+            log.debug("Loading Object:", v.name)
+
             index := object_counter
             object_counter += 1
 
@@ -1489,7 +1533,7 @@ load_scene_from_data :: proc(txt: string, bin: []byte, dst_group: Group_Handle) 
             handle, handle_ok := insert_object_by_name(v.name, object)
             if !handle_ok {
                 log.error("Failed to insert object, table is full")
-                return false
+                return {}, false
             }
 
             object_list[index] = handle
@@ -1558,7 +1602,7 @@ load_scene_from_data :: proc(txt: string, bin: []byte, dst_group: Group_Handle) 
         obj.child_offset -= obj.child_num
     }
 
-    return true
+    return group_handle, true
 }
 
 
@@ -2520,7 +2564,8 @@ load_asset :: proc(name: string, dst_group: Group_Handle) -> bool {
         _, ok := create_texture_from_encoded_data(name[:len(name) - 4], data)
         return ok
     } else if strings.has_suffix(name, ".rscn") {
-        return load_scene(name, dst_group = dst_group)
+        group_handle, ok := load_scene(name, dst_group = dst_group)
+        return ok
     }
     // TODO
     // else if strings.has_suffix(name, ".wav") {
@@ -2877,7 +2922,6 @@ Sprite_Scaling :: enum u8 {
 
 
 // TODO: anchor
-// TODO: angle
 // TODO: sprite_ex
 // TODO: scaling by pixels or absolute
 // TODO: draw sprite line
@@ -2901,7 +2945,7 @@ draw_sprite :: proc(
     }
 
     mat := linalg.matrix3_from_quaternion_f32(rot *
-        linalg.quaternion_angle_axis_f32(math.to_radians_f32(angle), {0, 0, 1}))
+        linalg.quaternion_angle_axis_f32(angle, {0, 0, 1}))
 
     rect_size := rect_full_size(rect)
 
@@ -3063,6 +3107,8 @@ draw_mesh_by_handle :: proc(
 
     mesh, mesh_ok := get_internal_mesh(handle)
     if !mesh_ok {
+        // TODO: draw "error mesh" instead
+        log.error("Trying to draw a mesh with invalid handle")
         return
     }
 
@@ -3071,15 +3117,17 @@ draw_mesh_by_handle :: proc(
     mat := linalg.matrix3_from_quaternion_f32(rot)
 
     draw.key = {
-        index_num   = u16(mesh.index_num),
-        group       = u8(mesh.group.index),
-        texture     = _state.bind_state.texture,
-        ps          = _state.bind_state.pixel_shader,
-        vs          = _state.bind_state.vertex_shader,
-        fill        = _state.bind_state.fill,
-        blend       = _state.bind_state.blend,
-        depth_test  = _state.bind_state.depth_test,
-        depth_write = _state.bind_state.depth_write,
+        index_num       = u16(mesh.index_num),
+        index_offs      = u32(mesh.index_offs),
+        group           = u8(mesh.group.index),
+        texture         = _state.bind_state.texture,
+        texture_mode    = _state.bind_state.texture_mode,
+        ps              = _state.bind_state.pixel_shader,
+        vs              = _state.bind_state.vertex_shader,
+        fill            = _state.bind_state.fill,
+        blend           = _state.bind_state.blend,
+        depth_test      = _state.bind_state.depth_test,
+        depth_write     = _state.bind_state.depth_write,
     }
 
     if linalg.matrix3x3_determinant(mat) < 0 {
@@ -3262,7 +3310,7 @@ _push_triangle_draw :: proc(#any_int layer_index: int, draw: Triangle_Draw) {
 
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////
-// MARK: GPU Drawing
+// MARK: GPU Data Upload
 //
 
 _upload_gpu_global_constants :: proc() {
@@ -3298,6 +3346,15 @@ _upload_gpu_layer_constants :: proc() {
     }
 
     gpu.update_constants(_state.draw_layers_consts, gpu.ptr_bytes(&consts_buf))
+}
+
+// TODO
+// HACK
+// We need better reordering
+_draw_sort_key_less :: proc(a, b: Draw_Sort_Key) -> bool {
+    adata := a
+    bdata := b
+    return runtime.memory_compare(&adata, &bdata, size_of(Draw_Sort_Key)) == -1
 }
 
 // This takes all the draw_* command data and uploads them to GPU buffers.
@@ -3363,8 +3420,7 @@ upload_gpu_layers :: proc() {
         if .No_Reorder not_in layer.flags {
             keys := layer.sprites.key[:len(layer.sprites)]
 
-            #assert(size_of(u64) == size_of(Draw_Sort_Key))
-            indices := slice.sort_with_indices(transmute([]u64)keys, context.temp_allocator)
+            indices := slice.sort_by_with_indices(keys, _draw_sort_key_less, context.temp_allocator)
             slice.sort_from_permutation_indices(instances, indices)
         }
 
@@ -3463,8 +3519,7 @@ upload_gpu_layers :: proc() {
 
         if .No_Reorder not_in layer.flags {
             keys := layer.meshes.key[:len(layer.meshes)]
-            #assert(size_of(u64) == size_of(Draw_Sort_Key))
-            indices := slice.sort_with_indices(transmute([]u64)keys, context.temp_allocator)
+            indices := slice.sort_by_with_indices(keys, _draw_sort_key_less, context.temp_allocator)
             slice.sort_from_permutation_indices(instances, indices)
         }
 
@@ -3489,12 +3544,44 @@ upload_gpu_layers :: proc() {
         param       = 0,
     }
 
+    for &layer, _ in _state.draw_layers {
+        if len(layer.meshes) == 0 {
+            continue
+        }
 
+        assert(mesh_upload_offs < len(mesh_upload_buf))
+
+        instances := layer.meshes.inst[:len(layer.meshes)]
+
+        uploaded_num := copy_slice(mesh_upload_buf[mesh_upload_offs:], instances)
+
+        layer.mesh_insts_base = u32(mesh_upload_offs)
+
+        if uploaded_num != len(layer.meshes) {
+            log.error("Failed to upload all mesh instances")
+            footer := raw_soa_footer_dynamic_array(&layer.meshes)
+            footer.len = uploaded_num
+        }
+
+        mesh_upload_offs += uploaded_num
+    }
 
     gpu.update_buffer(
         _state.mesh_inst_buf,
         gpu.slice_bytes(mesh_upload_buf[:mesh_upload_offs]),
     )
+
+    for &layer, _ in _state.draw_layers {
+        _batcher_generate_draws(&batcher,
+            &layer.mesh_batches,
+            layer.meshes.key[:len(layer.meshes)],
+            layer.mesh_insts_base,
+        )
+        if len(layer.meshes) > 0 {
+            assert(len(layer.mesh_batches) > 0)
+        }
+    }
+
 
 
     //
@@ -3544,7 +3631,7 @@ upload_gpu_layers :: proc() {
     // Generate triangle draws
 
     for &layer, _ in _state.draw_layers {
-        _batcher_generate_triangle_draws(&batcher,
+        _batcher_generate_draws(&batcher,
             &layer.triangle_batches,
             layer.triangles.key[:len(layer.triangles)],
             layer.triangle_insts_base,
@@ -3563,6 +3650,8 @@ upload_gpu_layers :: proc() {
     )
 
     return
+
+    // TODO: somehow refactor? most of this code is shared except the actual const!
 
     _batcher_generate_draws :: proc(
         batcher:        ^Batcher_State,
@@ -3596,8 +3685,6 @@ upload_gpu_layers :: proc() {
                 }
             }
 
-            // log.infof("Batch %i/%i: offs=%i, len=%i", i, last + 1, instance_offs, instance_num)
-
             append(dst_batches, Draw_Batch{
                 key = curr_key,
                 offset = u32(batcher.consts_num),
@@ -3605,7 +3692,6 @@ upload_gpu_layers :: proc() {
             })
 
             batcher.consts[batcher.consts_num] = {
-                vertex_offset = 0,
                 instance_offset = inst_offs_base + instance_offs,
             }
             batcher.consts_num += 1
@@ -3616,60 +3702,13 @@ upload_gpu_layers :: proc() {
         }
     }
 
-
-    // TODO: somehow refactor?
-    _batcher_generate_triangle_draws :: proc(
-        batcher:        ^Batcher_State,
-        dst_batches:    ^[dynamic]Draw_Batch,
-        keys:           []Draw_Sort_Key,
-        inst_offs_base: u32,
-    ) {
-        if len(keys) == 0 {
-            return
-        }
-
-        assert(dst_batches^ == nil)
-        dst_batches^ = make([dynamic]Draw_Batch, 0, 256, context.temp_allocator)
-
-        curr_key := keys[0]
-
-        last := len(keys)
-
-        instance_num: u32 = 0
-        instance_offs: u32 = 0
-
-        for i := 1; i <= last; i += 1 {
-            instance_num += 1
-
-            layer_key: Draw_Sort_Key
-            if i != last {
-                layer_key = keys[i]
-
-                if draw_sort_key_equal(curr_key, layer_key) {
-                    continue
-                }
-            }
-
-            append(dst_batches, Draw_Batch{
-                key = curr_key,
-                offset = u32(batcher.consts_num),
-                num = int_cast(u16, instance_num),
-            })
-
-            batcher.consts[batcher.consts_num] = {
-                vertex_offset = inst_offs_base + instance_offs,
-                instance_offset = 0,
-            }
-            batcher.consts_num += 1
-
-            instance_offs += instance_num
-            instance_num = 0
-            curr_key = layer_key
-        }
-    }
 }
 
 
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// MARK: GPU Drawing
+//
 
 // NOTE: the instance bind data only use a few of the available sots (consts/resources/blends/etc)
 // We could possibly expose a direct way for the user to control this on per-layer basis.
@@ -3784,6 +3823,7 @@ render_gpu_layer :: proc(
 
     pip_desc.resources = {
         0 = _state.mesh_inst_buf,
+        1 = {},
     }
 
     for batch in layer.mesh_batches {
@@ -3803,9 +3843,9 @@ render_gpu_layer :: proc(
         _counter_add(.Num_Draw_Calls, 1)
 
         gpu.draw_indexed(
-            index_num = 6,
+            index_num = batch.key.index_num,
             instance_num = batch.num,
-            index_offset = 0,
+            index_offset = batch.key.index_offs,
             const_offsets = {
                 0 = max(u32),
                 1 = u32(index),
@@ -3905,6 +3945,7 @@ _gpu_fill_mode :: proc(fill: Fill_Mode) -> (gpu.Cull_Mode, gpu.Fill_Mode) {
     }
     return .Invalid, .Invalid
 }
+
 
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -4182,9 +4223,12 @@ Counter_State :: struct {
 
 Counter_Kind :: enum u8 {
     CPU_Frame_Ns,
-    // TODO: GPU_Frame_Ns
+    // TODO:
+    // GPU_Frame_Ns
     // Upload_Ns,
     // Total_Draw_Layer_Ns,
+    // Temp_Allocs,
+    // Temp_Bytes,
     Num_Draw_Calls,
     Num_Total_Instanced,
     Num_Non_Culled_Instanced,
@@ -4207,7 +4251,9 @@ _counter_flush :: proc(counter: ^Counter_State) {
     counter.total_sum += value
 }
 
+// Displays max of the recent history and a graph.
 // Assumes screenspace camera.
+// 'unit' is for converting e.g. nanoseconds into a reasonable range.
 draw_counter :: proc(kind: Counter_Kind, pos: Vec3, scale: f32 = 1, unit: f32 = 1, col: Vec4 = 1) {
     scope_binds()
     bind_texture_by_handle(_state.default_font_texture)
@@ -4219,15 +4265,23 @@ draw_counter :: proc(kind: Counter_Kind, pos: Vec3, scale: f32 = 1, unit: f32 = 
 
     counter := _state.counters[kind]
     for i in 0..<COUNTER_HISTORY {
-        val := counter.vals[(int(counter.total_num) - i) %% COUNTER_HISTORY]
+        index := (int(counter.total_num) - i) %% COUNTER_HISTORY
+        val := counter.vals[index]
 
         height: f32 = scale * unit * f32(val)
 
         draw_sprite(
             pos = pos + {COUNTER_HISTORY - f32(i), height * 0.5, 0},
             rect = {0, 1.0 / 128.0},
-            scale = {2, height},
+            scale = {1, height},
             col = col,
+        )
+
+        draw_sprite(
+            pos = pos + {COUNTER_HISTORY - f32(i), height * 0.5, 0.01},
+            rect = {0, 1.0 / 128.0},
+            scale = {3, height + 2},
+            col = BLACK,
         )
 
         max_val = max(val, max_val)
@@ -4240,8 +4294,10 @@ draw_counter :: proc(kind: Counter_Kind, pos: Vec3, scale: f32 = 1, unit: f32 = 
     } else {
         text = ufmt.tprintf("%f", f64(max_val) * f64(unit))
     }
+
     // draw_text(, pos + {64 + 12, 0, 0}, col = col)
     draw_text(text, pos + {64 + 12, 4, 0}, col = col)
+    draw_text(text, pos + {64 + 12 + 1, 4 - 1, 0.01}, col = BLACK)
 }
 
 

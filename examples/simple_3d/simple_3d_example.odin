@@ -83,25 +83,30 @@ _update :: proc(prev: ^State) -> ^State {
     rv.bind_texture("thick")
     rv.bind_blend(.Opaque)
 
-    for i in 0..<100 {
-        rv.draw_sprite({1, f32(i), f32(i) + 10}, col = rv.RED + f32(i) * 0.01, scale = 0.1)
+    // for i in 0..<100 {
+    //     rv.draw_sprite({1, f32(i), f32(i) + 10}, scale = 0.1)
+    // }
+
+    // rv.draw_triangle(
+    //     {{0, 0, 0}, {10, 0, 0}, {0, 10, 0}},
+    //     col = rv.ORANGE.rgb,
+    // )
+
+    if rv.scope_binds() {
+        rv.bind_texture("default")
+
+        rv.draw_mesh_by_handle(rv.get_mesh("Plane"), {0, 0, 0})
+        rv.draw_mesh_by_handle(rv.get_mesh("Cube"), {3, 0, 0})
+        rv.draw_mesh_by_handle(rv.get_mesh("Icosphere"), {6, 0, 0})
+        rv.draw_mesh_by_handle(rv.get_mesh("Cylinder"), {9, 0, 0})
     }
 
-    rv.draw_triangle(
-        {{0, 0, 0}, {10, 0, 0}, {0, 10, 0}},
-        col = rv.ORANGE.rgb,
-    )
-
-    rv.draw_line(0, {0, math.sin_f32(rv.get_time()) * 5, 10}, 1)
+    // rv.draw_line(0, {0, math.sin_f32(rv.get_time()) * 5, 10}, 1)
 
     rv.bind_layer(1)
     rv.bind_depth_test(true)
     rv.bind_depth_write(true)
     rv.draw_text("Use WASD and QE to move", {200, 14, 0.1})
-
-    if rv.key_down(.Space) {
-        platform.sleep_ms(50)
-    }
 
     rv.draw_counter(.CPU_Frame_Ns, {10, 10, 0.1}, scale = 2, unit = 1e-6, col = rv.GREEN)
 

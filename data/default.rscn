@@ -1,0 +1,24 @@
+rscn
+ver 0 1
+img 0
+msh 4 5 1CE 3A1 9D
+spl 0 1393 0
+obj 4
+
+# Blender 5.0.0
+
+@imgs
+
+@mshs
+Cube 36 24 0 0
+Cylinder 180 66 24 18
+Icosphere 240 63 D8 5A
+Plane 6 4 1C8 99
+
+@spls
+
+@objs
+msh 0 Cube -1 -1 [-3 0 0] [1 0 0 0 1 0 0 0 1]
+msh 1 Cylinder -1 -1 [-9 0 0] [1 0 0 0 1 0 0 0 1]
+msh 2 Icosphere -1 -1 [-6 0 0] [1 0 0 0 1 0 0 0 1]
+msh 3 Plane -1 -1 [0 0 0] [1 0 0 0 1 0 0 0 1]

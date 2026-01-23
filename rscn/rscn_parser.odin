@@ -108,6 +108,12 @@ Parser :: struct {
     section:    Section,
 }
 
+Error :: enum u8 {
+    OK = 0,
+    End,
+    Error,
+}
+
 init_parser :: proc(p: ^Parser, data: string) {
     p.iter = data
     p.section = .None
@@ -118,10 +124,10 @@ make_parser :: proc(data: string) -> (result: Parser) {
     return result
 }
 
-parse_header :: proc(p: ^Parser) -> (result: Header, ok: bool) {
+parse_header :: proc(p: ^Parser) -> (result: Header, err: Error) {
     if len(p.iter) < 5 {
         log.error("rscn: file is too short to be valid")
-        return {}, false
+        return {}, .Error
     }
 
     if
@@ -132,7 +138,7 @@ parse_header :: proc(p: ^Parser) -> (result: Header, ok: bool) {
         p.iter[4] != '\n'
     {
         log.error("rscn: header magic mismatch")
-        return {}, false
+        return {}, .Error
     }
 
     p.iter = p.iter[5:]
@@ -140,7 +146,10 @@ parse_header :: proc(p: ^Parser) -> (result: Header, ok: bool) {
     result.version_major = -1
 
     line_loop: for {
-        line := strings.split_lines_iterator(&p.iter) or_return
+        line, line_ok := strings.split_lines_iterator(&p.iter)
+        if !line_ok {
+            return {}, .End
+        }
 
         if len(line) == 0 {
             break line_loop
@@ -148,7 +157,7 @@ parse_header :: proc(p: ^Parser) -> (result: Header, ok: bool) {
 
         if len(line) < 4 {
             log.error("rscn: invalid header entry")
-            return {}, false
+            return {}, .Error
         }
 
         field := line[:4]
@@ -176,21 +185,24 @@ parse_header :: proc(p: ^Parser) -> (result: Header, ok: bool) {
 
         case:
             log.errorf("rscn: Unknown header field '{}'", line[:3])
-            return {}, false
+            return {}, .Error
         }
     }
 
     if result.version_major != VERSION_MAJOR || result.version_minor != VERSION_MINOR {
         log.error("rscn: version mismatch")
-        return {}, false
+        return {}, .Error
     }
 
-    return result, true
+    return result, .OK
 }
 
-parse_next_elem :: proc(p: ^Parser) -> (result: Elem, ok: bool) {
+parse_next_elem :: proc(p: ^Parser) -> (result: Elem, err: Error) {
     line_loop: for {
-        line := strings.split_lines_iterator(&p.iter) or_return
+        line, line_ok := strings.split_lines_iterator(&p.iter)
+        if !line_ok {
+            return {}, .End
+        }
 
         // log.info("line", line)
 
@@ -208,23 +220,23 @@ parse_next_elem :: proc(p: ^Parser) -> (result: Elem, ok: bool) {
 
             case:
                 // Invalid
-                return {}, false
+                return {}, .Error
             }
 
             continue line_loop
 
         case '#':
             text := strings.trim_space(line[1:])
-            return Comment(text), true
+            return Comment(text), .OK
         }
 
         switch p.section {
         case .None:
             assert(false, "You must first call 'parse_header'")
-            return {}, false
+            return {}, .Error
 
         case .Images:
-            return Image{path = line}, true
+            return Image{path = line}, .OK
 
         case .Meshes:
             mesh: Mesh
@@ -237,7 +249,7 @@ parse_next_elem :: proc(p: ^Parser) -> (result: Elem, ok: bool) {
             mesh.index_start = _parse_hex(&line) or_return
             mesh.vert_start = _parse_hex(&line) or_return
 
-            return mesh, true
+            return mesh, .OK
 
         case .Splines:
             spline: Spline
@@ -246,13 +258,13 @@ parse_next_elem :: proc(p: ^Parser) -> (result: Elem, ok: bool) {
             spline.vert_num = _parse_int(&line) or_return
             spline.vert_start = _parse_hex(&line) or_return
 
-            return spline, true
+            return spline, .OK
 
         case .Object:
             object: Object
 
             if len(line) < 5 {
-                return {}, false
+                return {}, .Error
             }
 
             kind := line[:4]
@@ -301,25 +313,27 @@ parse_next_elem :: proc(p: ^Parser) -> (result: Elem, ok: bool) {
             }
             _expect_char(&line, ']')
 
-            return object, true
+            return object, .OK
         }
     }
 }
 
-_expect_char :: proc(line: ^string, ch: u8) -> bool {
+_expect_char :: proc(line: ^string, ch: u8) -> Error {
     if line[0] == ch {
         line^ = line[1:]
-        return true
+        return .OK
     }
-    return false
+    _strict_error()
+    return .Error
 }
 
-_expect_prefix :: proc(line: ^string, str: string) -> bool {
+_expect_prefix :: proc(line: ^string, str: string) -> Error {
     if strings.starts_with(line^, str) {
         line^ = line[len(str):]
-        return true
+        return .OK
     }
-    return false
+    _strict_error()
+    return .Error
 }
 
 _skip_whitespace :: proc(line: ^string) {
@@ -334,54 +348,66 @@ _skip_whitespace :: proc(line: ^string) {
     }
 }
 
-_parse_ident :: proc(line: ^string) -> (string, bool) {
+_parse_ident :: proc(line: ^string) -> (string, Error) {
     _skip_whitespace(line)
     for i in 0..<len(line^) {
         ch := line[i]
         switch ch {
-        case '_':
+        case '_', '.', ':':
         case 'a'..='z':
         case 'A'..='Z':
         case '0'..='9':
-        case:
+        case ' ':
             ident := line[:i]
             line^ = line[i:]
-            return ident, true
+            return ident, .OK
+        case:
+            log.error("Found invalid identifier character")
+            _strict_error()
+            return "", .Error
         }
     }
-    return "", false
+    _strict_error()
+    return "", .Error
 }
 
 
-_parse_float :: proc(line: ^string) -> (f32, bool) {
+_parse_float :: proc(line: ^string) -> (f32, Error) {
     _skip_whitespace(line)
     num := 0
     val, _ := strconv.parse_f32(line^, &num)
     if num == 0 {
-        return 0, false
+        _strict_error()
+        return 0, .Error
     }
     line^ = line[num:]
-    return val, true
+    return val, .OK
 }
 
-_parse_int :: proc(line: ^string) -> (int, bool) {
+_parse_int :: proc(line: ^string) -> (int, Error) {
     _skip_whitespace(line)
     num := 0
     val, _ := strconv.parse_int(line^, 10, &num)
     if num == 0 {
-        return 0, false
+        _strict_error()
+        return 0, .Error
     }
     line^ = line[num:]
-    return val, true
+    return val, .OK
 }
 
-_parse_hex :: proc(line: ^string) -> (int, bool) {
+_parse_hex :: proc(line: ^string) -> (int, Error) {
     _skip_whitespace(line)
     num := 0
     val, _ := strconv.parse_int(line^, 16, &num)
     if num == 0 {
-        return 0, false
+        _strict_error()
+        return 0, .Error
     }
     line^ = line[num:]
-    return val, true
+    return val, .OK
+}
+
+_strict_error :: proc() {
+    assert(false)
 }

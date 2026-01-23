@@ -1,6 +1,6 @@
 <div align="center">
 
-# raven
+# RAVEN
 A toolkit for making stylized 2D and 3D games in Odin
 
 ***WARNING: EARLY ALPHA VERSION***
