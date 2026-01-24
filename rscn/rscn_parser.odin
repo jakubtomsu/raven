@@ -130,6 +130,7 @@ parse_header :: proc(p: ^Parser) -> (result: Header, err: Error) {
         return {}, .Error
     }
 
+
     if
         p.iter[0] != 'r' ||
         p.iter[1] != 's' ||
@@ -137,7 +138,7 @@ parse_header :: proc(p: ^Parser) -> (result: Header, err: Error) {
         p.iter[3] != 'n' ||
         p.iter[4] != '\n'
     {
-        log.error("rscn: header magic mismatch")
+        log.errorf("rscn: header magic mismatch: '%s'", p.iter[:5])
         return {}, .Error
     }
 

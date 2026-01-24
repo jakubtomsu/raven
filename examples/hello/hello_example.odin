@@ -61,8 +61,6 @@ _update :: proc(prev_state: ^State) -> ^State {
     // Unicode fonts might get supported later.
     rv.draw_text("Hello World! ☺", {100, 100, 0}, scale = 4)
 
-    rv.draw_line({10, 10, 0}, {500, rv.nsin(rv.get_time()) * 500, 0}, 40, rect = {0, 0.001})
-
     // The 'rv.draw_*' commands only record what geometry you want to render each frame.
     // To actually display it on the screen you must first upload it to the GPU, and then
     // explicily render each layer into a particular render texture.
