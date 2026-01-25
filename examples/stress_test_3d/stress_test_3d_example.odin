@@ -62,8 +62,8 @@ _update :: proc(prev: ^State) -> ^State {
     if rv.key_down(.E) do move.y += 1
     if rv.key_down(.Q) do move.y -= 1
 
-    state.cam_ang.xy += rv.mouse_delta().yx * 0.005
-    // state.cam_ang.y = clamp(state.cam_ang.y, -math.PI * 0.49, math.PI * 0.49)
+    state.cam_ang.xy += rv.mouse_delta().yx * {-1, 1} * 0.005
+    state.cam_ang.x = clamp(state.cam_ang.x, -math.PI * 0.49, math.PI * 0.49)
 
     cam_rot := rv.euler_rot(state.cam_ang)
     mat := linalg.matrix3_from_quaternion_f32(cam_rot)

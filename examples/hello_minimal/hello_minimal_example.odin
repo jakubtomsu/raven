@@ -1,6 +1,7 @@
 package raven_example_hello_minimal
 
 import "core:math"
+import "../../ufmt"
 import rv "../.."
 
 main :: proc() {
@@ -22,7 +23,19 @@ main :: proc() {
 
         rv.bind_texture("thick")
 
-        rv.draw_text("Hello World!",
+        Foo :: struct {
+            a: string,
+            b: int,
+        }
+
+        foo: Foo = {
+            a = "hey",
+            b = 123,
+        }
+
+        txt := ufmt.tprintf("%v", foo)
+
+        rv.draw_text(txt,
             rv.get_viewport() * {0.5, 0.5, 0} + {0, math.sin_f32(rv.get_time()) * 100, 0.01},
             anchor = 0.5,
             scale = 4,

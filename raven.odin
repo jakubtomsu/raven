@@ -989,58 +989,85 @@ shutdown_state :: proc() {
         return
     }
 
+    _print_stats_report()
+
     audio.shutdown()
     gpu.shutdown()
     platform.shutdown()
 
+    free(_state, _state.allocator)
+    _state = nil
+}
+
+_print_stats_report :: proc() {
+    fmt.println("Stats Report:")
+
+    {
+        c := _state.counters[.CPU_Frame_Ns]
+        fmt.printfln("CPU Frame time (ms):          avg %.3f, min %.3f, max %.3f",
+            f64(c.total_sum) * 1e-6 / f64(c.total_num),
+            f64(c.total_min) * 1e-6,
+            f64(c.total_max) * 1e-6,
+        )
+    }
+
+    {
+        tot := _state.counters[.Num_Total_Instances]
+        upl := _state.counters[.Num_Uploaded_Instances]
+        fmt.printfln("Per Frame Draw Instances:     avg total %.3f, avg uploaded %.3f",
+            f64(tot.total_sum) / f64(tot.total_num),
+            f64(upl.total_sum) / f64(upl.total_num),
+        )
+    }
+
+    {
+        c := _state.counters[.Num_Draw_Calls]
+        fmt.printfln("Draw Calls:                   avg %.3f, min %i, max %i",
+            f64(c.total_sum) / f64(c.total_num),
+            c.total_min,
+            c.total_max,
+        )
+    }
+
     {
         tr := _state.context_state.tracking
+        fmt.printfln("Allocations:                  %i, %i freed, %i bytes total", tr.total_allocation_count, tr.total_free_count, tr.total_memory_allocated)
 
-        fmt.printfln("Total allocation count:   {0}",                tr.total_allocation_count)
-        fmt.printfln("Total free count:         {0}",                tr.total_free_count)
-        fmt.printfln("Total memory allocated:   {0:M} ({0} bytes) ", tr.total_memory_allocated)
-        fmt.printfln("Total memory freed:       {0:M} ({0} bytes) ", tr.total_memory_freed)
-        fmt.printfln("Current memory allocated: {0:M} ({0} bytes) ", tr.current_memory_allocated)
-
-        fmt.printfln("Memory Leaks:")
-        for addr, it in tr.allocation_map {
-            fmt.printfln("\t[{0}:{1}:{2}:{3}] Leaked {4:p} of size {5:M} ({5} bytes) with alignment {6:M}",
-                it.location.file_path,
-                it.location.procedure,
-                it.location.line,
-                it.location.column,
-                it.memory,
-                it.size,
-                it.alignment,
-            )
+        if len(tr.allocation_map) > 0 {
+            fmt.printfln("Memory Leaks:")
+            for addr, it in tr.allocation_map {
+                fmt.printfln("\t[{0}:{1}:{2}:{3}] Leaked {4:p} of size {5:M} ({5} bytes) with alignment {6:M}",
+                    it.location.file_path,
+                    it.location.procedure,
+                    it.location.line,
+                    it.location.column,
+                    it.memory,
+                    it.size,
+                    it.alignment,
+                )
+            }
+            fmt.println("\tTotal Memory Leaks:", len(tr.allocation_map))
         }
-        fmt.println("\tTotal Memory Leaks:", len(tr.allocation_map))
 
-        fmt.println("Bad Frees:")
-        for it in tr.bad_free_array {
-            fmt.println("\t[{0}:{1}:{2}:{3}] Freed invalid {4:p}",
-                it.location.file_path,
-                it.location.procedure,
-                it.location.line,
-                it.location.column,
-                it.memory,
-            )
+        if len(tr.bad_free_array) > 0 {
+            fmt.println("Bad Frees:")
+            for it in tr.bad_free_array {
+                fmt.println("\t[{0}:{1}:{2}:{3}] Freed invalid {4:p}",
+                    it.location.file_path,
+                    it.location.procedure,
+                    it.location.line,
+                    it.location.column,
+                    it.memory,
+                )
+            }
+            fmt.println("\tTotal Bad Frees:", len(tr.bad_free_array))
         }
-        fmt.println("\tTotal Bad Frees:", len(tr.bad_free_array))
 
-        fmt.printfln("Total peak memory: {0:M} ({0} bytes) ", tr.peak_memory_allocated + size_of(State))
+        peak_mem := tr.peak_memory_allocated + size_of(State)
+        fmt.printfln("Peak memory:                  %i bytes (%.3f MB) ", peak_mem, f64(peak_mem) / (1024 * 1024))
     }
 
-    {
-        fmt.printfln("CPU Frame time (milliseconds):")
-        c := _state.counters[.CPU_Frame_Ns]
-        fmt.printfln("\tMin, Max: %.3f, %.3f", f64(c.total_min) * 1e-6, f64(c.total_max) * 1e-6)
-        fmt.printfln("\tAverage:  %.3f", f64(c.total_sum) * 1e-6 / f64(c.total_num))
-    }
 
-    free(_state, _state.allocator)
-
-    _state = nil
 }
 
 begin_frame :: proc() -> (keep_running: bool) {
@@ -3375,6 +3402,13 @@ upload_gpu_layers :: proc() {
 
     batcher: Batcher_State
 
+    for layer in _state.draw_layers {
+        _counter_add(.Num_Total_Instances, u64(
+            len(layer.sprites) +
+            len(layer.meshes) +
+            len(layer.triangles)
+        ))
+    }
 
     // Prepare sprites
 
@@ -3650,6 +3684,15 @@ upload_gpu_layers :: proc() {
         _state.draw_batch_consts,
         gpu.slice_bytes(batcher.consts[:batcher.consts_num]),
     )
+
+
+    for layer in _state.draw_layers {
+        _counter_add(.Num_Uploaded_Instances, u64(
+            len(layer.sprites) +
+            len(layer.meshes) +
+            len(layer.triangles)
+        ))
+    }
 
     return
 
@@ -4225,7 +4268,7 @@ Counter_Kind :: enum u8 {
     CPU_Frame_Ns,
     Num_Draw_Calls,
     Num_Total_Instances,
-    Num_Non_Culled_Instances,
+    Num_Uploaded_Instances, // non-culled
     // TODO:
     // GPU_Frame_Ns
     // Upload_Ns,

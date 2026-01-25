@@ -54,8 +54,8 @@ tprintf :: proc(format: string, args: ..any) -> string {
         switch qual {
         case 's':
             switch val in arg {
-            case string:  append_elem_string(&buf, val)
-            case cstring: append_elem_string(&buf, string(val))
+            case string:  _append_string(&buf, val)
+            case cstring: _append_string(&buf, string(val))
             case: return "<NOT STRING>"
             }
 
@@ -97,6 +97,21 @@ tprintf :: proc(format: string, args: ..any) -> string {
             case: return "<NOT FLOAT>"
             }
 
+        case 'r':
+            switch val in arg {
+            case rune: _append_rune(&buf, val)
+            case byte: _append_rune(&buf, rune(val))
+            case: return "<NOT RUNE>"
+            }
+
+
+        case 'v':
+            _append_any(&buf, arg, nested = false, pretty = false, depth = 0)
+
+        case '#':
+            _append_any(&buf, arg, nested = false, pretty = true, depth = 0)
+
+
         case '%':
             append_elem(&buf, '%')
             consume_arg = false
@@ -111,6 +126,23 @@ tprintf :: proc(format: string, args: ..any) -> string {
     }
 
     return string(buf[:])
+}
+
+_append_string :: proc(buf: ^[dynamic]byte, str: string, quoted := false) {
+    if quoted {
+        append_elem(buf, '"')
+    }
+    append_elem_string(buf, str)
+    if quoted {
+        append_elem(buf, '"')
+    }
+}
+
+_append_rune :: proc(buf: ^[dynamic]byte, val: rune) {
+    bytes, size := runtime.encode_rune(val)
+    append_elem(buf, '\'')
+    append_elems(buf, ..bytes[:size])
+    append_elem(buf, '\'')
 }
 
 _append_int :: proc(buf: ^[dynamic]byte, value: int) {
@@ -186,3 +218,81 @@ _append_float :: proc(buf: ^[dynamic]byte, value: f64) {
 }
 
 // TODO: support very simple RTTI traversal
+
+_append_indent :: proc(buf: ^[dynamic]byte, num: int) {
+    for i in 0..<num {
+        append_elem(buf, '\t')
+    }
+}
+
+_append_any :: proc(buf: ^[dynamic]byte, value: any, nested := false, pretty := false, depth := 0) {
+    assert(depth < 64)
+
+    if pretty {
+        _append_indent(buf, depth)
+    }
+
+    switch val in value {
+    case rune:    _append_rune(buf, val); return
+    case string:  _append_string(buf, val, quoted = nested); return
+    case cstring: _append_string(buf, string(val), quoted = nested); return
+    case u8:      _append_int(buf, int(val)); return
+    case i8:      _append_int(buf, int(val)); return
+    case u16:     _append_int(buf, int(val)); return
+    case i16:     _append_int(buf, int(val)); return
+    case u32:     _append_int(buf, int(val)); return
+    case i32:     _append_int(buf, int(val)); return
+    case u64:     _append_int(buf, int(val)); return
+    case i64:     _append_int(buf, int(val)); return
+    case uint:    _append_int(buf, int(val)); return
+    case int:     _append_int(buf, int(val)); return
+    case f16:     _append_float(buf, f64(val)); return
+    case f32:     _append_float(buf, f64(val)); return
+    case f64:     _append_float(buf, f64(val)); return
+    }
+
+    ti := type_info_of(value.id)
+
+    #partial switch v in ti.variant {
+    case runtime.Type_Info_Named:
+        _append_any(buf, any({data = value.data, id = v.base.id}), nested, pretty, depth)
+
+    case runtime.Type_Info_Struct:
+        append_elem(buf, '{')
+        if pretty {
+            append_elem(buf, '\n')
+        }
+        for i in 0..<v.field_count {
+            append_elem_string(buf, v.names[i])
+            append_elem_string(buf, " = ")
+
+            val := any({
+                data = rawptr(uintptr(value.data) + v.offsets[i]),
+                id = v.types[i].id,
+            })
+
+            _append_any(buf, val, true, pretty, depth + 1)
+
+            if i + 1 < v.field_count {
+                append_elem_string(buf, ", ")
+            }
+        }
+        if pretty {
+            _append_indent(buf, depth)
+        }
+        append_elem(buf, '}')
+        if pretty {
+            append_elem(buf, '\n')
+        }
+
+    case runtime.Type_Info_Bit_Field: unimplemented()
+    case runtime.Type_Info_Bit_Set: unimplemented()
+    case runtime.Type_Info_Enumerated_Array: unimplemented()
+    case runtime.Type_Info_Array: unimplemented()
+    case runtime.Type_Info_Slice: unimplemented()
+    case runtime.Type_Info_Dynamic_Array: unimplemented()
+
+    case:
+        append_elem_string(buf, "<TYPE NOT SUPPORTED>")
+    }
+}
