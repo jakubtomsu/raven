@@ -250,7 +250,7 @@ _update :: proc(prev: ^State) -> ^State {
         for &seg, i in snake.segments[:snake.num_segments] {
             seg.pos = linalg.normalize0(seg.pos)
 
-            if i > 0 && linalg.distance(seg.pos, snake.pos) < 0.2 {
+            if i > 0 && linalg.distance(seg.pos, snake.pos) < 0.15 {
                 die = true
             }
         }
@@ -365,7 +365,8 @@ _update :: proc(prev: ^State) -> ^State {
     }
 
 
-    rv.draw_counter(.CPU_Frame_Ns, {10, 10, 0.1}, scale = 2, unit = 1e-6, col = rv.GREEN)
+    rv.draw_counter(.CPU_Frame_Ns, {10, 10, 0.2}, scale = 2, unit = 1e-6, col = rv.DARK_GREEN)
+    rv.draw_counter(.CPU_Frame_Work_Ns, {10, 10, 0.1}, scale = 2, unit = 1e-6, col = rv.GREEN, show_text = false)
 
     rv.upload_gpu_layers()
     rv.render_gpu_layer(0, rv.DEFAULT_RENDER_TEXTURE, rv.Vec3{0.05, 0.1, 0.2}, true)

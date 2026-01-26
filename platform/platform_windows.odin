@@ -1642,17 +1642,13 @@ when BACKEND == BACKEND_WINDOWS {
         if .X in state.Gamepad.wButtons do result.buttons += {.X}
         if .Y in state.Gamepad.wButtons do result.buttons += {.Y}
 
-        result.right_trigger = f32(state.Gamepad.bRightTrigger) / f32(max(u8))
-        result.left_trigger = f32(state.Gamepad.bLeftTrigger) / f32(max(u8))
-
-        result.right_thumb = {
-            f32(state.Gamepad.sThumbRX) / f32(max(i16)),
-            f32(state.Gamepad.sThumbRY) / f32(max(i16)),
-        }
-
-        result.left_thumb = {
-            f32(state.Gamepad.sThumbLX) / f32(max(i16)),
-            f32(state.Gamepad.sThumbLY) / f32(max(i16)),
+        result.axes = {
+            .Right_Trigger = f32(state.Gamepad.bRightTrigger) / f32(max(u8)),
+            .Left_Trigger = f32(state.Gamepad.bLeftTrigger) / f32(max(u8)),
+            .Right_Thumb_X = f32(state.Gamepad.sThumbRX) / f32(max(i16)),
+            .Right_Thumb_Y = f32(state.Gamepad.sThumbRY) / f32(max(i16)),
+            .Left_Thumb_X = f32(state.Gamepad.sThumbLX) / f32(max(i16)),
+            .Left_Thumb_Y = f32(state.Gamepad.sThumbLY) / f32(max(i16)),
         }
 
         return result, true

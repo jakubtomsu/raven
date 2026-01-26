@@ -145,11 +145,17 @@ Memory_Protection :: enum u8 {
 }
 
 Gamepad_State :: struct {
-    buttons:        bit_set[Gamepad_Button], // down if set
-    left_trigger:   f32,
-    right_trigger:  f32,
-    left_thumb:     [2]f32,
-    right_thumb:    [2]f32,
+    buttons:    bit_set[Gamepad_Button], // set if down
+    axes:       [Gamepad_Axis]f32,
+}
+
+Gamepad_Axis :: enum u8 {
+    Left_Trigger,
+    Right_Trigger,
+    Left_Thumb_X,
+    Left_Thumb_Y,
+    Right_Thumb_X,
+    Right_Thumb_Y,
 }
 
 Gamepad_Button :: enum u8 {
