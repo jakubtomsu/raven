@@ -28,6 +28,7 @@ Inspired by Raylib, Sokol and PICO8.
 - Minimal dependencies
     - the core of the engine is implemented fully from scratch, see `platform` and `gpu`
 
+
 ## Roadmap
 - Lightweight shader transpiler
 - Better fonts

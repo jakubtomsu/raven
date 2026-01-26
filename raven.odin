@@ -27,18 +27,14 @@ import "ufmt"
 // TODO: objects in scene data
 // TODO: asset_load and reload
 // TODO: consistent get_* and no get API!
-// TODO: VFS files and assets
-// TODO: multiple texture pools?
 // TODO: font state
 // TODO: audio
-// TODO: separate hash table size from backing array size
+// TODO: separate hash table size from backing array size?
 // TODO: abstract log_error and log_warn etc to comptime disable logging?
-// TODO: mouse x rect functions and unify rects
-// TODO: resolve degrees/radians! USE ONLY ONE EVERYWHERE
 // TODO: compress vertex and instance data more
-// TODO: simple "profiling line" for CPU and GPU timing
 // TODO: More "summary" info when app exist - min/max/avg cpu/gpu frame time, num draws, temp allocs, ..?
-// TODO: batch meshes with *roughly* the same vertex count (e.g. buckets with multiple of 256, or pow2), do bounds check in the VS.
+// TODO: uniform anchor values
+// TODO: drawing real lines, not quads
 
 // ARTICLES
 // - blog post about two level bit sets
@@ -138,6 +134,14 @@ Fill_Mode :: enum u8 {
     Wire, // Two-sided wireframe mode
 }
 
+Sprite_Scaling :: enum u8 {
+    // Sprite scale determines the pixel scaling factor.
+    // Scale of 1 means each pixel is exactly one screen pixel.
+    Pixel = 0,
+    // No scaling, sprite scale is the final scale in pixels
+    // Scale of 1 means the ENTIRE sprite is 1x1 pixels.
+    Absolute,
+}
 
 _state: ^State
 
@@ -371,17 +375,18 @@ Texture_Data :: struct {
 
 
 Bind_State :: struct {
-    draw_layer:         u8,
-    blend:              Blend_Mode,
-    fill:               Fill_Mode,
-    depth_test:         bool,
-    depth_write:        bool,
-    texture_mode:       Bind_Texture_Mode,
-    texture:            u8,
-    texture_slice:      u8,
-    texture_size:       [2]u16, // cached
-    pixel_shader:       u8,
-    vertex_shader:      u8,
+    draw_layer:             u8,
+    blend:                  Blend_Mode,
+    fill:                   Fill_Mode,
+    depth_test:             bool,
+    depth_write:            bool,
+    texture_mode:           Bind_Texture_Mode,
+    texture:                u8,
+    texture_slice:          u8,
+    texture_size:           [2]u16, // cached
+    pixel_shader:           u8,
+    vertex_shader:          u8,
+    sprite_scaling:         Sprite_Scaling,
 }
 
 Bind_Texture_Mode :: enum u8 {
@@ -854,8 +859,8 @@ _finish_init :: proc() {
     _state.screen_size = platform.get_window_frame_rect(_state.window).size
     _state.screen_dirty = true
 
-    pool128_ok := create_texture_pool(128, 64)
-    assert(pool128_ok)
+    // pool128_ok := create_texture_pool(128, 64)
+    // assert(pool128_ok)
 
     // Swapchain
     _state.render_textures_used += {int(DEFAULT_RENDER_TEXTURE.index)}
@@ -1293,27 +1298,32 @@ get_time :: proc() -> f32 {
 
 @(require_results)
 atlas_cell :: proc(split: [2]i32, coord: [2]i32, scale: [2]f32 = 1.0) -> Rect {
-    assert(split.x >= 1)
-    assert(split.y >= 1)
+    validate(split.x >= 1)
+    validate(split.y >= 1)
 
     p := Vec2{
         linalg.fract(f32(coord.x) / f32(split.x)),
         linalg.fract(f32(coord.y) / f32(split.y)),
     }
 
-    return {
+    result := Rect{
         min = p,
         max = p + {
             scale.x / f32(split.x),
             scale.y / f32(split.y),
         },
     }
+
+    result.min.y = 1.0 - result.min.y
+    result.max.y = 1.0 - result.max.y
+
+    return result
 }
 
 @(require_results)
 atlas_slot :: proc(split: [2]i32, #any_int index: i32) -> Rect {
-    assert(split.x >= 1)
-    assert(split.y >= 1)
+    validate(split.x >= 1)
+    validate(split.y >= 1)
 
     coord := [2]i32{
         index % split.x,
@@ -1323,14 +1333,19 @@ atlas_slot :: proc(split: [2]i32, #any_int index: i32) -> Rect {
     return atlas_cell(split, coord)
 }
 
+FONT_SPLIT :: 16
+
 @(require_results)
 font_cell :: proc(coord: [2]i32) -> Rect {
-    return atlas_cell(16, coord)
+    return atlas_cell(FONT_SPLIT, coord)
 }
 
 @(require_results)
 font_slot :: proc(#any_int index: i32) -> Rect {
-    return atlas_slot(16, index)
+    return font_cell([2]i32{
+        index % FONT_SPLIT,
+        index / FONT_SPLIT,
+    })
 }
 
 @(require_results)
@@ -2350,7 +2365,7 @@ create_texture_from_data :: proc(name: string, data: Texture_Data) -> (result: T
 
         assert(slice_index < 64)
 
-        log.infof("Creating a pooled texture '%s' of size %ix%i", name, data.size.x, data.size.y)
+        log.infof("Creating a pooled texture '%s' of size %ix%i with index %i", name, data.size.x, data.size.y, index)
 
         create_resource = false
 
@@ -2373,7 +2388,7 @@ create_texture_from_data :: proc(name: string, data: Texture_Data) -> (result: T
     }
 
     if create_resource {
-        log.infof("Creating a non-pooled texture '%s' of size %ix%i", name, data.size.x, data.size.y)
+        log.infof("Creating a non-pooled texture '%s' of size %ix%i with index %i", name, data.size.x, data.size.y, index)
 
         // Already exists, replace the old one.
         // Possibly a name hash collision.
@@ -2428,7 +2443,7 @@ decode_texture_data :: proc(data: []byte) -> (result: Texture_Data, ok: bool) {
     size: [2]i32
     channels: i32
 
-    // stbi.set_flip_vertically_on_load(true)
+    stbi.set_flip_vertically_on_load(true)
 
     data := stbi.load_from_memory(
         buffer = raw_data(data),
@@ -2808,6 +2823,10 @@ bind_fill :: proc(fill: Fill_Mode) {
     _state.bind_state.fill = fill
 }
 
+bind_sprite_scaling :: proc(scaling: Sprite_Scaling) {
+    _state.bind_state.sprite_scaling = scaling
+}
+
 bind_depth_write :: proc(write: bool) {
     _state.bind_state.depth_write = write
 }
@@ -2923,7 +2942,6 @@ bind_render_texture_by_handle :: proc(handle: Render_Texture_Handle) {
 }
 
 
-// TODO: separate the render texture.
 // NOTE: Prefer calling this before any draw_* commands.
 // But the params persist between frames.
 set_layer_params :: proc(
@@ -2947,12 +2965,6 @@ set_layer_params :: proc(
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // MARK: Draw
 //
-
-// TODO
-Sprite_Scaling :: enum u8 {
-    Pixel = 0,
-    Absolute,
-}
 
 
 // TODO: anchor
@@ -2985,12 +2997,32 @@ draw_sprite :: proc(
 
     draw: Sprite_Draw
 
+    size := Vec2{
+        scale.x * 0.5,
+        scale.y * 0.5,
+    }
+
+    switch _state.bind_state.sprite_scaling {
+    case .Pixel:
+        size *= {
+            f32(_state.bind_state.texture_size.x) * rect_size.x,
+            f32(_state.bind_state.texture_size.y) * rect_size.y,
+        }
+
+    case .Absolute:
+        // No scaling
+    }
+
+    center := pos
+    center += mat[0] * anchor.x * size.x
+    center += mat[1] * anchor.y * size.y
+
     // TODO: flip texture *data* instead of flipping sprites?
 
-    draw.inst = Sprite_Inst{
-        pos = pos,
-        mat_x = mat[0] * scale.x * +0.5 * f32(_state.bind_state.texture_size.x) * rect_size.x,
-        mat_y = mat[1] * scale.y * -0.5 * f32(_state.bind_state.texture_size.y) * rect_size.y,
+    inst := Sprite_Inst{
+        pos = center,
+        mat_x = mat[0] * size.x,
+        mat_y = mat[1] * size.y,
         uv_min_x = rect.min.x + UV_EPS,
         uv_min_y = rect.min.y + UV_EPS,
         uv_size = rect_size - UV_EPS * 2,
@@ -3002,6 +3034,14 @@ draw_sprite :: proc(
         },
         tex_slice = _state.bind_state.texture_slice,
     }
+
+    draw_sprite_inst(inst)
+}
+
+draw_sprite_inst :: proc(inst: Sprite_Inst) {
+    draw: Sprite_Draw
+
+    draw.inst = inst
 
     draw.key = Draw_Sort_Key{
         texture         = _state.bind_state.texture,
@@ -3080,7 +3120,6 @@ draw_text :: proc(
 
         offs = text_glyph_apply(offs, r, scale = scale, char_size = char_size, spacing = spacing)
     }
-
 }
 
 rune_is_drawable :: proc(r: rune) -> bool {
@@ -3196,7 +3235,7 @@ draw_mesh_by_handle :: proc(
     _push_mesh_draw(_state.bind_state.draw_layer, draw)
 }
 
-draw_line :: proc(
+draw_sprite_line :: proc(
     a:          Vec3,
     b:          Vec3,
     width:      f32,
@@ -3376,7 +3415,6 @@ _upload_gpu_layer_constants :: proc() {
         }
 
         consts_buf[i] = const_data
-
     }
 
     gpu.update_constants(_state.draw_layers_consts, gpu.ptr_bytes(&consts_buf))
@@ -3694,6 +3732,21 @@ upload_gpu_layers :: proc() {
         ))
     }
 
+    for &layer, _ in _state.draw_layers {
+        for b in layer.sprite_batches {
+            validate_draw_sort_key(b.key)
+        }
+
+        for b in layer.mesh_batches {
+            validate_draw_sort_key(b.key)
+        }
+
+        for b in layer.triangle_batches {
+            validate_draw_sort_key(b.key)
+        }
+    }
+
+
     return
 
     _batcher_generate_draws :: proc(
@@ -3728,11 +3781,15 @@ upload_gpu_layers :: proc() {
                 }
             }
 
-            append(dst_batches, Draw_Batch{
+            validate_draw_sort_key(curr_key)
+
+            batch := Draw_Batch{
                 key = curr_key,
                 offset = u32(batcher.consts_num),
                 num = int_cast(u16, instance_num),
-            })
+            }
+
+            append_elem(dst_batches, batch)
 
             batcher.consts[batcher.consts_num] = {
                 instance_offset = inst_offs_base + instance_offs,
@@ -3897,6 +3954,7 @@ render_gpu_layer :: proc(
         )
     }
 
+
     //
     // Triangles
     //
@@ -3936,10 +3994,11 @@ render_gpu_layer :: proc(
         )
     }
 
-
     return
 
     _set_pipeline_desc_apply_key :: proc(pip_desc: ^gpu.Pipeline_Desc, key: Draw_Sort_Key, loc := #caller_location) {
+        validate_draw_sort_key(key)
+
         pip_desc.blends[0] = _gpu_blend_mode_desc(key.blend)
         pip_desc.cull, pip_desc.fill = _gpu_fill_mode(key.fill)
         pip_desc.depth_comparison = key.depth_test ? .Greater_Equal : .Always
@@ -3955,7 +4014,7 @@ render_gpu_layer :: proc(
         case: panic("Invalid texture mode")
         }
 
-        assert(tex_res != {}, loc = loc)
+        assert(tex_res != {}, "Invalid texture resource", loc = loc)
         pip_desc.resources[2] = tex_res
     }
 }
@@ -4353,11 +4412,6 @@ draw_counter :: proc(kind: Counter_Kind, pos: Vec3, scale: f32 = 1, unit: f32 = 
 // Ensures the data user passed in is in somewhat reasonable state.
 //
 
-@(disabled = !VALIDATION)
-validate_f32 :: #force_inline proc(x: f32, loc := #caller_location) {
-    validate(x == x && (x * 0.5 != x || x == 0), "Value is NaN or Inf", loc = loc)
-}
-
 @(disabled=!VALIDATION)
 validate :: proc(cond: bool, msg := #caller_expression(cond), loc := #caller_location) {
     if !cond {
@@ -4378,6 +4432,11 @@ validate :: proc(cond: bool, msg := #caller_expression(cond), loc := #caller_loc
     }
 }
 
+
+@(disabled = !VALIDATION)
+validate_f32 :: #force_inline proc(x: f32, loc := #caller_location) {
+    validate(x == x && (x * 0.5 != x || x == 0), "Value is NaN or Inf", loc = loc)
+}
 
 @(disabled = !VALIDATION)
 validate_vec :: proc(v: [$N]f32, loc := #caller_location) {
@@ -4416,6 +4475,12 @@ validate_mat4 :: proc(m: Mat4, loc := #caller_location) {
     validate_vec(m[3], loc)
 }
 
+@(disabled = !VALIDATION)
+validate_draw_sort_key :: proc(key: Draw_Sort_Key) {
+    validate(key.texture != {})
+    validate(key.ps != {})
+    validate(key.vs != {})
+}
 
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////

@@ -1,5 +1,6 @@
 package raven_example_hello
 
+import "core:math"
 import rv "../.."
 
 state: ^State
@@ -58,6 +59,19 @@ _update :: proc(prev_state: ^State) -> ^State {
     // Odin strings are UTF-8 encoded, but fonts are currently CP437 16x16 atlases.
     // Unicode fonts might get supported later.
     rv.draw_text("Hello World! ☺", {100, 100, 0}, scale = 4)
+
+    rv.draw_sprite(
+        {rv.get_viewport().x * 0.5, rv.get_viewport().y * 0.5, 0.1},
+        scale = 1,
+        anchor = {0, 0},
+    )
+
+    rv.draw_sprite(
+        {rv.get_viewport().x * 0.5, rv.get_viewport().y * 0.5, 0.1},
+        scale = 1,
+        anchor = {1, 1},
+        col = rv.RED,
+    )
 
     // The 'rv.draw_*' commands only record what geometry you want to render each frame.
     // To actually display it on the screen you must first upload it to the GPU, and then

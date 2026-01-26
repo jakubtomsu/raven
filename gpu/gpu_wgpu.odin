@@ -442,7 +442,7 @@ when BACKEND == BACKEND_WGPU {
                     kind = "StorageTexture"
                 }
 
-                log.debugf("Layout item #%i: {} binding %i", i, kind, item.binding)
+                // log.debugf("Layout item #%i: {} binding %i", i, kind, item.binding)
             }
         }
 
