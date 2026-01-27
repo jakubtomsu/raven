@@ -17,7 +17,7 @@ Something *simple* you can prototype in, but also *stable* enough to make polish
 
 Batteries-included toolkit for the entire code and asset pipeline.
 
-Inspired by Raylib, Sokol and PICO8.
+Inspired by Sokol, PICO8 and Raylib.
 
 ## Features
 - First-class 3D support
@@ -179,5 +179,6 @@ remap(x, a0, a1, b0, b1: f32) -> f32        // Map x from range a0..a1 to b0..b1
 smoothstep(edge0, edge1, x: f32) -> f32     // Generates a smooth curve from x in range edge0..edge1
 oklerp(a, b: Vec4, t: f32) -> Vec4          // Interpolate colors with OKLAB
 ```
+
 
 
