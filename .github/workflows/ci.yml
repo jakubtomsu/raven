@@ -1,0 +1,26 @@
+name: CI
+on: [push, pull_request, workflow_dispatch]
+
+jobs:
+  build_windows:
+    name: Windows Build, Check, and Test
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: build Odin
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat
+          ./build.bat 1
+      - name: Odin version
+        run: ./odin version
+      - name: Odin report
+        run: ./odin report
+      - name: Odin check
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat
+          odin check examples/hello -vet -debug
+          odin check examples/hello -vet -debug -define:GPU_BACKEND=WGPU
+          odin check examples/hello -vet -debug -define:GPU_BACKEND=Dummy -define:PLATFORM_BACKEND=Dummy
