@@ -3,7 +3,7 @@ on: [push, pull_request, workflow_dispatch]
 
 jobs:
   build_windows:
-    name: Windows Build, Check, and Test
+    name: Windows Build and Check
     runs-on: windows-2022
     timeout-minutes: 15
     steps:
@@ -13,7 +13,7 @@ jobs:
         run: |
           git clone https://github.com/odin-lang/Odin.git --depth 1 --single-branch --branch=master
           cd Odin
-          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
           build
           odin version
           odin report
@@ -21,7 +21,7 @@ jobs:
       - name: Check All
         shell: cmd
         run: |
-          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
           odin check examples/hello -vet -strict-style -debug
           odin check examples/hello -vet -strict-style -debug -define:GPU_BACKEND=WGPU
           odin check examples/hello -vet -strict-style -debug -define:GPU_BACKEND=Dummy -define:PLATFORM_BACKEND=Dummy
