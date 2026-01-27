@@ -7,6 +7,8 @@ A toolkit for making 2D and 3D games in Odin
 
 Do NOT use for anything serious yet. Core features might be broken.
 
+Windows is most stable, WASM+WebGPU builds usually work but Linux and MacOS isn't supported yet.
+
 ### [Discord](https://discord.com/invite/wn5jMMMYe4)
 
 </div>

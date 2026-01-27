@@ -117,7 +117,7 @@ _update :: proc(prev: ^State) -> ^State {
         rv.get_mesh("Plane"),
         {0, 0, 0},
         scale = 25,
-        col = rv.RED,
+        col = rv.GRAY,
     )
 
     rv.bind_layer(1)
