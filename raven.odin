@@ -3798,7 +3798,7 @@ upload_gpu_layers :: proc() {
         _counter_add(.Num_Uploaded_Instances, u64(
             len(layer.sprites) +
             len(layer.meshes) +
-            len(layer.triangles)
+            len(layer.triangles),
         ))
     }
 
