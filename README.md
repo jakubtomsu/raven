@@ -5,9 +5,9 @@ A toolkit for making stylized 2D and 3D games in Odin
 
 ***WARNING: EARLY ALPHA VERSION***
 
-Do NOT use for anything serious yet.
+Do NOT use for anything serious yet. Core features might be broken.
 
-[Discord](https://discord.com/invite/wn5jMMMYe4)
+### [Discord](https://discord.com/invite/wn5jMMMYe4)
 
 </div>
 
@@ -31,9 +31,12 @@ Inspired by Raylib, Sokol and PICO8.
 
 ## Roadmap
 - Lightweight shader transpiler
+- Finish audio system
 - Better fonts
     - Draw text iterator
     - Unicode font support (currently only CP437 atlases are supported)
+- Simple GUI and gizmo system
+- Geometry and Collision package
 
 ## Simple Example
 
@@ -176,3 +179,4 @@ remap(x, a0, a1, b0, b1: f32) -> f32        // Map x from range a0..a1 to b0..b1
 smoothstep(edge0, edge1, x: f32) -> f32     // Generates a smooth curve from x in range edge0..edge1
 oklerp(a, b: Vec4, t: f32) -> Vec4          // Interpolate colors with OKLAB
 ```
+
