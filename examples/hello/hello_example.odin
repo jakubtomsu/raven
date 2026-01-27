@@ -14,8 +14,7 @@ State :: struct {
 // The main procedure is your app's entry point.
 // But to support multiple platforms, Raven handles the frame update loop, only calling your module.
 main :: proc() {
-    // The main loop is managed by Raven because it's easier to support various platforms and hotreload this way.
-    // But if you really want you can write your own main loop directly.
+    // If you really want you can write your own main loop directly.
     rv.run_main_loop(_module_api())
 }
 
@@ -69,4 +68,5 @@ _update :: proc(prev_state: ^State) -> ^State {
     rv.render_gpu_layer(0, rv.DEFAULT_RENDER_TEXTURE, clear_color = rv.Vec3{0, 0, 0.5}, clear_depth = true)
 
     return state
+
 }
