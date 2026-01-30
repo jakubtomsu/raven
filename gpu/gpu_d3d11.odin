@@ -1342,7 +1342,9 @@ when BACKEND == BACKEND_D3D11 {
     }
 
     @(private = "file")
-    _d3d11_check :: proc(res: dxgi.HRESULT, loc := #caller_location, expr := #caller_expression) -> bool {
+    _d3d11_check :: proc(res: dxgi.HRESULT, loc := #caller_location) -> bool {
+        // TODO: #caller_expression
+
         switch cast(u32)res {
         case 0:
             return true

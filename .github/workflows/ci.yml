@@ -27,7 +27,7 @@ jobs:
           .\Odin\odin build examples/hello
           .\Odin\odin build examples/hello %FLAGS%
           .\Odin\odin build examples/hello %FLAGS% -define:GPU_BACKEND=WGPU
-          .\Odin\odin build examples/hello %FLAGS% -define:GPU_BACKEND=Dummy -define:PLATFORM_BACKEND=Dummy
+          .\Odin\odin build examples/hello %FLAGS% -define:GPU_BACKEND=Dummy -define:PLATFORM_BACKEND=Dummy -define:AUDIO_BACKEND=Dummy
 
           .\Odin\odin build examples/hello_minimal
           .\Odin\odin build examples/stress_test_3d

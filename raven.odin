@@ -1,4 +1,4 @@
-#+vet explicit-allocators shadowing
+#+vet explicit-allocators shadowing unused style
 package raven
 
 import "core:mem"
@@ -18,7 +18,6 @@ import "gpu"
 import "platform"
 import "rscn"
 import "audio"
-import "base"
 import "base/ufmt"
 
 // TODO: go through all TODOs
@@ -30,6 +29,7 @@ import "base/ufmt"
 // TODO: consistent get_* and no get API!
 // TODO: font state
 // TODO: audio
+// TODO: try core:image
 // TODO: separate hash table size from backing array size?
 // TODO: abstract log_error and log_warn etc to comptime disable logging?
 // TODO: compress vertex and instance data more
@@ -37,6 +37,7 @@ import "base/ufmt"
 // TODO: uniform anchor values
 // TODO: drawing real lines, not quads
 // TODO: default module init/shutdown procs
+// TODO: load_* vs create_* naming convention
 
 // ARTICLES
 // - blog post about two level bit sets
@@ -61,6 +62,7 @@ MAX_RENDER_TEXTURES :: 64
 MAX_TEXTURE_RESOURCES :: 64
 MAX_SHADERS :: 64
 MAX_FILES :: 1024
+MAX_SOUNDS :: 1024
 
 MAX_TOTAL_SPRITE_INSTANCES :: 1024 * 32
 MAX_TOTAL_MESH_INSTANCES :: 1024 * 64
@@ -113,6 +115,9 @@ Spline_Handle :: distinct Handle
 Render_Texture_Handle :: distinct Handle
 Vertex_Shader_Handle :: distinct Handle
 Pixel_Shader_Handle :: distinct Handle
+Sound_Resource_Handle :: audio.Resource_Handle
+Sound_Handle :: audio.Sound_Handle
+
 
 Rect :: struct {
     min:    Vec2,
@@ -563,6 +568,7 @@ DEFAULT_SAMPLERS :: [2]gpu.Sampler_Desc{
     //     mip_max = 10,
     // },
 }
+
 
 
 
@@ -1042,7 +1048,7 @@ _print_stats_report :: proc() {
 
         if len(tr.allocation_map) > 0 {
             fmt.printfln("Memory Leaks:")
-            for addr, it in tr.allocation_map {
+            for _, it in tr.allocation_map {
                 fmt.printfln("\t[{0}:{1}:{2}:{3}] Leaked {4:p} of size {5:M} ({5} bytes) with alignment {6:M}",
                     it.location.file_path,
                     it.location.procedure,
@@ -2584,7 +2590,8 @@ create_pixel_shader :: proc(name: string, data: []byte) -> (result: Pixel_Shader
 
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////
-// MARK: Files
+// MARK: VFS
+// Virtual file system
 //
 
 // Registers all files.
@@ -2679,7 +2686,7 @@ load_asset :: proc(name: string, dst_group: Group_Handle) -> bool {
         _, ok := create_texture_from_encoded_data(name[:len(name) - 4], data)
         return ok
     } else if strings.has_suffix(name, ".rscn") {
-        group_handle, ok := load_scene(name, dst_group = dst_group)
+        _, ok := load_scene(name, dst_group = dst_group)
         return ok
     }
     // TODO
@@ -3060,8 +3067,6 @@ draw_sprite :: proc(
         linalg.quaternion_angle_axis_f32(angle, {0, 0, 1}))
 
     rect_size := rect_full_size(rect)
-
-    draw: Sprite_Draw
 
     size := Vec2{
         scale.x * 0.5,
@@ -4315,6 +4320,69 @@ screen_to_world_ray :: proc(pos: Vec2, cam: Camera) -> Vec3 {
 
 
 
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// MARK: Sounds
+//
+
+load_sound_resource :: proc(path: string) -> (result: Sound_Resource_Handle, ok: bool) #optional_ok {
+    name := strip_path_name(path)
+    log.infof("Loading sound resource '%s' from '%s'", name, path)
+    // TODO: register the resource internally for hot-reload
+    data := get_file_by_name(path) or_return
+    return create_sound_resource_encoded(name, data)
+}
+
+create_sound_resource_encoded :: proc(name: string, data: []byte) -> (result: Sound_Resource_Handle, ok: bool) #optional_ok {
+    log.infof("Creating sound resource '%s' of size %i bytes", name, len(data))
+    return audio.create_resource_encoded(data)
+}
+
+// create_sound_resource_decoded :: proc(name: string, data: []$T, stereo: bool) -> (result: Sound_Resource_Handle, ok: bool) {
+// }
+
+
+play_sound :: proc(
+    resource:       Sound_Resource_Handle,
+    start           := true,
+    loop            := false,
+    delay:          f32 = 0,
+    volume:         f32 = 1,
+    pitch:          f32 = 1,
+    pos:            Maybe([3]f32) = nil,
+) -> (result: audio.Sound_Handle, ok: bool) #optional_ok {
+    validate(resource != {})
+
+    result = audio.create_sound(resource_handle = resource, group_handle = {}) or_return
+
+    if delay > 0 {
+        audio.set_sound_start_delay(result, delay, .Seconds)
+    }
+
+    if start {
+        audio.set_sound_playing(result, start)
+    }
+
+    if loop {
+        audio.set_sound_looping(result, loop)
+    }
+
+    if volume != 1 {
+        audio.set_sound_volume(result, volume)
+    }
+
+    if pitch != 1 {
+        audio.set_sound_pitch(result, pitch)
+    }
+
+    if p, p_ok := pos.?; p_ok {
+        audio.set_sound_spatialization(result, true)
+        audio.set_sound_position(result, p)
+    }
+
+    return result, true
+}
+
+
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // MARK: Misc
@@ -4334,6 +4402,17 @@ log_internal :: proc(format: string, args: ..any, loc := #caller_location) {
     when LOG_INTERNAL {
         log.debugf(format, args = args, location = loc)
     }
+}
+
+// Convert VFS path to an asset name, for example:
+// foo/bar/something.bin -> something
+// foo.data.txt -> foo
+strip_path_name :: proc "contextless" (str: string) -> (result: string) {
+    back_index := strings.last_index_byte(str,'\\')
+    forw_index := strings.last_index_byte(str,'/')
+    result = str[max(back_index, forw_index) + 1:]
+    dot_index := strings.index_byte(result, '.')
+    return result[:dot_index]
 }
 
 _assertion_failure_proc :: proc(prefix, message: string, loc: runtime.Source_Code_Location) -> ! {

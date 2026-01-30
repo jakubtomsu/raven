@@ -3,6 +3,7 @@
 #+vet explicit-allocators shadowing unused
 package raven_gpu
 
+import "../base"
 import "core:hash/xxhash"
 import "base:runtime"
 import "core:log"
@@ -75,11 +76,11 @@ State :: struct #align(64) {
     pipeline_data:          [MAX_PIPELINES]Pipeline_State,
     pipeline_gen:           [MAX_PIPELINES]Handle_Gen,
 
-    resource_used:          Bit_Pool(MAX_RESOURCES),
+    resource_used:          base.Bit_Pool(MAX_RESOURCES),
     resource_gen:           [MAX_RESOURCES]Handle_Gen,
     resource_data:          [MAX_RESOURCES]Resource_State,
 
-    shader_used:            Bit_Pool(MAX_SHADERS),
+    shader_used:            base.Bit_Pool(MAX_SHADERS),
     shader_gen:             [MAX_SHADERS]Handle_Gen,
     shader_data:            [MAX_SHADERS]Shader_State,
 
@@ -448,8 +449,8 @@ init :: proc(state: ^State, native_window: rawptr) {
 
     _state = state
 
-    bit_pool_set_1(&_state.shader_used, 0)
-    bit_pool_set_1(&_state.resource_used, 0)
+    base.bit_pool_set_1(&_state.shader_used, 0)
+    base.bit_pool_set_1(&_state.resource_used, 0)
 
     if !_init(native_window) {
         panic("Failed to initialize GPU backend")
@@ -1232,13 +1233,13 @@ get_internal_shader :: proc(handle: Shader_Handle) -> (^Shader_State, bool) {
 }
 
 @(require_results)
-_table_find_slot :: proc(table_used: Bit_Pool($N)) -> (index: int, ok: bool) {
-    return bit_pool_find_0(table_used)
+_table_find_slot :: proc(table_used: base.Bit_Pool($N)) -> (index: int, ok: bool) {
+    return base.bit_pool_find_0(table_used)
 }
 
 @(require_results)
-_table_insert :: proc(table_used: ^Bit_Pool($N), table_gen: [N]Handle_Gen, #any_int index: int) -> (result: Handle) {
-    bit_pool_set_1(table_used, index)
+_table_insert :: proc(table_used: ^base.Bit_Pool($N), table_gen: [N]Handle_Gen, #any_int index: int) -> (result: Handle) {
+    base.bit_pool_set_1(table_used, index)
     result = {
         index = Handle_Index(index),
         gen = table_gen[index],
@@ -1246,14 +1247,14 @@ _table_insert :: proc(table_used: ^Bit_Pool($N), table_gen: [N]Handle_Gen, #any_
     return result
 }
 
-_table_destroy :: proc(table_used: ^Bit_Pool($N), table_gen: ^[N]Handle_Gen, handle: $H/Handle) {
+_table_destroy :: proc(table_used: ^base.Bit_Pool($N), table_gen: ^[N]Handle_Gen, handle: $H/Handle) {
     if table_gen[handle.index] != handle.gen {
         return
     }
 
-    validate(bit_pool_check_1(table_used^, handle.index))
+    validate(base.bit_pool_check_1(table_used^, handle.index))
 
-    bit_pool_set_0(table_used, handle.index)
+    base.bit_pool_set_0(table_used, handle.index)
     table_gen[handle.index] += 1
 }
 

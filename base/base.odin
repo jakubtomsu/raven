@@ -19,6 +19,6 @@ log :: proc(level: runtime.Logger_Level, format: string, args: ..any, loc := #ca
     context.logger.procedure(logger.data, level, str, logger.options, location = loc)
 }
 
-_logger_proc :: proc(logger_data: rawptr, level: runtime.Logger_Level, text: string, options: bit_set[runtime.Logger_Option], location := #caller_location) {
+// _logger_proc :: proc(logger_data: rawptr, level: runtime.Logger_Level, text: string, options: bit_set[runtime.Logger_Option], location := #caller_location) {
 
-}
+// }

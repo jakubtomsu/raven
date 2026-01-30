@@ -1,32 +1,32 @@
 #+vet explicit-allocators shadowing unused
 package raven_audio
 
-import "core:log"
+import "../base"
 import "base:intrinsics"
 import "base:runtime"
 
-// TODO: read audio thread timer
-
+// TODO: sound fading
+// TODO: sound trim range for dynamically chopping big sounds
 
 BACKEND :: #config(AUDIO_BACKEND, BACKEND_DEFAULT)
 
-BACKEND_DUMMY :: "Dummy"
+BACKEND_NONE :: "None"
 BACKEND_MINIAUDIO :: "miniaudio"
 
 when ODIN_OS == .JS {
-    BACKEND_DEFAULT :: BACKEND_DUMMY
+    // TODO: js audio
+    BACKEND_DEFAULT :: BACKEND_NONE
 } else {
     BACKEND_DEFAULT :: BACKEND_MINIAUDIO
 }
 
 MAX_GROUPS :: #config(AUDIO_MAX_GROUPS, 16)
 MAX_SOUNDS :: #config(AUDIO_MAX_SOUNDS, 1024)
+MAX_RESOURCES :: #config(AUDIO_MAX_RESOURCE, 512)
 
 // TODO: custom generators
 
 #assert(MAX_GROUPS < 64)
-
-SOUND_SET_WIDTH :: 64
 
 Handle_Index :: u16
 Handle_Gen :: u8
@@ -37,26 +37,37 @@ Handle :: struct {
     gen:    u8,
 }
 
+Resource_Handle :: distinct Handle
 Sound_Handle :: distinct Handle
 Group_Handle :: distinct Handle
 
 _state: ^State
 
 State :: struct #align(64) {
-    using native:   _State,
+    using native:       _State,
 
-    groups:         [MAX_GROUPS]Group,
-    groups_used:    bit_set[0..<64],
+    groups_used:        bit_set[0..<64],
+    groups:             [MAX_GROUPS]Group,
 
-    sounds:         [MAX_SOUNDS]Sound,
-    // TODO: two-level bit set
-    sounds_used:    [MAX_SOUNDS / SOUND_SET_WIDTH]bit_set[0..<SOUND_SET_WIDTH],
-    sound_recycle:  i32,
+    resources_used:     base.Bit_Pool(MAX_RESOURCES),
+    resources_gen:      [MAX_RESOURCES]Handle_Gen,
+    resources:          [MAX_RESOURCES]Resource,
+
+    sounds_used:        base.Bit_Pool(MAX_SOUNDS),
+    sounds_gen:         [MAX_SOUNDS]Handle_Gen,
+    sounds:             [MAX_SOUNDS]Sound,
+    sound_recycle:      i32,
+}
+
+
+// Represents the sample data.
+Resource :: struct {
+    using native:   _Resource,
 }
 
 Sound :: struct {
     using native:   _Sound,
-    gen:            u8,
+    resource:       Resource_Handle,
 }
 
 Group :: struct {
@@ -79,6 +90,18 @@ Pan_Mode :: enum u8 {
     Pan, // A true pan. The sound from one side will "move" to the other side and blend with it.
 }
 
+Sample_Format :: enum u8 {
+    F32,
+    I32,
+    I16,
+    U8,
+}
+
+Units :: enum u8 {
+    Seconds,
+    Percentage,
+    Samples,
+}
 
 
 // MARK: Core
@@ -91,17 +114,22 @@ get_state_ptr :: proc() -> (state: ^State) {
     return _state
 }
 
-init :: proc(state: ^State) {
+init :: proc(state: ^State) -> bool {
     if _state != nil {
-        return
+        return false
     }
 
     _state = state
 
     _state.groups_used += {0}
-    _state.sounds_used[0] += {0}
+    base.bit_pool_set_1(&_state.resources_used, 0)
+    base.bit_pool_set_1(&_state.sounds_used, 0)
 
-    _init()
+    if !_init() {
+        return false
+    }
+
+    return true
 }
 
 shutdown :: proc() {
@@ -114,6 +142,11 @@ shutdown :: proc() {
     _state = nil
 }
 
+// Sample audio-thread time in nanoseconds
+get_global_time :: proc() -> u64 {
+    return _get_global_time()
+}
+
 // Call every frame from the main thread.
 // Low overhead, audio is in another thread.
 update :: proc() {
@@ -122,39 +155,28 @@ update :: proc() {
 
 // Called every update.
 recycle_old_sounds :: proc() {
-    recycle_set := _state.sounds_used[_state.sound_recycle]
+    recycle_set := transmute(bit_set[0..<64])_state.sounds_used.l1[_state.sound_recycle]
 
-    for i in 0..<SOUND_SET_WIDTH {
+    for i in 0..<64 {
         if i not_in recycle_set {
             continue
         }
 
-        index := _state.sound_recycle * SOUND_SET_WIDTH + i32(i)
+        index := _state.sound_recycle * 64 + i32(i)
 
         sound := &_state.sounds[index]
 
+        handle := Sound_Handle{
+            Handle_Index(index),
+            _state.sounds_gen[index],
+        }
+
         if _is_sound_finished(sound) {
-            log.info("auto destroying sound")
-            _destroy_sound(sound)
-            recycle_set -= {i}
+            destroy_sound(handle)
         }
     }
 
-    _state.sounds_used[_state.sound_recycle] = recycle_set
-
-    _state.sound_recycle = (_state.sound_recycle + 1) %% (MAX_SOUNDS / SOUND_SET_WIDTH)
-}
-
-find_unused_sound_index :: proc() -> (slot: int, bit: int, ok: bool) {
-    for i in 0..< MAX_SOUNDS / SOUND_SET_WIDTH {
-        set := transmute(u64)_state.sounds_used[i]
-        first_unused := intrinsics.count_trailing_zeros(~set)
-        if first_unused == 64 {
-            continue
-        }
-        return i, int(first_unused), true
-    }
-    return 0, 0, false
+    _state.sound_recycle = (_state.sound_recycle + 1) %% len(_state.sounds_used.l1)
 }
 
 find_unused_group_index :: proc() -> (bit: int, ok: bool) {
@@ -170,167 +192,161 @@ find_unused_group_index :: proc() -> (bit: int, ok: bool) {
 
 // MARK: Sounds
 
-unpack_sound_index :: proc(index: int) -> (int, int) {
-    return index / SOUND_SET_WIDTH, index % SOUND_SET_WIDTH
-}
+create_resource_encoded :: proc(data: []byte) -> (result: Resource_Handle, ok: bool) {
+    index := base.bit_pool_find_0(_state.resources_used) or_return
 
-get_sound :: proc(handle: Sound_Handle) -> (^Sound, bool) {
-    if handle.index <= 0 || handle.index >= MAX_SOUNDS {
-        return nil, false
-    }
-
-    sound := &_state.sounds[handle.index]
-    if sound.gen != handle.gen {
-        return nil, false
-    }
-
-    return sound, true
-}
-
-play_sound :: proc(
-    name:           string,
-    start           := true,
-    loop            := false,
-    start_delay:    f32 = 0,
-    start_fade:     f32 = 0,
-    end_fade:       f32 = 0,
-    chop:           [2]f32 = {0, 1},
-    volume:         f32 = 1,
-    pitch:          f32 = 1,
-    position:       [3]f32 = 0,
-    group:          Group_Handle = {},
-) -> Sound_Handle {
-    slot_index, bit_index, ok := find_unused_sound_index()
-    if !ok {
-        log.error("failed to play sound")
-        return {}
-    }
-
-    index := slot_index * SOUND_SET_WIDTH + bit_index
-    sound := &_state.sounds[index]
-    gen := sound.gen
-    sound^ = {}
-    sound.gen = gen
-
-    if !_play_sound(sound, name = name, loop = loop, group_handle = group) {
-        return {}
-    }
-
-    if start {
-        _start_sound(sound)
-    }
-
-    if pitch != 1 {
-        _set_sound_pitch(sound, pitch)
-    }
-
-    if volume != 1 {
-        _set_sound_volume(sound, pitch)
-    }
-
-    if position != {} {
-        _set_sound_position(sound, position)
-    }
-
-    _state.sounds_used[slot_index] += {int(bit_index)}
-
-    return {
+    result = {
         index = Handle_Index(index),
-        gen = gen,
+        gen = _state.resources_gen[index],
     }
+
+    resource := &_state.resources[index]
+    resource^ = {}
+
+    _init_resource_encoded(resource, result, data) or_return
+
+    base.bit_pool_set_1(&_state.resources_used, index)
+
+    return result, true
+}
+
+create_sound :: proc(resource_handle: Resource_Handle, group_handle: Group_Handle = {}, stream_decode := false) -> (result: Sound_Handle, ok: bool) {
+    index := base.bit_pool_find_0(_state.sounds_used) or_return
+
+    sound := &_state.sounds[index]
+    sound^ = {}
+
+    _init_sound(sound, resource_handle, group_handle = group_handle, stream_decode = stream_decode) or_return
+
+    sound.resource = resource_handle
+
+    result = {
+        index = Handle_Index(index),
+        gen = _state.resources_gen[index],
+    }
+
+    base.bit_pool_set_1(&_state.sounds_used, index)
+
+    return result, true
 }
 
 destroy_sound :: proc(handle: Sound_Handle) {
-    if sound, ok := get_sound(handle); ok {
-        _destroy_sound(sound)
-
-        slot, bit := unpack_sound_index(int(handle.index))
-        sound.gen += 1
-        _state.sounds_used[slot] -= {int(bit)}
+    if _, ok := get_internal_sound(handle); ok {
+        assert(base.bit_pool_check_1(_state.sounds_used, handle.index))
+        base.bit_pool_set_0(&_state.sounds_used, handle.index)
+        _state.sounds_gen[handle.index] += 1
     }
 }
 
 is_sound_playing :: proc(handle: Sound_Handle) -> bool {
-    if sound, ok := get_sound(handle); ok {
+    if sound, ok := get_internal_sound(handle); ok {
         return _is_sound_playing(sound)
     }
     return false
 }
 
 is_sound_finished :: proc(handle: Sound_Handle) -> bool {
-    if sound, ok := get_sound(handle); ok {
+    if sound, ok := get_internal_sound(handle); ok {
         return _is_sound_finished(sound)
     }
     return false
 }
 
-get_sound_progress :: proc(handle: Sound_Handle) -> f32 {
-    if sound, ok := get_sound(handle); ok {
-        return _get_sound_progress(sound)
+get_sound_time :: proc(handle: Sound_Handle, units: Units = .Seconds) -> f32 {
+    if sound, ok := get_internal_sound(handle); ok {
+        return _get_sound_time(sound, units)
     }
     return 0
 }
 
-start_sound :: proc(handle: Sound_Handle) {
-    if sound, ok := get_sound(handle); ok {
-        _start_sound(sound)
+set_sound_playing :: proc(handle: Sound_Handle, val: bool) {
+    if sound, ok := get_internal_sound(handle); ok {
+        _set_sound_playing(sound, val)
     }
 }
 
-pause_sound :: proc(handle: Sound_Handle) {
-    if sound, ok := get_sound(handle); ok {
-        _pause_sound(sound)
+set_sound_looping :: proc(handle: Sound_Handle, val: bool) {
+    if sound, ok := get_internal_sound(handle); ok {
+        _set_sound_looping(sound, val)
+    }
+}
+
+set_sound_start_delay :: proc(handle: Sound_Handle, val: f32, units: Units = .Seconds) {
+    if sound, ok := get_internal_sound(handle); ok {
+        _set_sound_start_delay(sound, val, units)
     }
 }
 
 set_sound_volume :: proc(handle: Sound_Handle, factor: f32) {
-    if sound, ok := get_sound(handle); ok {
+    if sound, ok := get_internal_sound(handle); ok {
         _set_sound_volume(sound, factor)
     }
 }
 
 set_sound_pan :: proc(handle: Sound_Handle, pan: f32, mode: Pan_Mode = .Balance) {
-    if sound, ok := get_sound(handle); ok {
+    if sound, ok := get_internal_sound(handle); ok {
         _set_sound_pan(sound, pan, mode)
     }
 }
 
 set_sound_pitch :: proc(handle: Sound_Handle, pitch: f32) {
-    if sound, ok := get_sound(handle); ok {
+    if sound, ok := get_internal_sound(handle); ok {
         _set_sound_pitch(sound, pitch)
     }
 }
 
 set_sound_spatialization :: proc(handle: Sound_Handle, enabled: bool) {
-    if sound, ok := get_sound(handle); ok {
+    if sound, ok := get_internal_sound(handle); ok {
         _set_sound_spatialization(sound, enabled)
     }
 }
 
 set_sound_position :: proc(handle: Sound_Handle, pos: [3]f32) {
-    if sound, ok := get_sound(handle); ok {
+    if sound, ok := get_internal_sound(handle); ok {
         _set_sound_position(sound, pos)
     }
 }
 
 set_sound_direction :: proc(handle: Sound_Handle, dir: [3]f32) {
-    if sound, ok := get_sound(handle); ok {
+    if sound, ok := get_internal_sound(handle); ok {
         _set_sound_direction(sound, dir)
     }
 }
 
 set_sound_velocity :: proc(handle: Sound_Handle, vel: [3]f32) {
-    if sound, ok := get_sound(handle); ok {
+    if sound, ok := get_internal_sound(handle); ok {
         _set_sound_velocity(sound, vel)
     }
 }
 
 
+get_internal_resource :: proc(handle: Resource_Handle) -> (^Resource, bool) {
+    if handle.index <= 0 || handle.index >= MAX_RESOURCES {
+        return nil, false
+    }
 
+    resource := &_state.resources[handle.index]
+    if _state.resources_gen[handle.index] != handle.gen {
+        return nil, false
+    }
 
-// MARK: Group
+    return resource, true
+}
 
-get_group :: proc(handle: Group_Handle) -> (result: ^Group, ok: bool) {
+get_internal_sound :: proc(handle: Sound_Handle) -> (^Sound, bool) {
+    if handle.index <= 0 || handle.index >= MAX_SOUNDS {
+        return nil, false
+    }
+
+    sound := &_state.sounds[handle.index]
+    if _state.sounds_gen[handle.index] != handle.gen {
+        return nil, false
+    }
+
+    return sound, true
+}
+
+get_internal_group :: proc(handle: Group_Handle) -> (result: ^Group, ok: bool) {
     if handle.index <= 0 || handle.index >= MAX_GROUPS {
         return nil, false
     }
@@ -343,6 +359,10 @@ get_group :: proc(handle: Group_Handle) -> (result: ^Group, ok: bool) {
     return group, true
 }
 
+
+
+// MARK: Group
+
 create_group :: proc(parent_handle: Group_Handle = {}, delay: f32 = 0) -> Group_Handle {
     index, ok := find_unused_group_index()
     if !ok {
@@ -354,7 +374,7 @@ create_group :: proc(parent_handle: Group_Handle = {}, delay: f32 = 0) -> Group_
     group^ = {}
     group.gen = gen
 
-    _create_group(group, parent_handle, delay)
+    _init_group(group, parent_handle, delay)
     _state.groups_used += {index}
 
     return {
@@ -364,7 +384,7 @@ create_group :: proc(parent_handle: Group_Handle = {}, delay: f32 = 0) -> Group_
 }
 
 destroy_group :: proc(handle: Group_Handle) {
-    if group, ok := get_group(handle); ok {
+    if group, ok := get_internal_group(handle); ok {
         _destroy_group(group)
         group.gen += 1
         _state.groups_used -= {int(handle.index)}
@@ -372,45 +392,45 @@ destroy_group :: proc(handle: Group_Handle) {
 }
 
 set_group_volume :: proc(handle: Group_Handle, factor: f32) {
-    if group, ok := get_group(handle); ok {
+    if group, ok := get_internal_group(handle); ok {
         _set_group_volume(group, factor)
     }
 }
 
 set_group_pan :: proc(handle: Group_Handle, pan: f32, mode: Pan_Mode = .Pan) {
-    if group, ok := get_group(handle); ok {
+    if group, ok := get_internal_group(handle); ok {
         _set_group_pan(group, pan, mode)
     }
 }
 
 set_group_pitch :: proc(handle: Group_Handle, pitch: f32) {
-    if group, ok := get_group(handle); ok {
+    if group, ok := get_internal_group(handle); ok {
         _set_group_pitch(group, pitch)
     }
 }
 
 set_group_spatialization :: proc(handle: Group_Handle, enabled: bool) {
-    if group, ok := get_group(handle); ok {
+    if group, ok := get_internal_group(handle); ok {
         _set_group_spatialization(group, enabled)
     }
 }
 
 set_group_delay_decay :: proc(handle: Group_Handle, decay: f32) {
-    if group, ok := get_group(handle); ok && .Delay in group.filters {
+    if group, ok := get_internal_group(handle); ok && .Delay in group.filters {
         _set_group_delay_decay(group, decay)
     }
 }
 
 // wet = the prorcessed signal
 set_group_delay_wet :: proc(handle: Group_Handle, wet: f32) {
-    if group, ok := get_group(handle); ok && .Delay in group.filters {
+    if group, ok := get_internal_group(handle); ok && .Delay in group.filters {
         _set_group_delay_wet(group, wet)
     }
 }
 
 // dry = no postprocess on the signal
 set_group_delay_dry :: proc(handle: Group_Handle, dry: f32) {
-    if group, ok := get_group(handle); ok && .Delay in group.filters {
+    if group, ok := get_internal_group(handle); ok && .Delay in group.filters {
         _set_group_delay_dry(group, dry)
     }
 }
