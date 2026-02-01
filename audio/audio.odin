@@ -237,7 +237,7 @@ create_resource_decoded :: proc(data: []byte, format: Sample_Format, stereo: boo
     return result, true
 }
 
-create_sound :: proc(resource_handle: Resource_Handle, group_handle: Group_Handle = {}, stream_decode := false) -> (result: Sound_Handle, ok: bool) {
+create_sound :: proc(resource_handle: Resource_Handle, group_handle: Group_Handle = {}, async_decode := false) -> (result: Sound_Handle, ok: bool) {
     index := base.bit_pool_find_0(_state.sounds_used) or_return
 
     _, res_ok := get_internal_resource(resource_handle)
@@ -246,7 +246,7 @@ create_sound :: proc(resource_handle: Resource_Handle, group_handle: Group_Handl
     sound := &_state.sounds[index]
     sound^ = {}
 
-    _init_sound(sound, resource_handle, group_handle = group_handle, stream_decode = stream_decode) or_return
+    _init_sound(sound, resource_handle, group_handle = group_handle, async_decode = async_decode) or_return
 
     sound.resource = resource_handle
 

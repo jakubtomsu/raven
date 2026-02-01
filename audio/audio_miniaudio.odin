@@ -121,7 +121,7 @@ when BACKEND == BACKEND_MINIAUDIO {
         return true
     }
 
-    _init_sound :: proc(sound: ^Sound, resource_handle: Resource_Handle, stream_decode: bool, group_handle: Group_Handle) -> bool {
+    _init_sound :: proc(sound: ^Sound, resource_handle: Resource_Handle, async_decode: bool, group_handle: Group_Handle) -> bool {
         assert(resource_handle != {})
 
         group: ^ma.sound_group
@@ -134,7 +134,7 @@ when BACKEND == BACKEND_MINIAUDIO {
         _ma_check(ma.sound_init_from_file(
             &_state.engine,
             pFilePath = path,
-            flags = (stream_decode ? {.DECODE, .ASYNC} : {.DECODE}) + {.NO_SPATIALIZATION},
+            flags = (async_decode ? {.DECODE, .ASYNC} : {.DECODE}) + {.NO_SPATIALIZATION},
             pGroup = group,
             pDoneFence = nil,
             pSound = &sound.sound,

@@ -123,7 +123,7 @@ new_game :: proc() {
     state.snake.pos = repel_from_obstacles(state.snake.pos, 0.3)
 
     rv.destroy_sound(state.music)
-    state.music = rv.play_sound(state.music_res, loop = true)
+    state.music = rv.play_sound(state.music_res, loop = true, async_decode = true)
 
     spawn_berry()
 }

@@ -4402,12 +4402,13 @@ play_sound :: proc(
     volume:         f32 = 1,
     pitch:          f32 = 1,
     pos:            Maybe([3]f32) = nil,
+    async_decode    := false,
 ) -> (result: audio.Sound_Handle, ok: bool) #optional_ok {
     validate(resource != {})
 
     log.infof("Playing sound %v", resource)
 
-    result, ok = audio.create_sound(resource_handle = resource, group_handle = {})
+    result, ok = audio.create_sound(resource_handle = resource, group_handle = {}, async_decode = async_decode)
     if !ok {
         log.error("Failed to play sound", resource)
         return {}, false

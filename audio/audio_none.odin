@@ -23,7 +23,7 @@ when BACKEND == BACKEND_NONE {
 
     @(require_results) _init_resource_decoded :: proc(resource: ^Resource, handle: Resource_Handle, data: []byte, format: Sample_Format, stereo: bool, sample_rate: u32) -> bool { return true }
     @(require_results) _init_resource_encoded :: proc(resource: ^Resource, handle: Resource_Handle,  data: []byte) -> bool { return true }
-    @(require_results) _init_sound :: proc(sound: ^Sound, resource_handle: Resource_Handle, stream_decode: bool, group_handle: Group_Handle) -> bool { return true }
+    @(require_results) _init_sound :: proc(sound: ^Sound, resource_handle: Resource_Handle, async_decode: bool, group_handle: Group_Handle) -> bool { return true }
     @(require_results) _is_sound_playing :: proc(sound: ^Sound) -> bool { return true }
     @(require_results) _is_sound_finished :: proc(sound: ^Sound) -> bool { return true }
     @(require_results) _get_sound_time :: proc(sound: ^Sound, units: Units) -> f32 { return 10000.0 }
