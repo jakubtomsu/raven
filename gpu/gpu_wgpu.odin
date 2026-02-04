@@ -946,10 +946,10 @@ when BACKEND == BACKEND_WGPU {
         wgpu.RenderPassEncoderSetPipeline(_state.render_pass_encoder, curr_pip.pip)
     }
 
-    _update_buffer :: proc(res: _Resource, data: []u8) {
+    _update_buffer :: proc(res: ^Resource_State, data: []u8, offset: int) {
         wgpu.QueueWriteBuffer(_state.queue,
             res.buf,
-            bufferOffset = 0,
+            bufferOffset = u64(offset),
             data = raw_data(data),
             size = uint(len(data)),
         )

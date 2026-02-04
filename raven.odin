@@ -922,7 +922,6 @@ _finish_init :: proc() {
         usage = .Dynamic,
     ) or_else panic("gpu")
 
-
     _state.mesh_inst_buf = gpu.create_buffer("rv-mesh-inst-buf",
         stride = size_of(Mesh_Inst),
         size = size_of(Mesh_Inst) * MAX_TOTAL_MESH_INSTANCES,
@@ -1501,7 +1500,7 @@ load_scene_from_data :: proc(txt: string, bin: []byte, dst_group: Group_Handle) 
 
     if dst_group != {} {
         ok: bool
-        group, ok = get_group_state(dst_group)
+        group, ok = get_internal_group(dst_group)
         group_handle = dst_group
 
         if !ok {
@@ -1536,7 +1535,7 @@ load_scene_from_data :: proc(txt: string, bin: []byte, dst_group: Group_Handle) 
             return {}, false
         }
 
-        group, _ = get_group_state(group_handle)
+        group, _ = get_internal_group(group_handle)
 
         assert(group != nil)
     }
@@ -1906,7 +1905,7 @@ get_children :: proc(handle: Object_Handle, loc := #caller_location) -> ([]Objec
         return nil, false
     }
 
-    group, group_ok := get_group_state(obj.group)
+    group, group_ok := get_internal_group(obj.group)
     if !group_ok {
         log.error("Failed to get object's children: object's group handle is invalid")
         return nil, false
@@ -2251,7 +2250,7 @@ _table_get :: proc(table: ^[$N]$T, table_gen: [N]Handle_Gen, handle: $H/Handle) 
 //
 
 @(require_results)
-get_group_state :: proc(handle: Group_Handle) -> (result: ^Group, ok: bool) {
+get_internal_group :: proc(handle: Group_Handle) -> (result: ^Group, ok: bool) {
     return _table_get(&_state.groups, _state.groups_gen, handle)
 }
 
@@ -2322,17 +2321,19 @@ create_group :: proc(
 }
 
 clear_group :: proc(handle: Group_Handle) {
-    group, group_ok := get_group_state(handle)
+    group, group_ok := get_internal_group(handle)
     if !group_ok {
         return
     }
 
-    group.mesh_index_num = 0
+    group.spline_vert_num = 0
     group.mesh_vert_num = 0
+    group.mesh_index_num = 0
+    group.object_child_num = 0
 }
 
 destroy_group :: proc(handle: Group_Handle) {
-    group, group_ok := get_group_state(handle)
+    group, group_ok := get_internal_group(handle)
     if !group_ok {
         return
     }
@@ -4452,6 +4453,7 @@ strip_path_name :: proc "contextless" (str: string) -> (result: string) {
 _assertion_failure_proc :: proc(prefix, message: string, loc: runtime.Source_Code_Location) -> ! {
     // based on runtime.default_assertion_contextless_failure_proc
 
+    runtime.print_string("\n")
     runtime.print_caller_location(loc)
     runtime.print_string(" ")
     runtime.print_string(loc.procedure)
@@ -4484,8 +4486,10 @@ _assertion_failure_proc :: proc(prefix, message: string, loc: runtime.Source_Cod
             }
         }
     } else {
-        runtime.print_string("    compile with -debug to show stack trace")
+        runtime.print_string("    compile with -debug to show stack trace\n")
     }
+
+    runtime.print_string("\n")
 
     runtime.trap()
 }

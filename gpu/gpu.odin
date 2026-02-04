@@ -119,6 +119,7 @@ Resource_State :: struct {
     using native:   _Resource,
     kind:           Resource_Kind,
     format:         Texture_Format,
+    usage:          Usage,
     size:           [3]i32,
 }
 
@@ -624,6 +625,7 @@ create_constants :: proc(name: string, item_size: i32, item_num: i32 = 1) -> (re
     state: Resource_State
     state.size = {item_size, item_num, 1}
     state.kind = .Constants
+    state.usage = .Dynamic
     state.native, ok = _create_constants(name, item_size = item_size, item_num = item_num)
     if !ok {
         log.error("GPU: Failed to create native constants")
@@ -690,6 +692,7 @@ update_swapchain :: proc(window: rawptr, size: [2]i32) -> (result: Resource_Hand
         state: Resource_State
         state.kind = .Swapchain
         state.size = {size.x, size.y, 1}
+        state.usage = .Default
         _update_swapchain(&state.native, window, size) or_return
 
         _state.resource_data[index] = state
@@ -750,6 +753,7 @@ create_texture_2d :: proc(
     state: Resource_State
     state.kind = .Texture2D
     state.size = {size.x, size.y, array_depth}
+    state.usage = usage
     state.format = format
 
     state.native = _create_texture_2d(
@@ -807,6 +811,7 @@ create_buffer :: proc(
     state: Resource_State
     state.kind = .Buffer
     state.size = {size, 1, 1}
+    state.usage = usage
 
     state.native = _create_buffer(
         name = name,
@@ -842,6 +847,7 @@ create_index_buffer :: proc(
     state: Resource_State
     state.kind = .Index_Buffer
     state.size = {size, 1, 1}
+    state.usage = usage
 
     state.native = _create_index_buffer(
         name = name,
@@ -955,7 +961,7 @@ update_constants :: proc(handle: Resource_Handle, data: []byte) {
     _update_constants(res, data)
 }
 
-update_buffer :: proc(handle: Resource_Handle, data: []byte) {
+update_buffer :: proc(handle: Resource_Handle, data: []byte, offset: int = 0) {
     validate(_state.curr_pass_desc == {}, "You must do all buffer updates before rendering")
 
     res, res_ok := get_internal_resource(handle)
@@ -966,7 +972,8 @@ update_buffer :: proc(handle: Resource_Handle, data: []byte) {
     validate(res.kind == .Buffer)
     validate(len(data) <= int(res.size.x))
     validate(res.size.y == 1 && res.size.z == 1)
-    _update_buffer(res, data)
+    validate(res.usage != .Immutable)
+    _update_buffer(res, data, offset)
 }
 
 update_texture_2d :: proc(handle: Resource_Handle, data: []byte, #any_int slice: i32 = 0) {

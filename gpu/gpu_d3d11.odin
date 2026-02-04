@@ -1147,21 +1147,44 @@ when BACKEND == BACKEND_D3D11 {
         _d3d11_messages()
     }
 
-    _update_buffer :: proc(res: _Resource, data: []byte) {
-        mapped: d3d.MAPPED_SUBRESOURCE
-        if !_d3d11_check(_state.device_context->Map(
-            res.buf,
-            Subresource = 0,
-            MapType = .WRITE_DISCARD,
-            MapFlags = {},
-            pMappedResource = &mapped,
-        )) {
-            return
+    _update_buffer :: proc(res: ^Resource_State, data: []byte, offset: int) {
+        switch res.usage {
+        case .Immutable:
+            assert(false)
+
+        case .Dynamic:
+            mapped: d3d.MAPPED_SUBRESOURCE
+            if !_d3d11_check(_state.device_context->Map(
+                res.buf,
+                Subresource = 0,
+                MapType = .WRITE_DISCARD,
+                MapFlags = {},
+                pMappedResource = &mapped,
+            )) {
+                return
+            }
+
+            runtime.mem_copy_non_overlapping(rawptr(uintptr(mapped.pData) + uintptr(offset)), raw_data(data), len(data))
+
+            _state.device_context->Unmap(res.buf, 0)
+
+        case .Default:
+            _state.device_context->UpdateSubresource(
+                pDstResource = res.buf,
+                DstSubresource = 0,
+                pDstBox = &d3d.BOX{
+                    left    = u32(offset),
+                    top     = 0,
+                    right   = u32(offset + len(data)),
+                    bottom  = 1,
+                    front   = 0,
+                    back    = 1,
+                },
+                pSrcData = raw_data(data),
+                SrcRowPitch = 0,
+                SrcDepthPitch = 0,
+            )
         }
-
-        runtime.mem_copy_non_overlapping(mapped.pData, raw_data(data), len(data))
-
-        _state.device_context->Unmap(res.buf, 0)
 
         _d3d11_messages()
     }
@@ -1178,7 +1201,20 @@ when BACKEND == BACKEND_D3D11 {
             runtime.mem_copy_non_overlapping(raw_data(res.const_buf_data), raw_data(data), len(data))
 
         } else {
-            _update_buffer(res.native, data)
+            mapped: d3d.MAPPED_SUBRESOURCE
+            if !_d3d11_check(_state.device_context->Map(
+                res.buf,
+                Subresource = 0,
+                MapType = .WRITE_DISCARD,
+                MapFlags = {},
+                pMappedResource = &mapped,
+            )) {
+                return
+            }
+
+            runtime.mem_copy_non_overlapping(mapped.pData, raw_data(data), len(data))
+
+            _state.device_context->Unmap(res.buf, 0)
         }
     }
 
@@ -1399,10 +1435,10 @@ when BACKEND == BACKEND_D3D11 {
                 level: log.Level
                 switch msg.Severity {
                 case .CORRUPTION: level = .Fatal
-	            case .ERROR: level = .Error
-	            case .WARNING: level = .Warning
-	            case .INFO: level = .Info
-	            case .MESSAGE: level = .Debug
+                case .ERROR: level = .Error
+                case .WARNING: level = .Warning
+                case .INFO: level = .Info
+                case .MESSAGE: level = .Debug
                 }
 
                 log.logf(level, "GPU D3D11 %s: %s", msg.Category, msg.pDescription, location = loc)
