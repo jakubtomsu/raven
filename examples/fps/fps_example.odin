@@ -13,6 +13,8 @@ State :: struct {
     vel:        rv.Vec3,
     ang:        rv.Vec3,
     gun_pos:    rv.Vec3,
+    group:      rv.Group_Handle,
+    terrain:    rv.Mesh_Handle,
 }
 
 main :: proc() {
@@ -37,6 +39,17 @@ _init :: proc() -> ^State {
 
     state.pos = {0, 1, 0}
     state.ang = {0, 0, 0}
+
+    state.group = rv.create_group()
+
+    state.terrain = rv.create_mesh_from_data("terrain", state.group,
+        {
+            {pos = {0, 0, 0}, color = {255, 0, 255}},
+            {pos = {0, 10, 0}, color = 255},
+            {pos = {10, 10, 0}, color = {0, 0, 255}},
+        },
+        indices = {0, 1, 2},
+    )
 
     return state
 }
@@ -106,6 +119,7 @@ _update :: proc(prev_state: ^State) -> ^State {
     rv.bind_texture("default")
     rv.bind_depth_test(true)
     rv.bind_depth_write(true)
+    rv.bind_fill(.All)
 
     rv.draw_mesh(
         rv.get_mesh("Cube"),
@@ -114,6 +128,10 @@ _update :: proc(prev_state: ^State) -> ^State {
         scale = {0.03, 0.05, 0.12},
     )
 
+    rv.draw_mesh(
+        state.terrain,
+        0,
+    )
 
     rv.draw_mesh(
         rv.get_mesh("Plane"),

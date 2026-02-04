@@ -969,7 +969,7 @@ update_buffer :: proc(handle: Resource_Handle, data: []byte, offset: int = 0) {
         return
     }
 
-    validate(res.kind == .Buffer)
+    validate(res.kind == .Buffer || res.kind == .Index_Buffer)
     validate(len(data) <= int(res.size.x))
     validate(res.size.y == 1 && res.size.z == 1)
     validate(res.usage != .Immutable)

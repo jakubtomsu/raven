@@ -2386,6 +2386,49 @@ destroy_group :: proc(handle: Group_Handle) {
 
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// MARK: Meshes
+//
+
+create_mesh_from_data :: proc(
+    name:           string,
+    group_handle:   Group_Handle,
+    vertices:       []Mesh_Vertex,
+    indices:        []Vertex_Index,
+) -> (result: Mesh_Handle, ok: bool) #optional_ok {
+    log.debugf("Creating Mesh '%s' with %i verts and %i tris", name, len(vertices), len(indices) / 3)
+
+    group := get_internal_group(group_handle) or_return
+
+    mesh: Mesh
+    mesh.group = group_handle
+
+    mesh.vert_num = i32(len(vertices))
+    mesh.index_num = i32(len(indices))
+    mesh.vert_offs = group.mesh_vert_num
+    mesh.index_offs = group.mesh_index_num
+
+    mesh.bounds_min = max(f32)
+    mesh.bounds_max = min(f32)
+    for vert in vertices {
+        mesh.bounds_min = linalg.min(mesh.bounds_min, vert.pos)
+        mesh.bounds_max = linalg.max(mesh.bounds_max, vert.pos)
+    }
+
+    handle, handle_ok := insert_mesh_by_name(name, mesh)
+    if !handle_ok {
+        log.errorf("Failed to create mesh '%s', table is full", name)
+        return {}, false
+    }
+
+    gpu.update_buffer(group.vbuf, gpu.slice_bytes(vertices), offset = int(mesh.vert_offs) * size_of(Mesh_Vertex))
+    gpu.update_buffer(group.ibuf, gpu.slice_bytes(indices), offset = int(mesh.index_offs) * size_of(Vertex_Index))
+
+    return handle, true
+}
+
+
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // MARK: Textures
 //
 
@@ -4471,7 +4514,7 @@ _assertion_failure_proc :: proc(prefix, message: string, loc: runtime.Source_Cod
             buf: [64]debug_trace.Frame
             runtime.print_string("Debug Stack Trace:\n")
 
-            frames := debug_trace.frames(ctx, skip = 0, frames_buffer = buf[:])
+            frames := debug_trace.frames(ctx, skip = 1, frames_buffer = buf[:])
             for f, i in frames {
                 fl := debug_trace.resolve(ctx, f, context.temp_allocator)
                 if fl.loc.file_path == "" && fl.loc.line == 0 {
