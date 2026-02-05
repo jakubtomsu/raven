@@ -5,19 +5,12 @@ package raven_platform
 import "core:log"
 import "core:sys/wasm/js"
 
-// NOTE: backend guard is not required on JS backend
-
 // // NOTE: frame loop is done by the runtime.js repeatedly calling `step`.
 // @(private="file", export)
 // step :: proc(dt: f32) -> bool {
-//     if !state.os.initialized {
-//         return true
-//     }
-
 //     frame(dt)
 //     return true
 // }
-
 
 
 _State :: struct {
@@ -419,6 +412,91 @@ _js_unsupported :: proc(loc := #caller_location) {
     // log.warnf("'%s' is not supported on JS target", loc.procedure, location = loc)
 }
 
+_js_mouse_button :: proc(index: i16) -> Mouse_Button {
+    switch index {
+    case 0: return .Left // Main button, usually the left button or the un-initialized state
+    case 1: return .Middle // Auxiliary button, usually the wheel button or the middle button (if present)
+    case 2: return .Right // Secondary button, usually the right button
+    case 3: return .Extra_1 // Fourth button, typically the Browser Back button
+    case 4: return .Extra_2 // Fifth button, typically the Browser Forward button
+    }
+    assert(false)
+    return .Left
+}
+
+_js_key_code :: proc(str: string) -> Key {
+    // TODO: first match prefix for faster lookups?
+    switch str {
+    case "ArrowLeft":       return .Left
+    case "ArrowRight":      return .Right
+    case "ArrowUp":         return .Up
+    case "ArrowDown":       return .Down
+
+    case "Digit0": return .Num0
+    case "Digit1": return .Num1
+    case "Digit2": return .Num2
+    case "Digit3": return .Num3
+    case "Digit4": return .Num4
+    case "Digit5": return .Num5
+    case "Digit6": return .Num6
+    case "Digit7": return .Num7
+    case "Digit8": return .Num8
+    case "Digit9": return .Num9
+
+    case "KeyA": return .A
+    case "KeyB": return .B
+    case "KeyC": return .C
+    case "KeyD": return .D
+    case "KeyE": return .E
+    case "KeyF": return .F
+    case "KeyG": return .G
+    case "KeyH": return .H
+    case "KeyI": return .I
+    case "KeyJ": return .J
+    case "KeyK": return .K
+    case "KeyL": return .L
+    case "KeyM": return .M
+    case "KeyN": return .N
+    case "KeyO": return .O
+    case "KeyP": return .P
+    case "KeyQ": return .Q
+    case "KeyR": return .R
+    case "KeyS": return .S
+    case "KeyT": return .T
+    case "KeyU": return .U
+    case "KeyV": return .V
+    case "KeyW": return .W
+    case "KeyX": return .X
+    case "KeyY": return .Y
+    case "KeyZ": return .Z
+
+    case "Space":           return .Space
+    case "Quote":           return .Apostrophe
+    case "Comma":           return .Comma
+    case "Minus":           return .Minus
+    case "Period":          return .Period
+    case "Slash":           return .Slash
+    case "Semicolon":       return .Semicolon
+    case "Equal":           return .Equal
+    case "BracketLeft":     return .Left_Bracket
+    case "Backslash":       return .Backslash
+    case "BracketRight":    return .Right_Bracket
+    case "Backquote":       return .Backtick
+
+    case "AltLeft": return .Left_Alt
+    case "ShiftLeft": return .Left_Shift
+    case "ShiftRight": return .Right_Shift
+    case "ControlLeft": return .Left_Control
+    case "ControlRight": return .Right_Control
+    case "Tab": return .Tab
+    case "Enter": return .Enter
+    case "Escape": return .Escape
+    case "Delete": return .Delete
+    }
+
+    return .Invalid
+}
+
 
 _JS_Event_Callback :: #type proc(event: js.Event)
 
@@ -440,31 +518,90 @@ _js_event_callbacks := [js.Event_Kind]_JS_Event_Callback {
     .Fullscreen_Error = nil,
     .Click = nil,
     .Double_Click = nil,
-    .Mouse_Move = nil,
+
+    .Mouse_Move = proc(e: js.Event) {
+        assert(e.kind == .Mouse_Move)
+        _event_queue_push(Event_Mouse{
+            pos = {i32(e.mouse.screen.x), i32(e.mouse.screen.y)},
+            move = {i32(e.mouse.movement.x), i32(e.mouse.movement.y)},
+        })
+    },
+
     .Mouse_Over = nil,
     .Mouse_Out = nil,
-    .Mouse_Up = nil,
-    .Mouse_Down = nil,
-    .Key_Up = nil,
-    .Key_Down = nil,
-    .Key_Press = nil,
-    .Scroll = nil,
-    .Wheel = nil,
+
+    .Mouse_Up = proc(e: js.Event) {
+        assert(e.kind == .Mouse_Up)
+        _event_queue_push(Event_Mouse_Button{
+            button = _js_mouse_button(e.mouse.button),
+            pressed = false,
+        })
+    },
+
+    .Mouse_Down = proc(e: js.Event) {
+        assert(e.kind == .Mouse_Down)
+        _event_queue_push(Event_Mouse_Button{
+            button = _js_mouse_button(e.mouse.button),
+            pressed = true,
+        })
+    },
+
+    .Key_Up = proc(e: js.Event) {
+        assert(e.kind == .Key_Up)
+        key := _js_key_code(e.key.code)
+        if key == .Invalid do return
+        _event_queue_push(Event_Key{
+            key = key,
+            pressed = false,
+        })
+    },
+
+    .Key_Down = proc(e: js.Event) {
+        assert(e.kind == .Key_Down)
+        key := _js_key_code(e.key.code)
+        if key == .Invalid do return
+        _event_queue_push(Event_Key{
+            key = key,
+            pressed = true,
+        })
+    },
+
+    .Key_Press = nil, // obsolete
+
+    .Scroll = proc(e: js.Event) {
+        assert(e.kind == .Scroll)
+        event: Event_Scroll
+        event.delta = {f32(e.scroll.delta.x), f32(e.scroll.delta.y)}
+        _event_queue_push(event)
+    },
+
+    .Wheel = proc(e: js.Event) {
+        assert(e.kind == .Wheel)
+        event: Event_Scroll
+        // TODO: e.wheel.delta_mode
+        event.delta = {f32(e.wheel.delta.x), f32(e.wheel.delta.y)}
+        _event_queue_push(event)
+    },
+
     .Focus = nil,
     .Focus_In = nil,
     .Focus_Out = nil,
+
     .Submit = nil,
     .Blur = nil,
     .Change = nil,
     .Hash_Change = nil,
     .Select = nil,
+
     .Animation_Start = nil,
     .Animation_End = nil,
     .Animation_Iteration = nil,
     .Animation_Cancel = nil,
+
     .Copy = nil,
     .Cut = nil,
     .Paste = nil,
+
     .Pointer_Cancel = nil,
     .Pointer_Down = nil,
     .Pointer_Enter = nil,
@@ -476,8 +613,10 @@ _js_event_callbacks := [js.Event_Kind]_JS_Event_Callback {
     .Lost_Pointer_Capture = nil,
     .Pointer_Lock_Change = nil,
     .Pointer_Lock_Error = nil,
+
     .Selection_Change = nil,
     .Selection_Start = nil,
+
     .Touch_Cancel = nil,
     .Touch_End = nil,
     .Touch_Move = nil,
@@ -487,8 +626,10 @@ _js_event_callbacks := [js.Event_Kind]_JS_Event_Callback {
     .Transition_Run = nil,
     .Transition_Cancel = nil,
     .Context_Menu = nil,
+
     .Gamepad_Connected = nil,
     .Gamepad_Disconnected = nil,
+
     .Custom = nil,
 }
 

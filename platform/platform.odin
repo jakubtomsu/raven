@@ -110,7 +110,7 @@ Event_Mouse_Button :: struct {
 }
 
 Event_Scroll :: struct {
-    amount: [2]f32,
+    delta:  [2]f32,
 }
 
 Event_Window_Size :: struct {

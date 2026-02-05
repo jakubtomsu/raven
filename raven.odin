@@ -1212,7 +1212,7 @@ begin_frame :: proc() -> (keep_running: bool) {
             _state.input.mouse_pos.y = f32(_state.screen_size.y - v.pos.y)
 
         case platform.Event_Scroll:
-            _state.input.scroll_delta += v.amount
+            _state.input.scroll_delta += v.delta
 
         case platform.Event_Window_Size:
         }

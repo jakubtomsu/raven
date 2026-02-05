@@ -1401,14 +1401,14 @@ when BACKEND == BACKEND_WINDOWS {
 
             if msg == windows.WM_MOUSEWHEEL {
                 _event_queue_push(Event_Scroll{
-                    amount = {
+                    delta = {
                         0,
                         amount,
                     },
                 })
             } else {
                 _event_queue_push(Event_Scroll{
-                    amount = {
+                    delta = {
                         amount,
                         0,
                     },

@@ -544,28 +544,48 @@ when BACKEND == BACKEND_WGPU {
 
         depth_stencil: ^wgpu.DepthStencilState
 
-        if desc.depth_format != .Invalid && _depth_enable(desc.depth_comparison, desc.depth_write) {
-            depth_stencil = &wgpu.DepthStencilState{
-                format = _wgpu_texture_format(desc.depth_format),
-                depthWriteEnabled = desc.depth_write ? .True : .False,
-                depthCompare = _wgpu_comparison(desc.depth_comparison),
-                stencilFront = wgpu.StencilFaceState{
-                    passOp      = .Keep,
-                    failOp      = .Keep,
-                    depthFailOp = .Keep,
-                    compare     = .Always,
-                },
-                stencilBack = wgpu.StencilFaceState{
-                    passOp      = .Keep,
-                    failOp      = .Keep,
-                    depthFailOp = .Keep,
-                    compare     = .Always,
-                },
-                stencilReadMask = 0,
-                stencilWriteMask = 0,
-                depthBias = desc.depth_bias,
-                depthBiasSlopeScale = 0,
-                depthBiasClamp = 0,
+        if desc.depth_format != .Invalid {
+            if _depth_enable(desc.depth_comparison, desc.depth_write) {
+                depth_stencil = &wgpu.DepthStencilState{
+                    format = _wgpu_texture_format(desc.depth_format),
+                    depthWriteEnabled = desc.depth_write ? .True : .False,
+                    depthCompare = _wgpu_comparison(desc.depth_comparison),
+                    stencilFront = wgpu.StencilFaceState{
+                        passOp      = .Keep,
+                        failOp      = .Keep,
+                        depthFailOp = .Keep,
+                        compare     = .Always,
+                    },
+                    stencilBack = wgpu.StencilFaceState{
+                        passOp      = .Keep,
+                        failOp      = .Keep,
+                        depthFailOp = .Keep,
+                        compare     = .Always,
+                    },
+                    stencilReadMask = 0,
+                    stencilWriteMask = 0,
+                    depthBias = desc.depth_bias,
+                    depthBiasSlopeScale = 0,
+                    depthBiasClamp = 0,
+                }
+            } else {
+                    depth_stencil = &wgpu.DepthStencilState{
+                    format = _wgpu_texture_format(desc.depth_format),
+                    depthWriteEnabled = .False,
+                    depthCompare = .Always,
+                    stencilFront = wgpu.StencilFaceState{
+                        passOp      = .Keep,
+                        failOp      = .Keep,
+                        depthFailOp = .Keep,
+                        compare     = .Always,
+                    },
+                    stencilBack = wgpu.StencilFaceState{
+                        passOp      = .Keep,
+                        failOp      = .Keep,
+                        depthFailOp = .Keep,
+                        compare     = .Always,
+                    },
+                }
             }
         }
 
