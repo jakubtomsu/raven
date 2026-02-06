@@ -354,6 +354,14 @@ Spline :: struct {
 Vertex_Index :: u16 // GPU Vertex Index
 Spline_Vertex :: rscn.Spline_Vertex
 
+// TODO: pack vertex data into the following format:
+// [3]u16    pos         6
+// [2]u8     normal      2
+// [2]u16    uv          4
+// [3]u8     color       3
+// [1]u8     _pad        1
+// total 16 bytes
+
 Mesh_Vertex :: struct #align(16) {
     pos:    [3]f32,
     _pad:   f32,
