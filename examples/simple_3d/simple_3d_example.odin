@@ -91,7 +91,7 @@ _update :: proc(prev_state: ^State) -> ^State {
 
         rv.draw_mesh(rv.get_mesh("Circle"), {-3, 0, 0}, col = rv.YELLOW)
         rv.draw_mesh(rv.get_mesh("Plane"), {0, 0, 0}, col = rv.GREEN)
-        rv.draw_mesh(rv.get_mesh("Cube"), {3, 0, 0}, rv.quat_angle_axis(rv.get_time(), {0, 1, 0}))
+        rv.draw_mesh(rv.get_mesh("Cube"), {3, 0, 0}, rv.quat_angle_axis(rv.get_time(), {0, 1, 0}), col = rv.GRAY, add_col = rv.WHITE * rv.nsin(rv.get_time()))
         rv.draw_mesh(rv.get_mesh("Icosphere"), {6, 0, 0}, col = rv.CYAN)
         rv.draw_mesh(rv.get_mesh("Cylinder"), {9, 0, 0}, scale = {1, 0.1 + rv.nsin(rv.get_time() * 0.5), 1}, col = rv.GRAY)
 
@@ -113,9 +113,9 @@ _update :: proc(prev_state: ^State) -> ^State {
     rv.bind_texture("thick")
     rv.bind_depth_test(true)
     rv.bind_depth_write(true)
-    rv.draw_text("Use WASD and QE to move, mouse to look", {200, 14, 0.1}, scale = math.ceil(rv._state.dpi_scale)) // DPI HACK
+    rv.draw_text("Use WASD and QE to move, mouse to look", {220, 18, 0.1}, scale = math.ceil(rv._state.dpi_scale)) // DPI HACK
 
-    rv.draw_counter(.CPU_Frame_Ns, {10, 10, 0.1}, scale = 2, unit = 1e-6, col = rv.GREEN)
+    rv.draw_counter(.CPU_Frame_Ns, {15, 15, 0.1}, scale = 2, unit = 1e-6, col = rv.GREEN)
 
     rv.upload_gpu_layers()
     rv.render_gpu_layer(0, rv.DEFAULT_RENDER_TEXTURE, rv.Vec3{0, 0, 0.1}, true)

@@ -55,10 +55,11 @@ struct Mesh_Inst {
 
 struct VS_Out {
     float4 pos : SV_Position;
-    float3 world_pos: POS;
+    float3 world_pos : POS;
     float3 normal : NOR;
     float2 uv : TEX;
     float4 col : COL;
+    float4 add_col : ADD_COL;
     uint   tex_slice : TEXSLICE;
 };
 

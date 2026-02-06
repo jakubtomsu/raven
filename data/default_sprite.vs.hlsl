@@ -17,6 +17,7 @@ VS_Out vs_main(uint vid : SV_VertexID, uint inst_id : SV_InstanceID) {
     o.uv = uv_min + uv_size * local_uv;
     // o.uv = local_uv;
     o.col = unpack_signed_color_unorm8(inst.col);
+    o.add_col = unpack_signed_color_unorm8(inst.add_col);
     o.tex_slice = inst.tex_slice;
 
     return o;
