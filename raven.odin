@@ -3195,6 +3195,37 @@ draw_sprite_inst :: proc(inst: Sprite_Inst) {
     _push_sprite_draw(_state.bind_state.draw_layer, draw)
 }
 
+draw_rect :: proc(
+    rect:       Rect,
+    tex_rect:   Rect = {0, 1},
+    z:          f32 = 0.0,
+    col:        Vec4 = 1,
+) {
+    validate_rect(rect)
+    validate_rect(tex_rect)
+    validate_f32(z)
+    UV_EPS :: (1.0 / 8192.0)
+
+    center := rect_center(rect)
+    size := rect_full_size(rect)
+
+    tex_size_sign := Vec2{
+        math.sign_f32(size.x),
+        math.sign_f32(size.y),
+    }
+
+    draw_sprite_inst(Sprite_Inst{
+        pos = {center.x, center.y, z},
+        mat_x = {size.x * 0.5, 0, 0},
+        mat_y = {0, size.y * 0.5, 0},
+        uv_min_x = tex_rect.min.x + tex_size_sign.x * UV_EPS,
+        uv_min_y = tex_rect.min.y + tex_size_sign.y * UV_EPS,
+        uv_size = rect_full_size(tex_rect) - tex_size_sign * UV_EPS * 2,
+        color = pack_unorm8(col),
+        tex_slice = _state.bind_state.texture_slice,
+    })
+}
+
 
 
 // Returns a slice of the GPU sprite instances.
@@ -4677,6 +4708,8 @@ validate_f32 :: #force_inline proc(x: f32, loc := #caller_location) {
     validate(x == x && (x * 0.5 != x || x == 0), "Value is NaN or Inf", loc = loc)
 }
 
+
+
 @(disabled = !VALIDATION)
 validate_vec :: proc(v: [$N]f32, loc := #caller_location) {
     for x in v {
@@ -4691,7 +4724,6 @@ validate_quat :: proc(q: quaternion128, loc := #caller_location) {
     validate_f32(q.z, loc)
     validate_f32(q.w, loc)
 }
-
 
 @(disabled = !VALIDATION)
 validate_mat2 :: proc(m: Mat2, loc := #caller_location) {
@@ -4712,6 +4744,12 @@ validate_mat4 :: proc(m: Mat4, loc := #caller_location) {
     validate_vec(m[1], loc)
     validate_vec(m[2], loc)
     validate_vec(m[3], loc)
+}
+
+@(disabled = !VALIDATION)
+validate_rect :: proc(v: Rect, loc := #caller_location) {
+    validate_vec(v.min)
+    validate_vec(v.max)
 }
 
 @(disabled = !VALIDATION)

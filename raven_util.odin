@@ -223,77 +223,84 @@ pack_unorm8 :: proc(val: [4]f32) -> [4]u8 {
 // MARK: Rect
 //
 
-rect_center :: proc(r: Rect) -> Vec2 {
-    return (r.min + r.max) * 0.5
+@(require_results) rect_make :: proc(min: Vec2, full_size: Vec2) -> Rect {
+    return {
+        min = min,
+        max = min + full_size,
+    }
 }
 
-rect_from_box :: proc(pos: Vec2, half_size: Vec2) -> Rect {
+@(require_results) rect_make_centered :: proc(pos: Vec2, half_size: Vec2) -> Rect {
     return {pos - half_size, pos + half_size}
 }
 
-rect_anchor :: proc(r: Rect, anchor: Vec2) -> Vec2 {
+@(require_results) rect_center :: proc(r: Rect) -> Vec2 {
+    return (r.min + r.max) * 0.5
+}
+
+@(require_results) rect_anchor :: proc(r: Rect, anchor: Vec2) -> Vec2 {
     return {lerp(r.min.x, r.max.x, anchor.x), lerp(r.min.y, r.max.y, anchor.y)}
 }
 
-rect_full_size :: #force_inline proc(r: Rect) -> Vec2 {
+@(require_results) rect_full_size :: #force_inline proc(r: Rect) -> Vec2 {
     return r.max - r.min
 }
 
-rect_expand :: proc(r: Rect, a: Vec2) -> Rect {
+@(require_results) rect_expand :: proc(r: Rect, a: Vec2) -> Rect {
     return {r.min - a, r.max + a}
 }
 
-rect_scale :: proc(r: Rect, a: Vec2) -> Rect {
+@(require_results) rect_scale :: proc(r: Rect, a: Vec2) -> Rect {
     size := rect_full_size(r) * 0.5
     center := rect_center(r)
     return {center - size * a, center + size * a}
 }
 
-rect_contains_point :: proc(r: Rect, p: Vec2) -> bool {
+@(require_results) rect_contains_point :: proc(r: Rect, p: Vec2) -> bool {
     return p.x > r.min.x && p.y > r.min.y && p.x < r.max.x && p.y < r.max.y
 }
 
-rect_clamp_point :: proc(r: Rect, p: Vec2) -> Vec2 {
+@(require_results) rect_clamp_point :: proc(r: Rect, p: Vec2) -> Vec2 {
     return {clamp(p.x, r.min.x, r.max.x), clamp(p.y, r.min.y, r.max.y)}
 }
 
-rect_cut_left :: proc(r: ^Rect, a: f32) -> Rect {
+@(require_results) rect_cut_left :: proc(r: ^Rect, a: f32) -> Rect {
     minx := r.min.x
     r.min.x = min(r.max.x, r.min.x + a)
     return {{minx, r.min.y}, {r.min.x, r.max.y}}
 }
 
-rect_cut_right :: proc(r: ^Rect, a: f32) -> Rect {
+@(require_results) rect_cut_right :: proc(r: ^Rect, a: f32) -> Rect {
     maxx := r.max.x
     r.max.x = max(r.min.x, r.max.x - a)
     return {{r.max.x, r.min.y}, {maxx, r.max.y}}
 }
 
-rect_cut_top :: proc(r: ^Rect, a: f32) -> Rect {
+@(require_results) rect_cut_top :: proc(r: ^Rect, a: f32) -> Rect {
     miny := r.min.y
     r.min.y = min(r.max.y, r.min.y + a)
     return {{r.min.x, miny}, {r.max.x, r.min.y}}
 }
 
-rect_cut_bottom :: proc(r: ^Rect, a: f32) -> Rect {
+@(require_results) rect_cut_bottom :: proc(r: ^Rect, a: f32) -> Rect {
     maxy := r.max.y
     r.max.y = max(r.min.y, r.max.y - a)
     return {{r.min.x, r.max.y}, {r.max.x, maxy}}
 }
 
-rect_split_left :: proc(r: ^Rect, t: f32) -> Rect {
+@(require_results) rect_split_left :: proc(r: ^Rect, t: f32) -> Rect {
     return rect_cut_left(r, (r.max.x - r.min.x) * t)
 }
 
-rect_split_right :: proc(r: ^Rect, t: f32) -> Rect {
+@(require_results) rect_split_right :: proc(r: ^Rect, t: f32) -> Rect {
     return rect_cut_right(r, (r.max.x - r.min.x) * t)
 }
 
-rect_split_top :: proc(r: ^Rect, t: f32) -> Rect {
+@(require_results) rect_split_top :: proc(r: ^Rect, t: f32) -> Rect {
     return rect_cut_top(r, (r.max.y - r.min.y) * t)
 }
 
-rect_split_bottom :: proc(r: ^Rect, t: f32) -> Rect {
+@(require_results) rect_split_bottom :: proc(r: ^Rect, t: f32) -> Rect {
     return rect_cut_bottom(r, (r.max.y - r.min.y) * t)
 }
 

@@ -66,6 +66,7 @@ _state: ^State
 
 State :: struct #align(64) {
     using native:           _State,
+    in_frame:               bool,
     allocator:              runtime.Allocator,
     swapchain_res:          Resource_Handle,
     // On WebGPU, the initialization is async.
@@ -478,6 +479,7 @@ begin_frame :: proc() -> (ok: bool) {
     _state.pipeline_builder = {}
     _state.curr_pipeline = {}
     _state.curr_pipeline_desc = {}
+    _state.in_frame = true
 
     return _begin_frame()
 }
@@ -486,7 +488,9 @@ begin_frame :: proc() -> (ok: bool) {
 
 end_frame :: proc(sync: bool = true) {
     validate(_state != nil)
+    validate(_state.in_frame)
     _end_frame(sync)
+    _state.in_frame = false
 }
 
 

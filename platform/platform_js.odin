@@ -5,7 +5,7 @@ package raven_platform
 import "core:log"
 import "core:sys/wasm/js"
 
-// // NOTE: frame loop is done by the runtime.js repeatedly calling `step`.
+// // NOTE: frame loop is done by the odin.js repeatedly calling `step`.
 // @(private="file", export)
 // step :: proc(dt: f32) -> bool {
 //     frame(dt)
@@ -25,6 +25,7 @@ _Barrier :: struct { _: u8 }
 _Thread :: struct { _: u8 }
 _Window :: struct { _: u8 }
 _Module :: struct { _: u8 }
+
 
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -430,10 +431,10 @@ _js_key_code :: proc(str: string) -> Key {
     // https://developer.mozilla.org/en-US/docs/Web/API/KeyboardEvent/code
     // TODO: first match prefix for faster lookups?
     switch str {
-    case "ArrowLeft":       return .Left
-    case "ArrowRight":      return .Right
-    case "ArrowUp":         return .Up
-    case "ArrowDown":       return .Down
+    case "ArrowLeft":   return .Left
+    case "ArrowRight":  return .Right
+    case "ArrowUp":     return .Up
+    case "ArrowDown":   return .Down
 
     case "Digit0": return .Num0
     case "Digit1": return .Num1
@@ -486,15 +487,15 @@ _js_key_code :: proc(str: string) -> Key {
     case "BracketRight":    return .Right_Bracket
     case "Backquote":       return .Backtick
 
-    case "AltLeft": return .Left_Alt
-    case "ShiftLeft": return .Left_Shift
-    case "ShiftRight": return .Right_Shift
-    case "ControlLeft": return .Left_Control
-    case "ControlRight": return .Right_Control
-    case "Tab": return .Tab
-    case "Enter": return .Enter
-    case "Escape": return .Escape
-    case "Delete": return .Delete
+    case "AltLeft":         return .Left_Alt
+    case "ShiftLeft":       return .Left_Shift
+    case "ShiftRight":      return .Right_Shift
+    case "ControlLeft":     return .Left_Control
+    case "ControlRight":    return .Right_Control
+    case "Tab":             return .Tab
+    case "Enter":           return .Enter
+    case "Escape":          return .Escape
+    case "Delete":          return .Delete
     }
 
     return .Invalid
