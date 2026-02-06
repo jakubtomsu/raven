@@ -3,7 +3,8 @@ StructuredBuffer<Vertex> verts : register(t1);
 
 VS_Out vs_main(uint vid : SV_VertexID, uint inst_id : SV_InstanceID) {
     Mesh_Inst inst = instances[inst_id + instance_offset];
-    Vertex vert = verts[vid + inst.vert_offs];
+    uint vert_offs = inst.tex_slice_vert_offs >> 8;
+    Vertex vert = verts[vid + vert_offs];
 
     float3x3 mat = float3x3(inst.mat_x, inst.mat_y, inst.mat_z);
 
@@ -13,9 +14,9 @@ VS_Out vs_main(uint vid : SV_VertexID, uint inst_id : SV_InstanceID) {
     o.world_pos = world_pos;
     o.normal = unpack_unorm8(vert.normal).xyz; // * adjugate
     o.uv = vert.uv;
-    o.color = unpack_unorm8(inst.color);
-    o.color.rgb *= unpack_unorm8(vert.color).rgb;
-    o.tex_slice = inst.tex_slice;
+    o.col = unpack_signed_color_unorm8(inst.col);
+    o.col.rgb *= unpack_unorm8(vert.col).rgb;
+    o.tex_slice = inst.tex_slice_vert_offs & 0xff;
 
     return o;
 }

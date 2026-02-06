@@ -259,7 +259,7 @@ when BACKEND == BACKEND_D3D11 {
     }
 
     _create_blend :: proc(descs: [RENDER_TEXTURE_BIND_SLOTS]Blend_Desc) -> (result: _Blend) {
-        log.debug("GPU: Creating D3D11 blend state", descs)
+        log.debug("GPU: Creating D3D11 blend state")
 
         if descs == {} {
             return {}

@@ -499,28 +499,34 @@ Draw_Batch :: struct #all_or_none {
 #assert(size_of(Sprite_Inst) == 64)
 Sprite_Inst :: struct #all_or_none #align(16) {
     pos:        [3]f32,
-    color:      [4]u8,
+    col:        [4]u8,
+
     mat_x:      [3]f32,
-    uv_min_x:   f32,
+    uv_min:     [2]u16,
+
     mat_y:      [3]f32,
-    uv_min_y:   f32,
-    uv_size:    [2]f32,
+    uv_size:    [2]u16,
+
+    add_col:    [4]u8,
+    param:      u32,
     tex_slice:  u8,
+    _:          [3]u8,
+    _:          u32,
 }
 
+#assert(size_of(Mesh_Inst) == 64)
 Mesh_Inst :: struct #all_or_none #align(16) {
-    pos:        Vec3,
-    _:          f32,
-    mat_x:      Vec3,
-    _:          f32,
-    mat_y:      Vec3,
-    _:          f32,
-    mat_z:      Vec3,
-    _:          f32,
+    pos:        [3]f32,
     col:        [4]u8,
-    vert_offs:  u32,
+
+    mat_x:      [3]f32,
+    add_col:    [4]u8,
+
+    mat_y:      [3]f32,
     tex_slice:  u8,
-    _pad0:      [3]u8,
+    vert_offs:  [3]u8, // 24 bit packed
+
+    mat_z:      [3]f32,
     param:      u32, // user param
 }
 
@@ -3120,7 +3126,9 @@ draw_sprite :: proc(
     rot:        Quat = 1,
     anchor:     Vec2 = 0,
     angle:      f32 = 0,
+    add_col:    Vec4 = 0,
     scaling:    Sprite_Scaling = .Pixel,
+    param:      u32 = 0,
 ) {
     validate_vec(pos)
     validate_vec(scale)
@@ -3162,16 +3170,17 @@ draw_sprite :: proc(
         math.sign_f32(rect_size.y),
     }
 
-    inst := Sprite_Inst{
+    inst := pack_sprite_inst(
         pos = center,
         mat_x = mat[0] * size.x,
         mat_y = mat[1] * size.y,
-        uv_min_x = rect.min.x + rect_size_sign.x * UV_EPS,
-        uv_min_y = rect.min.y + rect_size_sign.y * UV_EPS,
+        uv_min = rect.min + rect_size_sign * UV_EPS,
         uv_size = rect_size - rect_size_sign * UV_EPS * 2,
-        color = pack_unorm8(col),
+        col = col,
+        add_col = add_col,
         tex_slice = _state.bind_state.texture_slice,
-    }
+        param = param,
+    )
 
     draw_sprite_inst(inst)
 }
@@ -3200,6 +3209,8 @@ draw_rect :: proc(
     tex_rect:   Rect = {0, 1},
     z:          f32 = 0.0,
     col:        Vec4 = 1,
+    add_col:    Vec4 = 0,
+    param:      u32 = 0,
 ) {
     validate_rect(rect)
     validate_rect(tex_rect)
@@ -3214,16 +3225,19 @@ draw_rect :: proc(
         math.sign_f32(size.y),
     }
 
-    draw_sprite_inst(Sprite_Inst{
+    inst := pack_sprite_inst(
         pos = {center.x, center.y, z},
         mat_x = {size.x * 0.5, 0, 0},
         mat_y = {0, size.y * 0.5, 0},
-        uv_min_x = tex_rect.min.x + tex_size_sign.x * UV_EPS,
-        uv_min_y = tex_rect.min.y + tex_size_sign.y * UV_EPS,
+        uv_min = tex_rect.min + tex_size_sign * UV_EPS,
         uv_size = rect_full_size(tex_rect) - tex_size_sign * UV_EPS * 2,
-        color = pack_unorm8(col),
+        col = col,
+        add_col = add_col,
         tex_slice = _state.bind_state.texture_slice,
-    })
+        param = param,
+    )
+
+    draw_sprite_inst(inst)
 }
 
 
@@ -3269,6 +3283,7 @@ draw_text :: proc(
                 mat[1] * offs.y
             )
 
+            // TODO: correct anchor
             draw_sprite(
                 pos = p,
                 rect = font_slot(ch),
@@ -3334,6 +3349,7 @@ draw_mesh :: proc(
     rot:        Quat = 1,
     scale:      Vec3 = 1,
     col:        Vec4 = 1,
+    add_col:    Vec4 = 0,
     param:      u32 = 0,
 ) {
     validate_vec(pos)
@@ -3372,22 +3388,17 @@ draw_mesh :: proc(
         }
     }
 
-    draw.inst = {
+    draw.inst = pack_mesh_inst(
         pos = pos,
         mat_x = mat[0] * scale.x,
         mat_y = mat[1] * scale.y,
         mat_z = mat[2] * scale.z,
-        col = {
-            u8(clamp(col.r * 255, 0, 255)),
-            u8(clamp(col.g * 255, 0, 255)),
-            u8(clamp(col.b * 255, 0, 255)),
-            u8(clamp(col.a * 255, 0, 255)),
-        },
         tex_slice = _state.bind_state.texture_slice,
         vert_offs = u32(mesh.vert_offs),
-        _pad0 = 0,
         param = param,
-    }
+        col = col,
+        add_col = add_col,
+    )
 
     _push_mesh_draw(_state.bind_state.draw_layer, draw)
 }
@@ -3398,6 +3409,7 @@ draw_sprite_line :: proc(
     width:      f32,
     rect:       Rect = {0, 1},
     col:        Vec4 = 1,
+    param:      u32 = 0,
 ) {
     draw_layer := &_state.draw_layers[_state.bind_state.draw_layer]
 
@@ -3415,21 +3427,17 @@ draw_sprite_line :: proc(
 
     UV_EPS :: (1.0 / 8192.0)
 
-    draw.inst = Sprite_Inst{
+    draw.inst = pack_sprite_inst(
         pos = mid,
         mat_x = right * width,
         mat_y = dir * dist * 0.5,
-        uv_min_x = rect.min.x + UV_EPS,
-        uv_min_y = rect.min.y + UV_EPS,
+        uv_min = rect.min.x + UV_EPS,
         uv_size = rect_full_size(rect) - UV_EPS * 2,
-        color = {
-            u8(clamp(col.r * 255, 0, 255)),
-            u8(clamp(col.g * 255, 0, 255)),
-            u8(clamp(col.b * 255, 0, 255)),
-            u8(clamp(col.a * 255, 0, 255)),
-        },
+        col = col,
+        add_col = 0,
         tex_slice = _state.bind_state.texture_slice,
-    }
+        param = param,
+    )
 
     draw.key = Draw_Sort_Key{
         texture         = _state.bind_state.texture,
@@ -3764,7 +3772,7 @@ upload_gpu_layers :: proc() {
         col         = 255,
         vert_offs   = 0,
         tex_slice   = 0, // OOPS
-        _pad0       = 0,
+        add_col     = 0,
         param       = 0,
     }
 
@@ -4566,6 +4574,121 @@ _assertion_failure_proc :: proc(prefix, message: string, loc: runtime.Source_Cod
     runtime.print_string("\n")
 
     runtime.trap()
+}
+
+
+@(require_results)
+pack_unorm8 :: proc "contextless" (val: [4]f32) -> [4]u8 {
+    return {
+        u8(clamp(val.x * 255, 0, 255)),
+        u8(clamp(val.y * 255, 0, 255)),
+        u8(clamp(val.z * 255, 0, 255)),
+        u8(clamp(val.w * 255, 0, 255)),
+    }
+}
+
+@(require_results)
+unpack_unorm8 :: proc "contextless" (val: [4]u8) -> [4]f32 {
+    return {
+        f32(val.x) * (1.0 / 255.0),
+        f32(val.y) * (1.0 / 255.0),
+        f32(val.z) * (1.0 / 255.0),
+        f32(val.w) * (1.0 / 255.0),
+    }
+}
+
+@(require_results)
+pack_unorm16 :: proc "contextless" (val: [2]f32) -> [2]u16 {
+    return {
+        u16(clamp(val.x * f32(max(u16)), 0, f32(max(u16)))),
+        u16(clamp(val.y * f32(max(u16)), 0, f32(max(u16)))),
+    }
+}
+
+@(require_results)
+unpack_unorm16 :: proc "contextless" (val: [2]u16) -> [2]f32 {
+    return {
+        f32(val.x) * (1.0 / f32(max(u16))),
+        f32(val.y) * (1.0 / f32(max(u16))),
+    }
+}
+
+
+// Special packing to allow -2..2 range
+@(require_results)
+pack_signed_color_unorm8 :: proc "contextless" (val: [4]f32) -> [4]u8 {
+    return pack_unorm8(val * 0.25 + 0.5)
+}
+
+@(require_results)
+unpack_signed_color_unorm8 :: proc "contextless" (val: [4]u8) -> [4]f32 {
+    return unpack_unorm8(val) * 4.0 - 2.0
+}
+
+// No UV precision loss up to 4096x4096 textures.
+// 16 bits -> 65536 values.
+// Input in range -8..8
+@(require_results)
+pack_uv_unorm16 :: proc "contextless" (val: [2]f32) -> [2]u16 {
+    return pack_unorm16((val + 8.0) * (1.0 / 16.0))
+}
+
+@(require_results)
+unpack_uv_unorm16 :: proc "contextless" (val: [2]u16) -> [2]f32 {
+    return unpack_unorm16(val) * 16.0 - 8.0
+}
+
+
+@(require_results)
+pack_sprite_inst :: proc(
+    pos:        [3]f32,
+    col:        [4]f32,
+    mat_x:      [3]f32,
+    uv_min:     [2]f32,
+    mat_y:      [3]f32,
+    uv_size:    [2]f32,
+    add_col:    [4]f32,
+    param:      u32,
+    tex_slice:  u8,
+) -> Sprite_Inst {
+    return {
+        pos         = pos,
+        col         = pack_signed_color_unorm8(col),
+        mat_x       = mat_x,
+        uv_min      = pack_uv_unorm16(uv_min),
+        mat_y       = mat_y,
+        uv_size     = pack_uv_unorm16(uv_size),
+        add_col     = pack_signed_color_unorm8(add_col),
+        param       = param,
+        tex_slice   = tex_slice,
+    }
+}
+
+@(require_results)
+pack_mesh_inst :: proc(
+    pos:        [3]f32,
+    col:        [4]f32,
+    mat_x:      [3]f32,
+    add_col:    [4]f32,
+    mat_y:      [3]f32,
+    tex_slice:  u8,
+    vert_offs:  u32,
+    mat_z:      [3]f32,
+    param:      u32,
+) -> Mesh_Inst {
+    vert_offs := vert_offs
+    assert(vert_offs < (1 << 24))
+    return {
+        pos         = pos,
+        col         = pack_signed_color_unorm8(col),
+        mat_x       = mat_x,
+        add_col     = pack_signed_color_unorm8(add_col),
+        mat_y       = mat_y,
+        tex_slice   = tex_slice,
+        vert_offs   = (cast(^[3]u8)&vert_offs)^,
+        mat_z       = mat_z,
+        param       = param,
+    }
 }
 
 

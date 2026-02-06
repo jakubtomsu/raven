@@ -208,15 +208,6 @@ euler_rot :: proc(angles: Vec3) -> Quat {
            linalg.quaternion_from_euler_angle_z_f32(angles.z)
 }
 
-pack_unorm8 :: proc(val: [4]f32) -> [4]u8 {
-    return {
-        u8(clamp(val.x * 255, 0, 255)),
-        u8(clamp(val.y * 255, 0, 255)),
-        u8(clamp(val.z * 255, 0, 255)),
-        u8(clamp(val.w * 255, 0, 255)),
-    }
-}
-
 
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////

@@ -26,33 +26,30 @@ struct Vertex {
     float   _pad;
     float2  uv;
     uint    normal;
-    uint    color;
+    uint    col;
 };
 
 struct Sprite_Inst {
     float3 pos;
-    uint   color;
+    uint   col;
     float3 mat_x;
-    float  uv_min_x;
+    uint   uv_min;
     float3 mat_y;
-    float  uv_min_y;
-    float2 uv_size;
+    uint   uv_size;
+    uint   add_col;
+    uint   param;
     uint   tex_slice;
-    uint   _pad;
+    uint   _pad0;
 };
 
 struct Mesh_Inst {
     float3 pos;
-    float  _pad0;
+    uint col;
     float3 mat_x;
-    float  _pad1;
+    uint add_col;
     float3 mat_y;
-    float  _pad2;
+    uint tex_slice_vert_offs;
     float3 mat_z;
-    float  _pad3;
-    uint color;
-    uint vert_offs;
-    uint tex_slice;
     uint param;
 };
 
@@ -61,22 +58,31 @@ struct VS_Out {
     float3 world_pos: POS;
     float3 normal : NOR;
     float2 uv : TEX;
-    float4 color : COL;
+    float4 col : COL;
     uint   tex_slice : TEXSLICE;
 };
 
 float4 unpack_unorm8(uint val) {
     return float4(
-        (val      ) & 0xFF,
-        (val >>  8) & 0xFF,
-        (val >> 16) & 0xFF,
-        (val >> 24) & 0xFF
+        (val      ) & 0xff,
+        (val >>  8) & 0xff,
+        (val >> 16) & 0xff,
+        (val >> 24) & 0xff
     ) * (1.0f / 255.0f);
 }
 
 float2 unpack_unorm16(uint val) {
     return float2(
-        (val      ) & 0xFFFF,
-        (val >> 16) & 0xFFFF
+        (val      ) & 0xffff,
+        (val >> 16) & 0xffff
     ) * (1.0f / 65535.0f);
+}
+
+
+float4 unpack_signed_color_unorm8(uint val) {
+    return unpack_unorm8(val) * 4.0f - 2.0f;
+}
+
+float2 unpack_uv_unorm16(uint val) {
+    return unpack_unorm16(val) * 16.0f - 8.0f;
 }
