@@ -159,6 +159,7 @@ _update :: proc(prev_state: ^State) -> ^State {
     ground_height = sample_terrain(state.pos.xz)
     grounded = state.pos.y <= (ground_height + 1)
 
+
     if grounded {
         state.pos.y = ground_height + 0.9999
         state.vel = rv.lexp(state.vel, 0, delta * 8)
@@ -235,21 +236,9 @@ sample_terrain :: proc(pos: rv.Vec2) -> f32 {
         read_terrain(coord + {1, 1}),
     }
 
-    v1: rv.Vec3 = {0, 0, samples[0]}
-    v2: rv.Vec3 = {1, 0, samples[1]}
-    v3: rv.Vec3 = {0, 1, samples[2]}
-
-    trig_dir: rv.Vec2 = {0.5, 0.5}
-
-    if linalg.dot(sub, trig_dir) > 0.5 {
-        v1 = {0, 1, samples[2]}
-        v2 = {1, 1, samples[3]}
-        v3 = {1, 0, samples[1]}
-    }
-
-    w1 := ((v2.y - v3.y)*(sub.x - v3.x) + (v3.x - v2.x)*(sub.y - v3.y))/((v2.y - v3.y)*(v1.x - v3.x) + (v3.x - v2.x)*(v1.y - v3.y))
-    w2 := ((v3.y - v1.y)*(sub.x - v3.x) + (v1.x - v3.x)*(sub.y - v3.y))/((v2.y - v3.y)*(v1.x - v3.x) + (v3.x - v2.x)*(v1.y - v3.y))
-    w3 := 1.0 - w1 - w2
-  
-    return v1.z * w1 + v2.z * w2 + v3.z * w3
+    return rv.lerp(
+        rv.lerp(samples[0], samples[1], sub.x),
+        rv.lerp(samples[2], samples[3], sub.x),
+        sub.y,
+    )
 }
