@@ -80,6 +80,8 @@ MAX_PROBE_DIST :: #config(RAVEN_MAX_TABLE_PROBE_DIST, 16)
 
 HASH_ALG :: "fnv64a"
 
+UV_EPS :: (1.0 / 4096.0)
+
 Vec2 :: [2]f32
 Vec3 :: [3]f32
 Vec4 :: [4]f32
@@ -674,7 +676,9 @@ run_main_loop :: proc(api: Module_API) {
                 break
             }
 
-            end_frame()
+            if !_state.ended_frame {
+                end_frame()
+            }
 
             _state.module_result = res
         }
@@ -3142,8 +3146,6 @@ draw_sprite :: proc(
     validate_vec(scale)
     validate_quat(rot)
 
-    UV_EPS :: (1.0 / 8192.0)
-
     if col.a < 0.01 || abs(scale.x * scale.y) < 0.0001 {
         return
     }
@@ -3223,7 +3225,6 @@ draw_rect :: proc(
     validate_rect(rect)
     validate_rect(tex_rect)
     validate_f32(z)
-    UV_EPS :: (1.0 / 8192.0)
 
     center := rect_center(rect)
     size := rect_full_size(rect)
@@ -3432,8 +3433,6 @@ draw_sprite_line :: proc(
     draw: Sprite_Draw
 
     // TODO: flip texture *data* instead of flipping sprites?
-
-    UV_EPS :: (1.0 / 8192.0)
 
     draw.inst = pack_sprite_inst(
         pos = mid,

@@ -252,7 +252,7 @@ _update :: proc(prev_state: ^State) -> ^State {
             }
         }
 
-        state.cam_pos = rv.lexp(state.cam_pos + world_dir * 0.05, snake.pos * 2.5, delta * 6)
+        state.cam_pos = rv.lexp(state.cam_pos, snake.pos * 2.5 + world_dir * 0.6, delta * 6)
 
         target_rot := linalg.quaternion_from_forward_and_up_f32(
             state.cam_pos,
@@ -350,7 +350,7 @@ _update :: proc(prev_state: ^State) -> ^State {
         for &inst, i in char_sprites {
             inst.pos.y += math.sin_f32(f32(i) * 0.7334 + rv.get_time()) * 10
             if i % 2 == 0 {
-                inst.color = rv.pack_unorm8(SNAKE_RED)
+                inst.col = rv.pack_unorm8(SNAKE_RED)
             }
         }
 
@@ -370,6 +370,8 @@ _update :: proc(prev_state: ^State) -> ^State {
     rv.upload_gpu_layers()
     rv.render_gpu_layer(0, rv.DEFAULT_RENDER_TEXTURE, rv.Vec3{0.05, 0.1, 0.2}, true)
     rv.render_gpu_layer(1, rv.DEFAULT_RENDER_TEXTURE, nil, false)
+
+    rv.end_frame(false)
 
     return state
 }
