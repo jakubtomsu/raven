@@ -58,7 +58,7 @@ _update :: proc(prev_state: ^State) -> ^State {
 
     // Odin strings are UTF-8 encoded, but fonts are currently CP437 16x16 atlases.
     // Unicode fonts might get supported later.
-    rv.draw_text("Hello World! ☺", {200, 200, 0}, scale = 4, spacing = 1)
+    rv.draw_text("Hello World! ☺", {100, 100, 0}, scale = 4, spacing = 1)
 
     // Draw the full font atlas texture
     rv.draw_sprite({rv.get_screen_size().x * 0.5, rv.get_screen_size().y * 0.5, 0.1}, scale = 2)

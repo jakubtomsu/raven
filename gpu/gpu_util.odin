@@ -1,11 +1,9 @@
 #+vet explicit-allocators shadowing style
 package raven_gpu
 
+import "../base"
 import "base:intrinsics"
 import "base:runtime"
-import "core:log"
-
-_ :: log
 
 ptr_bytes :: proc(ptr: ^$T, len := 1) -> []byte {
     return transmute([]byte)runtime.Raw_Slice{ptr, len * size_of(T)}
@@ -36,7 +34,7 @@ bucket_find_or_create :: proc(
 
     index := bucket.len
     if index >= len(bucket.keys) {
-        log.errorf("{} Cache Bucket is full", type_info_of(V))
+        base.log_err("%v Cache Bucket is full", type_info_of(V))
         return {}
     }
 

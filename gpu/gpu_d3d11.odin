@@ -2,17 +2,17 @@
 #+build !js
 package raven_gpu
 
+import "../base"
+
 import "core:strings"
 import "base:intrinsics"
-// https://www.gamedevs.org/uploads/efficient-buffer-management.pdf
-
-import "core:log"
 import "base:runtime"
 import "core:sys/windows"
 import d3d "vendor:directx/d3d11"
 import dxgi "vendor:directx/dxgi"
 import d3d_compiler "vendor:directx/d3d_compiler"
 
+// https://www.gamedevs.org/uploads/efficient-buffer-management.pdf
 // TODO: all input constraints must be spelled out at the top if each proc in gpu.odin.
 
 when BACKEND == BACKEND_D3D11 {
@@ -120,7 +120,7 @@ when BACKEND == BACKEND_D3D11 {
             pFeatureLevel = nil,
             ppImmediateContext = &base_device_context,
         )) {
-            log.error("Failed to create D3D11 device")
+            base.log_err("Failed to create D3D11 device")
             return false
         }
 
@@ -179,7 +179,7 @@ when BACKEND == BACKEND_D3D11 {
     }
 
     _create_rasterizer :: proc(desc: _Rasterizer_Desc) -> (result: _Rasterizer) {
-        log.debug("GPU: Creating D3D11 rasterizer")
+        base.log_debug("GPU: Creating D3D11 rasterizer")
 
         rasterizer_desc := d3d.RASTERIZER_DESC{
             FillMode                = _d3d11_fill_mode(desc.fill),
@@ -202,7 +202,7 @@ when BACKEND == BACKEND_D3D11 {
     }
 
     _create_depth_stencil :: proc(comparison: Comparison_Op, write: bool) -> (result: _Depth_Stencil) {
-        log.debug("GPU: Creating D3D11 depth stencil")
+        base.log_debug("GPU: Creating D3D11 depth stencil")
 
         enable := true
 
@@ -236,7 +236,7 @@ when BACKEND == BACKEND_D3D11 {
 
 
     _create_sampler :: proc(desc: Sampler_Desc) -> (result: _Sampler) {
-        log.debug("GPU: Creating D3D11 sampler")
+        base.log_debug("GPU: Creating D3D11 sampler")
 
         desc := d3d.SAMPLER_DESC{
             Filter          = _d3d11_filter(desc.filter),
@@ -259,7 +259,7 @@ when BACKEND == BACKEND_D3D11 {
     }
 
     _create_blend :: proc(descs: [RENDER_TEXTURE_BIND_SLOTS]Blend_Desc) -> (result: _Blend) {
-        log.debug("GPU: Creating D3D11 blend state")
+        base.log_debug("GPU: Creating D3D11 blend state")
 
         if descs == {} {
             return {}
@@ -420,7 +420,7 @@ when BACKEND == BACKEND_D3D11 {
         if res != 0 {
             if errors != nil {
                 str := string((cast([^]u8)errors->GetBufferPointer())[:errors->GetBufferSize()])
-                log.errorf("Shader compile error:\n{}", str)
+                base.log_err("Shader compile error:\n{}", str)
             }
             return {}, false
         }
@@ -1381,31 +1381,31 @@ when BACKEND == BACKEND_D3D11 {
         case 0:
             return true
         case 1:
-            log.warnf("GPU D3D11: S_FALSE: Successful but nonstandard completion (the precise meaning depends on context).", location = loc)
+            base.log_warn("GPU D3D11: S_FALSE: Successful but nonstandard completion (the precise meaning depends on context).", loc = loc)
             return true
 
         case 0x887C0002:
-            log.errorf("GPU D3D11: D3D11_ERROR_FILE_NOT_FOUND: The file was not found.", location = loc)
+            base.log_err("GPU D3D11: D3D11_ERROR_FILE_NOT_FOUND: The file was not found.", loc = loc)
         case 0x887C0001:
-            log.errorf("GPU D3D11: D3D11_ERROR_TOO_MANY_UNIQUE_STATE_OBJECTS: There are too many unique instances of a particular type of state object.", location = loc)
+            base.log_err("GPU D3D11: D3D11_ERROR_TOO_MANY_UNIQUE_STATE_OBJECTS: There are too many unique instances of a particular type of state object.", loc = loc)
         case 0x887C0003:
-            log.errorf("GPU D3D11: D3D11_ERROR_TOO_MANY_UNIQUE_VIEW_OBJECTS: There are too many unique instances of a particular type of view object.", location = loc)
+            base.log_err("GPU D3D11: D3D11_ERROR_TOO_MANY_UNIQUE_VIEW_OBJECTS: There are too many unique instances of a particular type of view object.", loc = loc)
         case 0x887C0004:
-            log.errorf("GPU D3D11: D3D11_ERROR_DEFERRED_CONTEXT_MAP_WITHOUT_INITIAL_DISCARD: The first call to ID3D11DeviceContext::Map after either ID3D11Device::CreateDeferredContext or ID3D11DeviceContext::FinishCommandList per Resource was not D3D11_MAP_WRITE_DISCARD.", location = loc)
+            base.log_err("GPU D3D11: D3D11_ERROR_DEFERRED_CONTEXT_MAP_WITHOUT_INITIAL_DISCARD: The first call to ID3D11DeviceContext::Map after either ID3D11Device::CreateDeferredContext or ID3D11DeviceContext::FinishCommandList per Resource was not D3D11_MAP_WRITE_DISCARD.", loc = loc)
         case 0x887A0001:
-            log.errorf("GPU D3D11: DXGI_ERROR_INVALID_CALL: The method call is invalid. For example, a method's parameter may not be a valid pointer.", location = loc)
+            base.log_err("GPU D3D11: DXGI_ERROR_INVALID_CALL: The method call is invalid. For example, a method's parameter may not be a valid pointer.", loc = loc)
         case 0x887A000A:
-            log.errorf("GPU D3D11: DXGI_ERROR_WAS_STILL_DRAWING: The previous blit operation that is transferring information to or from this surface is incomplete.", location = loc)
+            base.log_err("GPU D3D11: DXGI_ERROR_WAS_STILL_DRAWING: The previous blit operation that is transferring information to or from this surface is incomplete.", loc = loc)
         case 0x887A002D:
-            log.errorf("GPU D3D11: DXGI_ERROR_SDK_COMPONENT_MISSING: An SDK component is missing or mismatched.", location = loc)
+            base.log_err("GPU D3D11: DXGI_ERROR_SDK_COMPONENT_MISSING: An SDK component is missing or mismatched.", loc = loc)
         case 0x80004005:
-            log.errorf("GPU D3D11: E_FAIL: Attempted to create a device with the debug layer enabled and the layer is not installed.", location = loc)
+            base.log_err("GPU D3D11: E_FAIL: Attempted to create a device with the debug layer enabled and the layer is not installed.", loc = loc)
         case 0x80070057:
-            log.errorf("GPU D3D11: E_INVALIDARG: An invalid parameter was passed to the returning function.", location = loc)
+            base.log_err("GPU D3D11: E_INVALIDARG: An invalid parameter was passed to the returning function.", loc = loc)
         case 0x8007000E:
-            log.errorf("GPU D3D11: E_OUTOFMEMORY: Direct3D could not allocate sufficient memory to complete the call.", location = loc)
+            base.log_err("GPU D3D11: E_OUTOFMEMORY: Direct3D could not allocate sufficient memory to complete the call.", loc = loc)
         case 0x80004001:
-            log.errorf("GPU D3D11: E_NOTIMPL: The method call isn't implemented with the passed parameter combination.", location = loc)
+            base.log_err("GPU D3D11: E_NOTIMPL: The method call isn't implemented with the passed parameter combination.", loc = loc)
         }
 
         _d3d11_messages()
@@ -1432,7 +1432,7 @@ when BACKEND == BACKEND_D3D11 {
                 msg := cast(^d3d.MESSAGE)make_multi_pointer([^]byte, msg_size, context.temp_allocator)
                 _state.info_queue->GetMessage(i, msg, &msg_size)
 
-                level: log.Level
+                level: base.Log_Level
                 switch msg.Severity {
                 case .CORRUPTION: level = .Fatal
                 case .ERROR: level = .Error
@@ -1441,7 +1441,7 @@ when BACKEND == BACKEND_D3D11 {
                 case .MESSAGE: level = .Debug
                 }
 
-                log.logf(level, "GPU D3D11 %s: %s", msg.Category, msg.pDescription, location = loc)
+                base.log(level, "GPU D3D11 %s: %s", msg.Category, msg.pDescription, loc = loc)
 
                 if msg.Severity == .CORRUPTION || msg.Severity == .ERROR {
                     panic("GPU D3D11: Error")

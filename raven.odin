@@ -1,24 +1,24 @@
 #+vet explicit-allocators shadowing unused style
 package raven
 
-import "core:mem"
-import "base:intrinsics"
-import "core:strings"
-import "core:log"
-import "core:slice"
-import "core:path/filepath"
-import "core:math/linalg"
-import "core:math"
-import "core:fmt"
-import "base:runtime"
-import debug_trace "core:debug/trace"
-import stbi "vendor:stb/image"
-
+import "base"
+import "base/ufmt"
 import "gpu"
 import "platform"
 import "rscn"
 import "audio"
-import "base/ufmt"
+
+import "core:mem"
+import "core:log"
+import "base:intrinsics"
+import "core:strings"
+import "core:slice"
+import "core:path/filepath"
+import "core:math/linalg"
+import "core:math"
+import "base:runtime"
+import debug_trace "core:debug/trace"
+import stbi "vendor:stb/image"
 
 // TODO: go through all TODOs
 
@@ -697,7 +697,7 @@ run_main_loop :: proc(api: Module_API) {
 when ODIN_OS == .JS {
     @(export)
     step :: proc(dt: f32) -> (keep_running: bool) {
-        log.info("Step")
+        base.log_info("Step")
 
         assert(_state != nil)
         assert(_state.module_api.update != nil)
@@ -854,9 +854,9 @@ init_state :: proc(allocator := context.allocator) {
 
     context = get_context()
 
-    log.info("Raven context initialized")
+    base.log_info("Raven context initialized")
 
-    log.info("Initializing platform...")
+    base.log_info("Initializing platform...")
 
     platform.init(&_state.platform_state)
 
@@ -865,7 +865,7 @@ init_state :: proc(allocator := context.allocator) {
     _state.start_time = platform.get_time_ns()
     platform.set_dpi_aware()
 
-    log.info("Initializing audio...")
+    base.log_info("Initializing audio...")
 
     audio.init(&_state.audio_state)
 
@@ -877,7 +877,7 @@ init_state :: proc(allocator := context.allocator) {
 
 // No-op if already initialized.
 init_window :: proc(name := "Raven App", style: platform.Window_Style = .Regular, allocator := context.allocator) {
-    log.infof("Creating window '%s'...", name)
+    base.log_info("Creating window '%s'...", name)
 
     ensure(_state != nil)
     ensure(_state.window == {})
@@ -886,7 +886,7 @@ init_window :: proc(name := "Raven App", style: platform.Window_Style = .Regular
 
     _state.window = platform.create_window(name, style = style)
 
-    log.info("Initializing GPU...")
+    base.log_info("Initializing GPU...")
 
     gpu.init(&_state.gpu_state, platform.get_native_window_ptr(_state.window))
 
@@ -902,7 +902,7 @@ init_window :: proc(name := "Raven App", style: platform.Window_Style = .Regular
 }
 
 _finish_init :: proc() {
-    log.info("Finishing GPU Init...")
+    base.log_info("Finishing GPU Init...")
 
     assert(_state != nil)
 
@@ -1033,13 +1033,13 @@ _finish_init :: proc() {
         dst_group = {},
     ) or_else panic("Failed to load default scene")
 
-    log.info("Raven initialized successfully")
+    base.log_info("Raven initialized successfully")
 
     _state.initialized = true
 }
 
 shutdown_state :: proc() {
-    log.info("Shutting down Raven...")
+    base.log_info("Shutting down Raven...")
     if _state == nil {
         return
     }
@@ -1055,11 +1055,11 @@ shutdown_state :: proc() {
 }
 
 _print_stats_report :: proc() {
-    fmt.println("Stats Report:")
+    ufmt.eprintfln("Stats Report:")
 
     {
         c := _state.counters[.CPU_Frame_Ns]
-        fmt.printfln("CPU Frame time (ms):          avg %.3f, min %.3f, max %.3f",
+        ufmt.eprintfln("CPU Frame time (ms):          avg %f, min %f, max %f",
             f64(c.total_sum) * 1e-6 / f64(c.total_num),
             f64(c.total_min) * 1e-6,
             f64(c.total_max) * 1e-6,
@@ -1069,7 +1069,7 @@ _print_stats_report :: proc() {
     {
         tot := _state.counters[.Num_Total_Instances]
         upl := _state.counters[.Num_Uploaded_Instances]
-        fmt.printfln("Per Frame Draw Instances:     avg total %.3f, avg uploaded %.3f",
+        ufmt.eprintfln("Per Frame Draw Instances:     avg total %f, avg uploaded %f",
             f64(tot.total_sum) / f64(tot.total_num),
             f64(upl.total_sum) / f64(upl.total_num),
         )
@@ -1077,7 +1077,7 @@ _print_stats_report :: proc() {
 
     {
         c := _state.counters[.Num_Draw_Calls]
-        fmt.printfln("Draw Calls:                   avg %.3f, min %i, max %i",
+        ufmt.eprintfln("Draw Calls:                   avg %f, min %i, max %i",
             f64(c.total_sum) / f64(c.total_num),
             c.total_min,
             c.total_max,
@@ -1086,40 +1086,40 @@ _print_stats_report :: proc() {
 
     {
         tr := _state.context_state.tracking
-        fmt.printfln("Allocations:                  %i, %i freed, %i bytes total", tr.total_allocation_count, tr.total_free_count, tr.total_memory_allocated)
+        ufmt.eprintfln("Allocations:                  %i, %i freed, %i bytes total", tr.total_allocation_count, tr.total_free_count, tr.total_memory_allocated)
 
         if len(tr.allocation_map) > 0 {
-            fmt.printfln("Memory Leaks:")
+            ufmt.eprintfln("Memory Leaks:")
             for _, it in tr.allocation_map {
-                fmt.printfln("\t[{0}:{1}:{2}:{3}] Leaked {4:p} of size {5:M} ({5} bytes) with alignment {6:M}",
+                ufmt.eprintfln("\t%s(%i:%i) %s: Leaked %x of size %i bytes with alignment %i",
                     it.location.file_path,
-                    it.location.procedure,
                     it.location.line,
                     it.location.column,
+                    it.location.procedure,
                     it.memory,
                     it.size,
                     it.alignment,
                 )
             }
-            fmt.println("\tTotal Memory Leaks:", len(tr.allocation_map))
+            ufmt.eprintfln("\tTotal Memory Leaks: %i", len(tr.allocation_map))
         }
 
         if len(tr.bad_free_array) > 0 {
-            fmt.println("Bad Frees:")
+            ufmt.eprintfln("Bad Frees:")
             for it in tr.bad_free_array {
-                fmt.println("\t[{0}:{1}:{2}:{3}] Freed invalid {4:p}",
+                ufmt.eprintfln("\t%s(%i:%i) %s: Leaked %x",
                     it.location.file_path,
-                    it.location.procedure,
                     it.location.line,
                     it.location.column,
+                    it.location.procedure,
                     it.memory,
                 )
             }
-            fmt.println("\tTotal Bad Frees:", len(tr.bad_free_array))
+            ufmt.eprintfln("\tTotal Bad Frees:", len(tr.bad_free_array))
         }
 
         peak_mem := tr.peak_memory_allocated + size_of(State)
-        fmt.printfln("Peak memory:                  %i bytes (%.3f MB) ", peak_mem, f64(peak_mem) / (1024 * 1024))
+        ufmt.eprintfln("Peak memory:                  %i bytes (%f MB) ", peak_mem, f64(peak_mem) / (1024 * 1024))
     }
 
 
@@ -1133,7 +1133,7 @@ begin_frame :: proc() -> (keep_running: bool) {
     defer free_all(context.temp_allocator)
 
     if _state.frame_index == 0 {
-        log.infof("Time to first frame: %.3f ms", f32((platform.get_time_ns() - _state.start_time) / 1e3) * 1e-3)
+        base.log_info("Time to first frame: %.3f ms", f32((platform.get_time_ns() - _state.start_time) / 1e3) * 1e-3)
     }
 
     keep_running = true
@@ -1191,7 +1191,7 @@ begin_frame :: proc() -> (keep_running: bool) {
     _clear_draw_layers()
 
     _state.dpi_scale = platform.window_dpi_scale(_state.window)
-    // log.info("DPI scale: ", _state.dpi_scale)
+    // base.log_info("DPI scale: ", _state.dpi_scale)
 
     _state.input.mouse_delta = 0
     _state.input.scroll_delta = 0
@@ -1305,7 +1305,7 @@ begin_frame :: proc() -> (keep_running: bool) {
         changes := platform.watch_file_changes(&dir.watcher)
 
         for change in changes {
-            log.info("changed file:", change)
+            base.log_info("changed file:", change)
 
             file_path := filepath.join({path, change}, context.temp_allocator)
 
@@ -1499,13 +1499,13 @@ load_scene_from_data :: proc(txt: string, bin: []byte, dst_group: Group_Handle) 
     validate(len(txt) >= 5)
     validate(len(bin) >= 5)
 
-    log.info("Loading Scene")
+    base.log_info("Loading Scene")
 
     parser := rscn.make_parser(txt)
 
     header, header_err := rscn.parse_header(&parser)
     if header_err != .OK {
-        log.error("Failed to load scene: Header error")
+        base.log_err("Failed to load scene: Header error")
         return {}, false
     }
 
@@ -1522,7 +1522,7 @@ load_scene_from_data :: proc(txt: string, bin: []byte, dst_group: Group_Handle) 
         group_handle = dst_group
 
         if !ok {
-            log.error("Failed to load scene: Invalid target group handle")
+            base.log_err("Failed to load scene: Invalid target group handle")
             return {}, false
         }
 
@@ -1549,7 +1549,7 @@ load_scene_from_data :: proc(txt: string, bin: []byte, dst_group: Group_Handle) 
         )
 
         if !ok {
-            log.error("Failed to load scene: Couldn't create group")
+            base.log_err("Failed to load scene: Couldn't create group")
             return {}, false
         }
 
@@ -1575,7 +1575,7 @@ load_scene_from_data :: proc(txt: string, bin: []byte, dst_group: Group_Handle) 
             break parse_loop
 
         case .Error:
-            log.error("Failed to parse scene file")
+            base.log_err("Failed to parse scene file")
             break parse_loop
         }
 
@@ -1591,11 +1591,11 @@ load_scene_from_data :: proc(txt: string, bin: []byte, dst_group: Group_Handle) 
             }
 
             if !load_asset(v.path, {}) {
-                log.error("Failed to load scene texture")
+                base.log_err("Failed to load scene texture")
             }
 
         case rscn.Mesh:
-            log.debug("Loading Mesh:", v.name)
+            base.log_debug("Loading Mesh:", v.name)
 
             index := mesh_counter
             mesh_counter += 1
@@ -1620,14 +1620,14 @@ load_scene_from_data :: proc(txt: string, bin: []byte, dst_group: Group_Handle) 
 
             handle, handle_ok := insert_mesh_by_name(v.name, mesh)
             if !handle_ok {
-                log.error("Failed to insert mesh, table is full")
+                base.log_err("Failed to insert mesh, table is full")
                 return {}, false
             }
 
             mesh_list[index] = handle
 
         case rscn.Spline:
-            log.debug("Loading Spline:", v.name)
+            base.log_debug("Loading Spline:", v.name)
 
             index := spline_counter
             spline_counter += 1
@@ -1641,7 +1641,7 @@ load_scene_from_data :: proc(txt: string, bin: []byte, dst_group: Group_Handle) 
             verts := spline_vert_buf[v.vert_start:][:v.vert_num]
 
             if v.vert_num > (len(group.spline_vert_buf) - int(group.spline_vert_num)) {
-                log.error("Failed to create spline, spline vertex buffer can't fit the data")
+                base.log_err("Failed to create spline, spline vertex buffer can't fit the data")
                 continue
             }
 
@@ -1657,7 +1657,7 @@ load_scene_from_data :: proc(txt: string, bin: []byte, dst_group: Group_Handle) 
 
             handle, handle_ok := insert_spline_by_name(v.name, spline)
             if !handle_ok {
-                log.error("Failed to insert spline, table is full")
+                base.log_err("Failed to insert spline, table is full")
                 return {}, false
             }
 
@@ -1666,7 +1666,7 @@ load_scene_from_data :: proc(txt: string, bin: []byte, dst_group: Group_Handle) 
             spline_list[index] = handle
 
         case rscn.Object:
-            log.debug("Loading Object:", v.name)
+            base.log_debug("Loading Object:", v.name)
 
             index := object_counter
             object_counter += 1
@@ -1690,7 +1690,7 @@ load_scene_from_data :: proc(txt: string, bin: []byte, dst_group: Group_Handle) 
 
             handle, handle_ok := insert_object_by_name(v.name, object)
             if !handle_ok {
-                log.error("Failed to insert object, table is full")
+                base.log_err("Failed to insert object, table is full")
                 return {}, false
             }
 
@@ -1734,7 +1734,7 @@ load_scene_from_data :: proc(txt: string, bin: []byte, dst_group: Group_Handle) 
         obj.child_offset = child_offset
 
         if child_offset + obj.child_num > i32(len(group.object_child_buf)) {
-            log.error("Group child buffer is too small to contain all children")
+            base.log_err("Group child buffer is too small to contain all children")
             obj.child_num = 0
             continue
         }
@@ -1919,13 +1919,13 @@ mouse_released :: proc(button: Mouse_Button) -> bool {
 get_children :: proc(handle: Object_Handle, loc := #caller_location) -> ([]Object_Handle, bool) #optional_ok {
     obj, obj_ok := get_internal_object(handle)
     if !obj_ok {
-        log.error("Failed to get object's children: invalid handle", location = loc)
+        base.log_err("Failed to get object's children: invalid handle", loc = loc)
         return nil, false
     }
 
     group, group_ok := get_internal_group(obj.group)
     if !group_ok {
-        log.error("Failed to get object's children: object's group handle is invalid")
+        base.log_err("Failed to get object's children: object's group handle is invalid")
         return nil, false
     }
 
@@ -2284,7 +2284,7 @@ create_group :: proc(
     used_set := (transmute(u64)_state.groups_used) | 1
     index := intrinsics.count_trailing_zeros(~used_set)
     if index == 64 {
-        log.error("Failed to create group: There is already max number of groups")
+        base.log_err("Failed to create group: There is already max number of groups")
         return {}, false
     }
 
@@ -2413,7 +2413,7 @@ create_mesh_from_data :: proc(
     vertices:       []Mesh_Vertex,
     indices:        []Vertex_Index,
 ) -> (result: Mesh_Handle, ok: bool) #optional_ok {
-    log.debugf("Creating Mesh '%s' with %i verts and %i tris", name, len(vertices), len(indices) / 3)
+    base.log_debug("Creating Mesh '%s' with %i verts and %i tris", name, len(vertices), len(indices) / 3)
 
     group := get_internal_group(group_handle) or_return
 
@@ -2434,7 +2434,7 @@ create_mesh_from_data :: proc(
 
     handle, handle_ok := insert_mesh_by_name(name, mesh)
     if !handle_ok {
-        log.errorf("Failed to create mesh '%s', table is full", name)
+        base.log_err("Failed to create mesh '%s', table is full", name)
         return {}, false
     }
 
@@ -2457,7 +2457,7 @@ create_mesh_from_data :: proc(
 // NOTE: Beware of the memory consumed by high-res texture pools!
 create_texture_pool :: proc(size: IVec2, slices: i32) -> (ok: bool) {
     if _state.texture_pools_len >= len(_state.texture_pools) {
-        log.error("Failed to create texture pool, too many texture pools")
+        base.log_err("Failed to create texture pool, too many texture pools")
         return false
     }
 
@@ -2473,7 +2473,7 @@ create_texture_pool :: proc(size: IVec2, slices: i32) -> (ok: bool) {
     assert(ok)
 
     if pool.resource == {} {
-        log.errorf("Failed to create %ix%ix%i texture pool GPU resource", size.x, size.y, slices)
+        base.log_err("Failed to create %ix%ix%i texture pool GPU resource", size.x, size.y, slices)
         return false
     }
 
@@ -2491,7 +2491,7 @@ get_internal_texture :: proc(handle: Texture_Handle) -> (result: ^Texture, ok: b
 create_texture_from_encoded_data :: proc(name: string, data: []byte) -> (result: Texture_Handle, ok: bool) {
     tex, tex_ok := decode_texture_data(data)
     if !tex_ok {
-        log.errorf("Failed to decode texture '%s'", name)
+        base.log_err("Failed to decode texture '%s'", name)
     }
 
     result, ok = create_texture_from_data(name, tex)
@@ -2532,7 +2532,7 @@ create_texture_from_data :: proc(name: string, data: Texture_Data) -> (result: T
 
         assert(slice_index < 64)
 
-        log.infof("Creating a pooled texture '%s' of size %ix%i with index %i", name, data.size.x, data.size.y, index)
+        base.log_info("Creating a pooled texture '%s' of size %ix%i with index %i", name, data.size.x, data.size.y, index)
 
         create_resource = false
 
@@ -2555,7 +2555,7 @@ create_texture_from_data :: proc(name: string, data: Texture_Data) -> (result: T
     }
 
     if create_resource {
-        log.infof("Creating a non-pooled texture '%s' of size %ix%i with index %i", name, data.size.x, data.size.y, index)
+        base.log_info("Creating a non-pooled texture '%s' of size %ix%i with index %i", name, data.size.x, data.size.y, index)
 
         // Already exists, replace the old one.
         // Possibly a name hash collision.
@@ -2622,7 +2622,7 @@ decode_texture_data :: proc(data: []byte) -> (result: Texture_Data, ok: bool) {
     )
 
     if data == nil {
-        log.errorf("Failed to decode texture: %s", stbi.failure_reason())
+        base.log_err("Failed to decode texture: %s", stbi.failure_reason())
         return {}, false
     }
 
@@ -2658,7 +2658,7 @@ create_vertex_shader :: proc(name: string, data: []byte) -> (result: Vertex_Shad
     shader.shader, ok = gpu.create_shader(name, data, .Vertex)
 
     if !ok {
-        log.error("RV: Failed to create vertex shader")
+        base.log_err("RV: Failed to create vertex shader")
         return
     }
 
@@ -2675,7 +2675,7 @@ create_pixel_shader :: proc(name: string, data: []byte) -> (result: Pixel_Shader
     shader.shader, ok = gpu.create_shader(name, data, .Pixel)
 
     if !ok {
-        log.error("RV: Failed to create pixel shader")
+        base.log_err("RV: Failed to create pixel shader")
         return
     }
 
@@ -2698,7 +2698,7 @@ load_asset_directory :: proc(path: string, watch := false) {
     iter: platform.Directory_Iter
 
     if !platform.is_directory(path) {
-        log.error("Cannot load data, '%s' is not a valid directory path", path)
+        base.log_err("Cannot load data, '%s' is not a valid directory path", path)
     }
 
     pattern := strings.concatenate({path, "\\*"}, context.temp_allocator)
@@ -2718,7 +2718,7 @@ load_asset_directory :: proc(path: string, watch := false) {
         )
 
         if !data_ok {
-            log.errorf("Failed to load file '%s' from directory '%s'", name, path)
+            base.log_err("Failed to load file '%s' from directory '%s'", name, path)
             continue
         }
 
@@ -2735,7 +2735,7 @@ load_asset_directory :: proc(path: string, watch := false) {
         // Add dir to watched paths
 
         if _state.watched_dirs_num > MAX_WATCHED_DIRS {
-            log.error("Failed to watch data directory, too many watched directories")
+            base.log_err("Failed to watch data directory, too many watched directories")
             return
         }
 
@@ -2757,9 +2757,9 @@ load_constant_asset_directory :: proc(files: []runtime.Load_Directory_File) -> (
     all_ok = true
 
     for file in files {
-        log.info(file.name)
+        base.log_info(file.name)
         if !create_file_by_name(file.name, file.data, flags = {}) {
-            log.error("Failed to create file '%s' from a constant directory", file.name)
+            base.log_err("Failed to create file '%s' from a constant directory", file.name)
             continue
         }
     }
@@ -2775,7 +2775,7 @@ load_asset :: proc(name: string, dst_group: Group_Handle) -> bool {
     if strings.has_suffix(name, ".png") {
         data, data_ok := get_file_by_name(name)
         if !data_ok {
-            log.errorf("Failed to load texture '%s', file not found", name)
+            base.log_err("Failed to load texture '%s', file not found", name)
             return false
         }
         _, ok := create_texture_from_encoded_data(name[:len(name) - 4], data)
@@ -2815,7 +2815,7 @@ get_file_by_hash :: proc(hash: Hash, flush := true) -> (data: []byte, ok: bool) 
 
 
 create_file_by_name :: proc(name: string, data: []byte, flags: bit_set[File_Flag]) -> bool {
-    log.infof("Creating file '%s' of size %M (%i bytes)", name, len(data), len(data))
+    base.log_info("Creating file '%s' of size %M (%i bytes)", name, len(data), len(data))
     return create_file_by_hash(hash_name(name), data, flags)
 }
 
@@ -2854,7 +2854,7 @@ create_render_texture :: proc(size: [2]i32, depth := true) -> (result: Render_Te
     used_set := (transmute(u64)_state.render_textures_used) | 1
     index := intrinsics.count_trailing_zeros(~used_set)
     if index == 64 {
-        log.error("Failed to create render texture: there is already max number of render textures")
+        base.log_err("Failed to create render texture: there is already max number of render textures")
         return {}, false
     }
 
@@ -2869,7 +2869,7 @@ create_render_texture :: proc(size: [2]i32, depth := true) -> (result: Render_Te
     assert(ok)
 
     if tex.color != {} {
-        log.error("Failed to create render texture color buffer")
+        base.log_err("Failed to create render texture color buffer")
         return {}, false
     }
 
@@ -2884,7 +2884,7 @@ create_render_texture :: proc(size: [2]i32, depth := true) -> (result: Render_Te
         assert(ok)
 
         if tex.depth == {} {
-            log.error("Failed to create render texture depth buffer")
+            base.log_err("Failed to create render texture depth buffer")
             return {}, false
         }
     }
@@ -2953,7 +2953,7 @@ scope_binds :: proc() -> bool {
 
 push_binds :: proc() {
     if _state.bind_states_len >= MAX_BIND_STATE_DEPTH {
-        log.error("Cannot set bind state, reached max depth")
+        base.log_err("Cannot set bind state, reached max depth")
         return
     }
 
@@ -3115,7 +3115,7 @@ set_layer_params :: proc(
 ) {
     layer, layer_ok := get_internal_draw_layer(layer)
     if !layer_ok {
-        log.error("Invalid layer index")
+        base.log_err("Invalid layer index")
         assert(false)
         return
     }
@@ -3368,7 +3368,7 @@ draw_mesh :: proc(
     mesh, mesh_ok := get_internal_mesh(handle)
     if !mesh_ok {
         // TODO: draw "error mesh" instead
-        log.error("Trying to draw a mesh with invalid handle")
+        base.log_err("Trying to draw a mesh with invalid handle")
         return
     }
 
@@ -3687,7 +3687,7 @@ upload_gpu_layers :: proc() {
         layer.sprite_insts_base = u32(sprite_upload_offs) / size_of(Sprite_Inst)
 
         if uploaded_bytes != total_bytes {
-            log.error("Failed to upload all sprite instances")
+            base.log_err("Failed to upload all sprite instances")
             footer := raw_soa_footer_dynamic_array(&layer.sprites)
             footer.len = uploaded_bytes / size_of(Sprite_Inst)
         }
@@ -3797,7 +3797,7 @@ upload_gpu_layers :: proc() {
         layer.mesh_insts_base = u32(mesh_upload_offs)
 
         if uploaded_num != len(layer.meshes) {
-            log.error("Failed to upload all mesh instances")
+            base.log_err("Failed to upload all mesh instances")
             footer := raw_soa_footer_dynamic_array(&layer.meshes)
             footer.len = uploaded_num
         }
@@ -3858,7 +3858,7 @@ upload_gpu_layers :: proc() {
         layer.triangle_insts_base = u32(triangle_upload_offs) / size_of([3]Mesh_Vertex)
 
         if uploaded_bytes != total_bytes {
-            log.error("Failed to upload all triangles")
+            base.log_err("Failed to upload all triangles")
             footer := raw_soa_footer_dynamic_array(&layer.triangles)
             footer.len = uploaded_bytes / size_of([3]Mesh_Vertex)
         }
@@ -3992,7 +3992,7 @@ render_gpu_layer :: proc(
 
     ren_tex, ren_tex_ok := get_internal_render_texture(ren_tex_handle)
     if !ren_tex_ok {
-        log.error("Trying to submit GPU commands of an invalid render texture:", ren_tex_handle)
+        base.log_err("Trying to submit GPU commands of an invalid render texture:", ren_tex_handle)
         return
     }
 
@@ -4057,7 +4057,7 @@ render_gpu_layer :: proc(
 
         pipeline, pipeline_ok := gpu.create_pipeline("sprite-pip", pip_desc)
         if !pipeline_ok {
-            log.error("Failed to create GPU pipeline")
+            base.log_err("Failed to create GPU pipeline")
             continue
         }
 
@@ -4100,7 +4100,7 @@ render_gpu_layer :: proc(
 
         pipeline, pipeline_ok := gpu.create_pipeline("mesh-pip", pip_desc)
         if !pipeline_ok {
-            log.error("Failed to create GPU pipeline")
+            base.log_err("Failed to create GPU pipeline")
             continue
         }
 
@@ -4143,7 +4143,7 @@ render_gpu_layer :: proc(
 
         pipeline, pipeline_ok := gpu.create_pipeline("tri-pip", pip_desc)
         if !pipeline_ok {
-            log.error("Failed to create GPU pipeline")
+            base.log_err("Failed to create GPU pipeline")
             continue
         }
 
@@ -4420,21 +4420,21 @@ load_sound_resource :: proc(path: string) -> (result: Sound_Resource_Handle, ok:
     // TODO: register the resource internally for hot-reload
     data, data_ok := get_file_by_name(path)
     if !data_ok {
-        log.error("Failed to load sound resource '%s' from '%s', VFS file not found", name, path)
+        base.log_err("Failed to load sound resource '%s' from '%s', VFS file not found", name, path)
     }
 
     return create_sound_resource_encoded(name, data)
 }
 
 create_sound_resource_encoded :: proc(name: string, data: []byte) -> (result: Sound_Resource_Handle, ok: bool) #optional_ok {
-    log.infof("Creating sound resource '%s' with size %i bytes", name, len(data))
+    base.log_info("Creating sound resource '%s' with size %i bytes", name, len(data))
 
     res := audio.create_resource_encoded(data) or_return
 
     if !insert_sound_resource_by_hash(name, res) {
         // NOTE: currently this can continue running somewhat correctly, the result is valid.
         // But the resource won't be tracked properly internally.
-        log.error("Failed to insert named sound resource '%s'")
+        base.log_err("Failed to insert named sound resource '%s'")
     }
 
     return res, true
@@ -4466,11 +4466,11 @@ play_sound :: proc(
 ) -> (result: audio.Sound_Handle, ok: bool) #optional_ok {
     validate(resource != {})
 
-    log.infof("Playing sound %v", resource)
+    base.log_info("Playing sound %v", resource)
 
     result, ok = audio.create_sound(resource_handle = resource, group_handle = {}, async_decode = async_decode)
     if !ok {
-        log.error("Failed to play sound", resource)
+        base.log_err("Failed to play sound", resource)
         return {}, false
     }
 
@@ -4524,7 +4524,7 @@ hash_fnv64a :: proc "contextless" (data: []byte, seed: u64) -> u64 {
 @(disabled=!LOG_INTERNAL)
 log_internal :: proc(format: string, args: ..any, loc := #caller_location) {
     when LOG_INTERNAL {
-        log.debugf(format, args = args, location = loc)
+        base.log_debug(format, args = args, location = loc)
     }
 }
 

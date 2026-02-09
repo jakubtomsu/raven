@@ -371,7 +371,7 @@ _update :: proc(prev_state: ^State) -> ^State {
     rv.render_gpu_layer(0, rv.DEFAULT_RENDER_TEXTURE, rv.Vec3{0.05, 0.1, 0.2}, true)
     rv.render_gpu_layer(1, rv.DEFAULT_RENDER_TEXTURE, nil, false)
 
-    rv.end_frame(false)
+    // rv.end_frame(false) // disable VSYNC
 
     return state
 }

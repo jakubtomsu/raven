@@ -2,7 +2,6 @@
 #+vet explicit-allocators shadowing unused
 package raven_platform
 
-import "core:log"
 import "core:sys/wasm/js"
 
 // // NOTE: frame loop is done by the odin.js repeatedly calling `step`.

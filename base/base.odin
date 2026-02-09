@@ -6,7 +6,26 @@ import "ufmt"
 // context.logger calls
 // shared datastructures
 
-log :: proc(level: runtime.Logger_Level, format: string, args: ..any, loc := #caller_location) {
+Log_Level :: runtime.Logger_Level
+
+log_err :: proc(format: string, args: ..any, loc := #caller_location) {
+    log(.Error, format = format, args = args, loc = loc)
+}
+
+log_warn :: proc(format: string, args: ..any, loc := #caller_location) {
+    log(.Warning, format = format, args = args, loc = loc)
+}
+
+log_info :: proc(format: string, args: ..any, loc := #caller_location) {
+    log(.Info, format = format, args = args, loc = loc)
+}
+
+log_debug :: proc(format: string, args: ..any, loc := #caller_location) {
+    log(.Debug, format = format, args = args, loc = loc)
+}
+
+
+log :: proc(level: Log_Level, format: string, args: ..any, loc := #caller_location) {
     logger := context.logger
     if level < logger.lowest_level {
         return

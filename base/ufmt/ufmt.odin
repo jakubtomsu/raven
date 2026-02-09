@@ -101,6 +101,8 @@ tprintf :: proc(format: string, args: ..any) -> string {
             case f16:   _append_hex(&buf, u64(transmute(u16)val), size_of(val))
             case f32:   _append_hex(&buf, u64(transmute(u32)val), size_of(val))
             case f64:   _append_hex(&buf, transmute(u64)val, size_of(val))
+            case rawptr: _append_hex(&buf, transmute(u64)val, size_of(val))
+            case uintptr: _append_hex(&buf, transmute(u64)val, size_of(val))
             case: return "<NOT INT>"
             }
 

@@ -1,11 +1,10 @@
 package raven_gpu
 
-import "core:log"
+import "../base"
 import "vendor:wgpu"
 import "base:runtime"
 import "base:intrinsics"
 
-_ :: log
 _ :: wgpu
 _ :: runtime
 _ :: intrinsics
@@ -76,18 +75,18 @@ when BACKEND == BACKEND_WGPU {
         _state.instance = wgpu.CreateInstance(nil)
 
         if _state.instance == nil {
-            log.error("WebGPU is not supported")
+            base.log_err("WebGPU is not supported")
             return false
         }
 
         _state.surface = _wgpu_create_native_surface(_state.instance, native_window, ptr = nil)
 
         if _state.surface == nil {
-            log.error("Failed to get WebGPU surface")
+            base.log_err("Failed to get WebGPU surface")
             return false
         }
 
-        log.debug("Requesting WebGPU adapter")
+        base.log_debug("Requesting WebGPU adapter")
 
         // This async shit sucks
         wgpu.InstanceRequestAdapter(
@@ -111,10 +110,10 @@ when BACKEND == BACKEND_WGPU {
         ) {
             context = _state.ctx
 
-            log.debug("Got WebGPU Adapter")
+            base.log_debug("Got WebGPU Adapter")
 
             if status != .Success || adapter == nil {
-                log.errorf("request adapter failure: [%v] %s", status, message)
+                base.log_err("request adapter failure: [%v] %s", status, message)
                 panic("WebGPU Adapter")
             }
             _state.adapter = adapter
@@ -125,12 +124,12 @@ when BACKEND == BACKEND_WGPU {
 
             for feature in required_features {
                 if !wgpu.AdapterHasFeature(_state.adapter, feature) {
-                    log.errorf("WebGPU adapter doesn't have a required feature:", feature)
+                    base.log_err("WebGPU adapter doesn't have a required feature:", feature)
                     panic("WebGPU Adapter Feature")
                 }
             }
 
-            log.debug("Requesting WebGPU Device")
+            base.log_debug("Requesting WebGPU Device")
 
             wgpu.AdapterRequestDevice(_state.adapter,
                 &wgpu.DeviceDescriptor{
@@ -149,10 +148,11 @@ when BACKEND == BACKEND_WGPU {
         ) {
             context = _state.ctx
 
-            log.debug("Got WebGPU Device")
+            base.log_debug("Got WebGPU Device")
 
             if status != .Success || device == nil {
-                log.panicf("request device failure: [%v] %s", status, message)
+                base.log_err("request device failure: [%v] %s", status, message)
+                panic("WGPU Device request failed")
             }
             _state.device = device
 
@@ -165,13 +165,13 @@ when BACKEND == BACKEND_WGPU {
                 panic("Failed to retreive device limits")
             }
 
-            log.debugf("WebGPU limits: %#v", limits)
+            base.log_debug("WebGPU limits: %#v", limits)
 
             _state.uniform_offset_align = limits.minUniformBufferOffsetAlignment
 
             _state.fully_initialized = true
 
-            log.debug("WebGPU fully initialized")
+            base.log_debug("WebGPU fully initialized")
         }
     }
 
@@ -213,7 +213,7 @@ when BACKEND == BACKEND_WGPU {
 
         case .OutOfMemory, .DeviceLost, .Error:
             // Fatal error
-            log.errorf("wgpu. Error: SurfaceGetCurrentTexture status = %v", _state.surface_texture.status)
+            base.log_err("wgpu. Error: SurfaceGetCurrentTexture status = %v", _state.surface_texture.status)
             panic("wgpu. SurfaceGetCurrentTexture Fatal Error")
         }
 
@@ -278,7 +278,7 @@ when BACKEND == BACKEND_WGPU {
     }
 
     _create_sampler :: proc(desc: Sampler_Desc) -> (result: _Sampler) {
-        log.debug("GPU: Creating WebGPU sampler")
+        base.log_debug("GPU: Creating WebGPU sampler")
 
         min_filter, mag_filter, mip_filter := _wgpu_filter(desc.filter)
 
@@ -318,7 +318,7 @@ when BACKEND == BACKEND_WGPU {
     }
 
     _create_bind_group :: proc(desc: Draw_Pipeline_Bindings) -> (result: _Bind_Group, ok: bool) {
-        log.debug("GPU: Creating WebGPU bind group")
+        base.log_debug("GPU: Creating WebGPU bind group")
 
         num_entries := 0
         layout_entries: [SAMPLER_BIND_SLOTS + CONSTANTS_BIND_SLOTS + RESOURCE_BIND_SLOTS]wgpu.BindGroupLayoutEntry
@@ -447,7 +447,7 @@ when BACKEND == BACKEND_WGPU {
                     kind = "StorageTexture"
                 }
 
-                // log.debugf("Layout item #%i: {} binding %i", i, kind, item.binding)
+                // base.log_debug("Layout item #%i: {} binding %i", i, kind, item.binding)
             }
         }
 
@@ -458,7 +458,7 @@ when BACKEND == BACKEND_WGPU {
         })
 
         if result.layout == nil {
-            log.error("WGPU: Failed to create bind group layout")
+            base.log_err("WGPU: Failed to create bind group layout")
             return {}, false
         }
 
@@ -470,7 +470,7 @@ when BACKEND == BACKEND_WGPU {
         })
 
         if result.group == nil {
-            log.error("WGPU: Failed to create bind group")
+            base.log_err("WGPU: Failed to create bind group")
             return {}, false
         }
 
@@ -478,11 +478,11 @@ when BACKEND == BACKEND_WGPU {
     }
 
     _create_pipeline :: proc(name: string, desc: Pipeline_Desc) -> (result: _Pipeline, ok: bool) {
-        // log.debugf("GPU: Creating WebGPU pipeline '%s'", name)
+        // base.log_debug("GPU: Creating WebGPU pipeline '%s'", name)
 
         bind_group, bind_group_handle, bind_group_ok := _get_or_create_bind_group(desc.bindings)
         if !bind_group_ok {
-            log.error("WGPU: Failed to create pipeline: bind group creation failed")
+            base.log_err("WGPU: Failed to create pipeline: bind group creation failed")
             return {}, false
         }
 
@@ -493,7 +493,7 @@ when BACKEND == BACKEND_WGPU {
         })
 
         if pip_layout == nil {
-            log.error("WGPU: Failed to create pipeline layout")
+            base.log_err("WGPU: Failed to create pipeline layout")
             return {}, false
         }
 
@@ -624,7 +624,7 @@ when BACKEND == BACKEND_WGPU {
         })
 
         if result.pip == nil {
-            log.error("WGPU: Failed to create pipeline")
+            base.log_err("WGPU: Failed to create pipeline")
             return {}, false
         }
 
@@ -899,7 +899,7 @@ when BACKEND == BACKEND_WGPU {
                 view = _state.surface_view
 
             case:
-                log.error("Invalid pass color, must be a Texture2D")
+                base.log_err("Invalid pass color, must be a Texture2D")
             }
 
             assert(view != nil)

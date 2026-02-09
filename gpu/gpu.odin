@@ -6,7 +6,6 @@ package raven_gpu
 import "../base"
 import "core:hash/xxhash"
 import "base:runtime"
-import "core:log"
 
 // TODO: assertion messages
 // TODO: the non-backend-specific code should use #caller_location for validation
@@ -582,7 +581,7 @@ create_pipeline :: proc(
         return result, true
     }
 
-    log.debugf("Creating pipeline '%s' %x", name, hash)
+    base.log_debug("Creating pipeline '%s' %x", name, hash)
 
     state: Pipeline_State
     state.native = _create_pipeline(name, desc) or_return
@@ -622,7 +621,7 @@ create_constants :: proc(name: string, item_size: i32, item_num: i32 = 1) -> (re
     index: int
     index, ok = _table_find_slot(_state.resource_used)
     if !ok {
-        log.error("GPU: Failed to find an empty slot for new constants")
+        base.log_err("GPU: Failed to find an empty slot for new constants")
         return {}, false
     }
 
@@ -632,7 +631,7 @@ create_constants :: proc(name: string, item_size: i32, item_num: i32 = 1) -> (re
     state.usage = .Dynamic
     state.native, ok = _create_constants(name, item_size = item_size, item_num = item_num)
     if !ok {
-        log.error("GPU: Failed to create native constants")
+        base.log_err("GPU: Failed to create native constants")
         return {}, false
     }
 
@@ -653,7 +652,7 @@ create_shader :: proc(
     index: int
     index, ok = _table_find_slot(_state.shader_used)
     if !ok {
-        log.error("GPU: Failed to find an empty slot for a new shader")
+        base.log_err("GPU: Failed to find an empty slot for a new shader")
         return {}, false
     }
 
@@ -661,7 +660,7 @@ create_shader :: proc(
     state.kind = kind
     state.native, ok = _create_shader(name, data = data, kind = kind)
     if !ok {
-        log.error("GPU: failed to create a native shader")
+        base.log_err("GPU: failed to create a native shader")
         return {}, false
     }
 
@@ -722,7 +721,7 @@ create_texture_2d :: proc(
     rw_resource:        bool = false,
     data:               []byte = nil,
 ) -> (result: Resource_Handle, ok: bool) {
-    log.debug("Creating texture:", name)
+    base.log_debug("Creating texture:", name)
 
     validate(format != .Invalid)
     validate(size.x > 0)
@@ -786,7 +785,7 @@ create_buffer :: proc(
     usage:              Usage = .Default,
     data:               []u8 = nil,
 ) -> (result: Resource_Handle, ok: bool) #optional_ok {
-    log.debug("Creating texture:", name)
+    base.log_debug("Creating buffer:", name)
 
     size := size
 
@@ -916,7 +915,7 @@ begin_pipeline :: proc(handle: Pipeline_Handle) {
     pip, pip_ok := get_internal_pipeline(handle)
 
     if !pip_ok {
-        log.error("GPU: trying to begin invalid pipeline:", handle)
+        base.log_err("GPU: trying to begin invalid pipeline:", handle)
         return
     }
 

@@ -1,9 +1,6 @@
-// https://github.com/karl-zylinski/odin-raylib-hot-reload-game-template/blob/main/source/main_hot_reload/main_hot_reload.odin
-
 #+private=file
 package raven_build
 
-import "core:flags"
 import "core:fmt"
 import "core:strings"
 import "core:strconv"

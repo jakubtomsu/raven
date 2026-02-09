@@ -61,7 +61,8 @@ clone_file :: proc(dst, src: string) {
 
 compile_web :: proc(dst_dir: string, pkg_name: string, pkg_path: string, initial_mem_pages: int, max_mem_pages: int) -> bool {
     // NOTE: size optimizations are probably not worth the time when compiling debug builds.
-    OPT_FLAGS :: "-debug " // "-o:size "
+    OPT_FLAGS :: "-debug "
+    // OPT_FLAGS :: "-o:size -no-bounds-check -disable-assert -define:GPU_RELEASE=true "
 
     FORMAT :: "%s build %s -target:js_wasm32 -out:%s/%s.wasm " +
         OPT_FLAGS +

@@ -151,17 +151,6 @@ _update :: proc(prev_state: ^State) -> ^State {
 
     rv.upload_gpu_layers()
 
-    // log.info("NUM MESHES:", len(rv._state.draw_layers[0].meshes))
-    // log.info("NUM MESH BATCHES:", len(rv._state.draw_layers[0].mesh_batches))
-
-    // for m in rv._state.draw_layers[0].meshes {
-    //     log.infof("%x : %v", transmute(u128)m.key, m.key)
-    // }
-    // for batch in rv._state.draw_layers[0].mesh_batches {
-    //     log.info(batch.key)
-    // }
-    // assert(false)
-
     rv.render_gpu_layer(0, rv.DEFAULT_RENDER_TEXTURE, rv.Vec3{0, 0, 0.1}, true)
     rv.render_gpu_layer(1, rv.DEFAULT_RENDER_TEXTURE, nil, false)
 

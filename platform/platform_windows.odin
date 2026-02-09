@@ -2,18 +2,15 @@
 #+vet explicit-allocators shadowing unused
 package raven_platform
 
+import "../base"
 import "base:intrinsics"
 import "base:runtime"
-import "core:fmt"
 import "core:sys/windows"
-import "core:log"
 
 // Vet
 _ :: intrinsics
 _ :: runtime
-_ :: fmt
 _ :: windows
-_ :: log
 
 // https://ph3at.github.io/posts/Windows-Input/
 
@@ -432,7 +429,7 @@ when BACKEND == BACKEND_WINDOWS {
         )
 
         if handle == nil {
-            log.error("Failed to create thread.")
+            base.log_err("Failed to create thread.")
             return {}
         }
 
@@ -448,11 +445,11 @@ when BACKEND == BACKEND_WINDOWS {
     _join_thread :: proc(thread: Thread) {
         if windows.WaitForSingleObject(thread.handle, windows.INFINITE) ==
         windows.WAIT_FAILED {
-            log.error("Failed to wait for threads to finish.")
+            base.log_err("Failed to wait for threads to finish.")
             return
         }
         if !windows.CloseHandle(thread.handle) {
-            log.error("Failed to close thread handle")
+            base.log_err("Failed to close thread handle")
             return
         }
     }
@@ -753,7 +750,7 @@ when BACKEND == BACKEND_WINDOWS {
 
         buf, err := make([]byte, size, allocator)
         if err != nil {
-            log.error("Failed to Allocate buffer")
+            base.log_err("Failed to Allocate buffer")
             return {}, false
         }
 
@@ -857,7 +854,7 @@ when BACKEND == BACKEND_WINDOWS {
         err: runtime.Allocator_Error
         file.buffer, err = runtime.mem_alloc_non_zeroed(aligned_size, SECTOR_SIZE, allocator)
         if err != nil {
-            log.errorf("Failed to Allocate buffer of size %M", size)
+            base.log_err("Failed to Allocate buffer of size %i bytes", size)
             return {}, false
         }
 
@@ -968,7 +965,7 @@ when BACKEND == BACKEND_WINDOWS {
             )
 
             if iter.handle == windows.INVALID_HANDLE_VALUE {
-                // log.error("invalid init:", path)
+                // base.log_err("invalid init:", path)
                 // _win32_log_last_error("FindFirstFileW")
                 return {}, false
             }
@@ -982,7 +979,7 @@ when BACKEND == BACKEND_WINDOWS {
 
         res, err := windows.wstring_to_utf8_alloc(transmute(cstring16)&iter.find.cFileName[0], N = -1, allocator = allocator)
         if err != nil {
-            log.error(err)
+            base.log_err("%v", err)
             return "", false
         }
 
@@ -1005,7 +1002,7 @@ when BACKEND == BACKEND_WINDOWS {
         )
 
         if watcher.handle == windows.INVALID_HANDLE_VALUE {
-            log.errorf("Failed to initialize file watcher with path '%s", path)
+            base.log_err("Failed to initialize file watcher with path '%s", path)
             _win32_log_last_error("CreateFileW")
             watcher.handle = {}
             return false
@@ -1117,7 +1114,7 @@ when BACKEND == BACKEND_WINDOWS {
         }
 
         if windows.RegisterClassW(&wndclass) == 0 {
-            fmt.println("Failed to register class")
+            base.log_err("Failed to register class")
         }
 
         name_buf: [256]u16
@@ -1153,7 +1150,7 @@ when BACKEND == BACKEND_WINDOWS {
         )
 
         if hwnd == nil {
-            fmt.println("Failed to create window")
+            base.log_err("Failed to create window")
             return {}
         }
 
@@ -1236,8 +1233,6 @@ when BACKEND == BACKEND_WINDOWS {
         lparam: windows.LPARAM,
     ) -> (result: windows.LRESULT) {
         context = runtime.default_context()
-
-        // fmt.println("DISPATCHED:", _win32_message_name(msg))
 
         result = -1
 
@@ -1810,7 +1805,7 @@ when BACKEND == BACKEND_WINDOWS {
             if str[len(str)-1] == '\n' {
                 str = str[:len(str)-1]
             }
-            log.error(text, ":", str, location = loc)
+            base.log_err("%s : %s", text, str, loc = loc)
         }
     }
 

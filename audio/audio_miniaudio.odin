@@ -2,12 +2,11 @@
 #+vet explicit-allocators shadowing unused
 package raven_audio
 
-import "core:log"
+import "../base"
 // https://miniaud.io/docs/manual/index.html
 import ma "vendor:miniaudio"
 
 _ :: ma
-_ :: log
 
 when BACKEND == BACKEND_MINIAUDIO {
 
@@ -336,7 +335,7 @@ when BACKEND == BACKEND_MINIAUDIO {
         case .SUCCESS:
             return true
         }
-        log.errorf("Audio: miniaudio error: %v (%s)", res, expr, location = loc)
+        base.log_err("Audio: miniaudio error: %v (%s)", res, expr, loc = loc)
         return false
     }
 

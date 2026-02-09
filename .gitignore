@@ -16,6 +16,7 @@
 
 *.blend
 *.blend1
+*.dot
 
 !data/default.rscn
 !data/default.rscn.bin
