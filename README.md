@@ -44,6 +44,8 @@ Inspired by Sokol, PICO8 and Raylib.
     - Unicode font support (currently only CP437 atlases are supported)
 - Simple GUI and gizmo system
 - Geometry and Collision package
+- Skinned meshes and animations
+- Pakfiles
 
 ## Simple Example
 
@@ -220,6 +222,7 @@ oklerp(a, b: Vec4, t: f32) -> Vec4          // Interpolate colors with OKLAB
 
 # Contributing
 For info about bug reports and contributing, see [CONTRIBUTING](CONTRIBUTING.md)
+
 
 
 
