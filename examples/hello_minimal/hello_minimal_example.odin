@@ -8,12 +8,9 @@ main :: proc() {
 
     context = rv.get_context()
 
-    rv.init_window("Raven Hello Example")
-
     defer rv.shutdown_state()
 
     for rv.begin_frame() {
-
         if rv.key_pressed(.Escape) {
             break
         }

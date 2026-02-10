@@ -22,23 +22,19 @@ Ball :: struct {
     radius: f32,
 }
 
+@export _module_desc := rv.Module_Desc {
+    state_size = size_of(State),
+    init = _init,
+    shutdown = _shutdown,
+    update = _update,
+}
+
 main :: proc() {
-    rv.run_main_loop(_module_api())
+    rv.run_main_loop(_module_desc)
 }
 
-@export _module_api :: proc "contextless" () -> (result: rv.Module_Desc) {
-    result = {
-        state_size = size_of(State),
-        init = transmute(rv.Init_Proc)_init,
-        shutdown = transmute(rv.Shutdown_Proc)_shutdown,
-        update = transmute(rv.Update_Proc)_update,
-    }
-    return result
-}
-
-_init :: proc() -> ^State {
+_init :: proc() {
     state = new(State)
-    rv.init_window("Raven Bouncing Ball Example")
 
     state.ball_texture = rv.create_texture_from_encoded_data(
         "circle",
@@ -51,21 +47,24 @@ _init :: proc() -> ^State {
         speed = {5.0, 4.0},
         radius = 60,
     }
-
-    return state
 }
 
-_shutdown :: proc(prev_state: ^State) {
-    free(prev_state)
+_shutdown :: proc() {
+    free(state)
 }
 
-_update :: proc(prev_state: ^State) -> ^State {
-    state = prev_state
+_update :: proc(hot_state: rawptr) -> rawptr {
+    if hot_state != nil {
+        state = cast(^State)hot_state
+    }
+
+    if rv.key_pressed(.Escape) {
+        rv.request_shutdown()
+    }
 
     ball := &state.ball
     screen := rv.get_screen_size()
 
-    if rv.key_pressed(.Escape) do return nil
     if rv.key_pressed(.Space) do state.paused = !state.paused
 
     if !state.paused {
@@ -83,15 +82,14 @@ _update :: proc(prev_state: ^State) -> ^State {
 
     rv.set_layer_params(0, rv.make_screen_camera())
 
-    rv.bind_sprite_scaling(.Absolute)
     rv.bind_texture("circle")
     rv.draw_sprite(
         pos = state.ball.position,
         scale = {ball.radius * 2, ball.radius * 2},
         col = {1.0, 0.0, 0.0, 1.0},
+        scaling = .Absolute,
     )
 
-    rv.bind_sprite_scaling(.Pixel)
     rv.bind_texture("thick")
     rv.bind_blend(.Alpha)
     rv.draw_text("PRESS SPACE to PAUSE BALL MOVEMENT", {20, 20, 0}, scale = 4, col = {0, 0, 0, 1})

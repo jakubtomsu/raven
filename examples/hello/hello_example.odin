@@ -18,7 +18,12 @@ main :: proc() {
     rv.run_main_loop(_module_desc)
 }
 
+// NOTE: see simple_3d or other examples to learn how a full app with state does hotreload.
 _update :: proc(_: rawptr) -> rawptr {
+    if rv.key_pressed(.Escape) {
+        rv.request_shutdown()
+    }
+
     // Raven renders into "draw layers".
     // Layer 0 is the default one, so let's set up a regular screenspace view for it.
     rv.set_layer_params(0, rv.make_screen_camera())
@@ -38,11 +43,7 @@ _update :: proc(_: rawptr) -> rawptr {
     // To actually display it on the screen you must first upload it to the GPU, and then
     // explicily render each layer into a particular render texture.
     rv.upload_gpu_layers()
-    rv.render_gpu_layer(0, rv.DEFAULT_RENDER_TEXTURE, clear_color = rv.Vec3{0, 0, 0.5}, clear_depth = true)
-
-    if rv.key_pressed(.Escape) {
-        rv.request_shutdown()
-    }
+    rv.render_gpu_layer(0, rv.DEFAULT_RENDER_TEXTURE, clear_color = rv.DARK_BLUE.rgb, clear_depth = true)
 
     return nil
 }

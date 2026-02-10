@@ -14,17 +14,15 @@ State :: struct {
     cam_ang:    rv.Vec3,
 }
 
-main :: proc() {
-    rv.run_main_loop(_module_api())
+@export _module_desc := rv.Module_Desc {
+    state_size = size_of(State),
+    init = _init,
+    shutdown = _shutdown,
+    update = _update,
 }
 
-@export _module_api :: proc "contextless" () -> (rv.Module_Desc) {
-    return {
-        state_size = size_of(State),
-        init = transmute(rv.Init_Proc)_init,
-        shutdown = transmute(rv.Shutdown_Proc)_shutdown,
-        update = transmute(rv.Update_Proc)_update,
-    }
+main :: proc() {
+    rv.run_main_loop(_module_desc)
 }
 
 _init :: proc() -> ^State {
@@ -32,7 +30,7 @@ _init :: proc() -> ^State {
 
     rv.init_window("Simple 3D Example")
     // TODO: FIXME: relative and non-relative mouse have inverted delta
-    platform.set_mouse_relative(rv._state.window, true)
+    platform.set_mouse_relative(rv.get_window(), true)
     platform.set_mouse_visible(false)
 
     state.cam_pos = {25, 5, -25}
@@ -45,12 +43,15 @@ _shutdown :: proc(prev_state: ^State) {
     free(prev_state)
 }
 
-_update :: proc(prev_state: ^State) -> ^State {
-    state = prev_state
+_update :: proc(hot_state: rawptr) -> rawptr {
+    if hot_state != nil {
+        state = cast(^State)hot_state
+    }
 
     if rv.key_pressed(.Escape) {
-        return nil
+        rv.request_shutdown()
     }
+
 
     delta := rv.get_delta_time()
 

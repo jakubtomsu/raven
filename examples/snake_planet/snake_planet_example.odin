@@ -65,24 +65,22 @@ Segment :: struct {
     pos:    rv.Vec3,
 }
 
+@export _module_desc := rv.Module_Desc {
+    state_size = size_of(State),
+    init = _init,
+    shutdown = _shutdown,
+    update = _update,
+}
+
 main :: proc() {
-    rv.run_main_loop(_module_api())
+    rv.run_main_loop(_module_desc)
 }
 
-@export _module_api :: proc "contextless" () -> (rv.Module_Desc) {
-    return {
-        state_size = size_of(State),
-        init = transmute(rv.Init_Proc)_init,
-        shutdown = transmute(rv.Shutdown_Proc)_shutdown,
-        update = transmute(rv.Update_Proc)_update,
-    }
-}
-
-_init :: proc() -> ^State {
+_init :: proc() {
     state = new(State)
 
-    rv.init_window("Snake Planet Example")
-    platform.set_mouse_relative(rv._state.window, true)
+    platform.set_window_title(rv.get_window(), "Snake Planet")
+    platform.set_mouse_relative(rv.get_window(), true)
     platform.set_mouse_visible(false)
 
     state.death_sound = rv.create_sound_resource_encoded("death", #load("../data/snake_death_sound.wav")) or_else panic("load")
@@ -90,12 +88,10 @@ _init :: proc() -> ^State {
     state.music_res = rv.create_sound_resource_encoded("music", #load("../data/Emerald.ogg")) or_else panic("load")
 
     state.screen = .Menu
-
-    return state
 }
 
-_shutdown :: proc(prev_state: ^State) {
-    free(prev_state)
+_shutdown :: proc() {
+    free(state)
 }
 
 new_game :: proc() {
@@ -168,11 +164,13 @@ add_snake_segment :: proc() {
     snake.num_segments += 1
 }
 
-_update :: proc(prev_state: ^State) -> ^State {
-    state = prev_state
+_update :: proc(hot_state: rawptr) -> rawptr {
+    if hot_state != nil {
+        state = cast(^State)hot_state
+    }
 
     if rv.key_pressed(.Escape) {
-        return nil
+        rv.request_shutdown()
     }
 
     delta := rv.get_delta_time()

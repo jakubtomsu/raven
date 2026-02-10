@@ -9,34 +9,34 @@ import "base:intrinsics"
 // TODO: 1d/2d/3d hashing
 
 // TODO: non ugly colors? paletted? more shades?
-WHITE       :: Vec4{1, 1, 1, 1}
-BLACK       :: Vec4{0, 0, 0, 1}
-TRANSPARENT :: Vec4{1, 1, 1, 0}
-GRAY        :: Vec4{0.5, 0.5, 0.5, 1}
-DARK_GRAY   :: Vec4{0.25, 0.25, 0.25, 1}
-LIGHT_GRAY  :: Vec4{0.75, 0.75, 0.75, 1}
-RED         :: Vec4{1, 0, 0, 1}
-DARK_RED    :: Vec4{0.5, 0, 0, 1}
-LIGHT_RED   :: Vec4{1, 0.5, 0.5, 1}
-GREEN       :: Vec4{0, 1, 0, 1}
-DARK_GREEN  :: Vec4{0, 0.5, 0, 1}
-LIGHT_GREEN :: Vec4{0.5, 1, 0.5, 1}
-BLUE        :: Vec4{0, 0, 1, 1}
-DARK_BLUE   :: Vec4{0, 0, 0.5, 1}
-LIGHT_BLUE  :: Vec4{0.5, 0.5, 1, 1}
-YELLOW      :: Vec4{1, 1, 0, 1}
-LIGHT_YELLOW:: Vec4{1, 1, 0.5, 1}
-CYAN        :: Vec4{0, 1, 1, 1}
-DARK_CYAN   :: Vec4{0, 0.5, 0.5, 1}
-LIGHT_CYAN  :: Vec4{0.5, 1, 1, 1}
-PINK        :: Vec4{1, 0, 1, 1}
-DARK_PINK   :: Vec4{0.5, 0, 0.5, 1}
-LIGHT_PINK  :: Vec4{1, 0.5, 1, 1}
-ORANGE      :: Vec4{1, 0.5, 0, 1}
-LIGHT_ORANGE:: Vec4{1, 0.75, 0.5, 1}
-PURPLE      :: Vec4{0.5, 0, 1, 1}
-DARK_PURPLE :: Vec4{0.25, 0, 0.5, 1}
-LIGHT_PURPLE:: Vec4{0.75, 0.5, 1, 1}
+WHITE           :: Vec4{1, 1, 1, 1}
+BLACK           :: Vec4{0, 0, 0, 1}
+TRANSPARENT     :: Vec4{1, 1, 1, 0}
+GRAY            :: Vec4{0.5, 0.5, 0.5, 1}
+DARK_GRAY       :: Vec4{0.25, 0.25, 0.25, 1}
+LIGHT_GRAY      :: Vec4{0.75, 0.75, 0.75, 1}
+RED             :: Vec4{1, 0, 0, 1}
+DARK_RED        :: Vec4{0.5, 0, 0, 1}
+LIGHT_RED       :: Vec4{1, 0.5, 0.5, 1}
+GREEN           :: Vec4{0, 1, 0, 1}
+DARK_GREEN      :: Vec4{0, 0.5, 0, 1}
+LIGHT_GREEN     :: Vec4{0.5, 1, 0.5, 1}
+BLUE            :: Vec4{0, 0, 1, 1}
+DARK_BLUE       :: Vec4{0, 0, 0.5, 1}
+LIGHT_BLUE      :: Vec4{0.5, 0.5, 1, 1}
+YELLOW          :: Vec4{1, 1, 0, 1}
+LIGHT_YELLOW    :: Vec4{1, 1, 0.5, 1}
+CYAN            :: Vec4{0, 1, 1, 1}
+DARK_CYAN       :: Vec4{0, 0.5, 0.5, 1}
+LIGHT_CYAN      :: Vec4{0.5, 1, 1, 1}
+PINK            :: Vec4{1, 0, 1, 1}
+DARK_PINK       :: Vec4{0.5, 0, 0.5, 1}
+LIGHT_PINK      :: Vec4{1, 0.5, 1, 1}
+ORANGE          :: Vec4{1, 0.5, 0, 1}
+LIGHT_ORANGE    :: Vec4{1, 0.75, 0.5, 1}
+PURPLE          :: Vec4{0.5, 0, 1, 1}
+DARK_PURPLE     :: Vec4{0.25, 0, 0.5, 1}
+LIGHT_PURPLE    :: Vec4{0.75, 0.5, 1, 1}
 
 quat_angle_axis :: linalg.quaternion_angle_axis_f32
 

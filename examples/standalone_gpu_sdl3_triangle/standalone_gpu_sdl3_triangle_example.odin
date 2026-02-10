@@ -67,7 +67,7 @@ main :: proc() {
                 0 = {
                     resource = gpu.get_swapchain(),
                     clear_mode = .Clear,
-                    clear_val = {0.1, 0.2, 0.2, 1},
+                    clear_val = {0.01, 0.1, 0.2, 1},
                 },
             },
         })
