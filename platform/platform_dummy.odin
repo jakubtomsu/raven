@@ -69,6 +69,7 @@ when BACKEND == BACKEND_DUMMY {
     @(require_results) _create_window :: proc(name: string, style: Window_Style = .Regular, full_rect: Rect = {}) -> Window { dummy() }
     _destroy_window :: proc(window: Window) { dummy() }
     @(require_results) _window_dpi_scale :: proc(window: Window) -> f32 { dummy() }
+    _set_window_title :: proc(window: Window, name: string) { dummy() }
     _set_window_style :: proc(window: Window, style: Window_Style) { dummy() }
     _set_window_pos :: proc(window: Window, pos: [2]i32) { dummy() }
     _set_window_size :: proc(window: Window, size: [2]i32) { dummy() }

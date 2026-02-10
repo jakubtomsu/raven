@@ -117,6 +117,11 @@ Pixel_Shader_Handle :: distinct Handle
 Sound_Resource_Handle :: audio.Resource_Handle
 Sound_Handle :: audio.Sound_Handle
 
+Module_Desc :: base.Module_Desc
+Module_Init_Proc :: base.Module_Init_Proc
+Module_Shutdown_Proc :: base.Module_Shutdown_Proc
+Module_Update_Proc :: base.Module_Update_Proc
+
 
 Rect :: struct {
     min:    Vec2,
@@ -164,8 +169,9 @@ State :: struct #align(64) {
     allocator:              runtime.Allocator,
     window:                 platform.Window,
     dpi_scale:              f32,
-    module_result:          rawptr,
-    module_api:             Module_API,
+    module_desc:            Module_Desc,
+    module_data:            rawptr,
+    shutdown_requested:     bool,
 
     debug_trace_ctx:        debug_trace.Context,
     context_state:          Context_State,
@@ -606,85 +612,55 @@ get_state_ptr :: proc "contextless" () -> (state: ^State) {
     return _state
 }
 
-@(require_results)
-is_initialized :: proc "contextless" () -> bool {
-    if _state == nil {
-        return false
-    }
 
-    return _state.initialized
+when ODIN_OS == .JS {
+    @(export) step :: __js_step
+} else when ODIN_BUILD_MODE == .Dynamic {
+    @(export) _module_hot_step :: __module_hot_step
 }
 
-Init_Proc ::       #type proc() -> rawptr
-Shutdown_Proc ::   #type proc(rawptr)
-Update_Proc ::     #type proc(rawptr) -> rawptr
-
-// WARNING: this structure must match the one in build_hot.odin exactly,
-// since it's passed between DLLs when hot-reloading.
-Module_API :: struct {
-    state_size: i64,
-    init:       Init_Proc,
-    shutdown:   Shutdown_Proc,
-    update:     Update_Proc,
-}
 
 // Default runner for a raven app.
-// This is optional, but it's a good default.
 // Calling this does nothing when compiling as a DLL, it's the responsibility
 // of whoever loaded the DLL (e.g. hotreload runner) to call the app.
 // NOTE: Things like reload never get called in this mode.
-run_main_loop :: proc(api: Module_API) {
-    ensure(api.init != nil)
-    ensure(api.update != nil)
+run_main_loop :: proc(desc: Module_Desc) {
+    ensure(desc.update != nil)
 
     when ODIN_BUILD_MODE == .Dynamic {
 
-        // Nothing
+        // Nothing.
 
     } else when ODIN_OS == .JS {
 
         init_state(context.allocator)
-
-        context = get_context()
-
-        _state.module_api = api
-        _state.module_result = api.init()
+        _state.module_desc = desc
 
     } else when ODIN_OS == .Windows || ODIN_OS == .Linux || ODIN_OS == .Darwin {
 
         init_state(context.allocator)
-
         context = get_context()
 
-        _state.module_result = api.init()
+        ensure(_state.gpu_state.init_done)
 
-        if _state.module_result == nil {
-            return
+        if desc.init != nil {
+            desc.init()
         }
-
-        ensure(_state.window != {}, "Init procedure must create a window")
-        ensure(_state.gpu_state.fully_initialized)
 
         for {
             if !begin_frame() {
                 break
             }
 
-            res := api.update(_state.module_result)
-
-            if res == nil {
-                break
-            }
+            _state.module_data = desc.update(nil)
 
             if !_state.ended_frame {
                 end_frame()
             }
-
-            _state.module_result = res
         }
 
-        if api.shutdown != nil && _state.module_result != nil {
-            api.shutdown(_state.module_result)
+        if desc.shutdown != nil {
+            desc.shutdown()
         }
 
         shutdown_state()
@@ -694,115 +670,84 @@ run_main_loop :: proc(api: Module_API) {
     }
 }
 
-when ODIN_OS == .JS {
-    @(export)
-    step :: proc(dt: f32) -> (keep_running: bool) {
-        base.log_info("Step")
+__js_step :: proc(dt: f32) -> (keep_running: bool) {
+    assert(_state != nil)
+    assert(_state.module_desc.update != nil)
+    assert(_state.module_desc.init != nil)
 
-        assert(_state != nil)
-        assert(_state.module_api.update != nil)
-        assert(_state.module_api.init != nil)
-
-        // In case init returned nil
-        if _state.module_result == nil {
-            return false
-        }
-
-        context = get_context()
-
-        if !_state.initialized {
-            if _state.gpu_state.fully_initialized {
-                _finish_init()
-            } else {
-                return true
-            }
-        }
-
-        prev_result := _state.module_result
-
-        if !begin_frame() {
-            _state.module_api.shutdown(prev_result)
-            return false
-        }
-
-        _state.module_result = _state.module_api.update(_state.module_result)
-
-        if _state.module_result == nil {
-            _state.module_api.shutdown(prev_result)
-            return false
-        }
-
-        if !_state.ended_frame {
-            end_frame()
-        }
-
-        return true
+    // In case init returned nil
+    if _state.module_data == nil {
+        return false
     }
-} else when ODIN_BUILD_MODE == .Dynamic {
-    @(export)
-    _module_hot_step :: proc "contextless" (prev_state: ^State, api: Module_API) -> ^State {
-        if prev_state == nil {
-            // First init
 
-            context = runtime.default_context()
+    context = get_context()
 
-            fmt.println("raven hot step: init")
-
-            init_state(context.allocator)
-
-            context = get_context()
-
-            ensure(_state != nil)
-
-            _state.module_result = api.init()
-
-            ensure(_state.window != {}, "Init procedure must create a window")
-            ensure(_state.gpu_state.fully_initialized)
-
-            return _state
-
-        } else if _state == nil {
-            // Hot-reload
-            set_state_ptr(prev_state)
-
-            context = runtime.default_context()
-            fmt.println("raven hot step: reload")
-
-            return _state
+    if !_state.initialized {
+        if _state.gpu_state.init_done {
+            _post_gpu_init()
+        } else {
+            return true
         }
+    }
 
-        // Regular frame
-
-        if _state.module_result == nil {
-            return nil
+    if !begin_frame() {
+        if _state.module_desc.shutdown != nil {
+            _state.module_desc.shutdown()
         }
+        return false
+    }
 
+    _state.module_data = _state.module_desc.update(nil)
+
+    if !_state.ended_frame {
+        end_frame()
+    }
+
+    return true
+}
+
+__module_hot_step :: proc "contextless" (prev_state: ^State, desc: Module_Desc) -> ^State {
+    hotreloaded := false
+
+    if prev_state == nil {
+        // First init
+        context = runtime.default_context()
+
+        assert(_state == nil)
+
+        init_state(context.allocator)
         context = get_context()
+        ensure(_state != nil)
+        assert(gpu.is_init_done())
 
-        prev_result := _state.module_result
-
-        if !begin_frame() {
-            if _state.module_api.shutdown != nil {
-                _state.module_api.shutdown(prev_result)
-            }
-            return nil
-        }
-
-        _state.module_result = api.update(_state.module_result)
-
-        if _state.module_result == nil {
-            if _state.module_api.shutdown != nil {
-                _state.module_api.shutdown(prev_result)
-            }
-            return nil
-        }
-
-        if !_state.ended_frame {
-            end_frame()
+        if desc.init != nil {
+            desc.init()
         }
 
         return _state
+
+    } else if _state == nil {
+        hotreloaded = true
+        set_state_ptr(prev_state)
+        context = get_context()
     }
+
+    context = get_context()
+
+    if !begin_frame() {
+        if desc.shutdown != nil {
+            desc.shutdown()
+        }
+        return nil
+    }
+
+    _state.module_data = desc.update(hotreloaded ? _state.module_data : nil)
+
+    if !_state.ended_frame {
+        end_frame()
+    }
+
+    return _state
 }
 
 
@@ -867,41 +812,32 @@ init_state :: proc(allocator := context.allocator) {
 
     base.log_info("Initializing audio...")
 
-    audio.init(&_state.audio_state)
+    if !audio.init(&_state.audio_state) {
+        panic("Failed to initialize audio")
+    }
 
     for &counter in _state.counters {
         counter.total_min = max(u64)
         counter.accum = max(u64)
     }
-}
 
-// No-op if already initialized.
-init_window :: proc(name := "Raven App", style: platform.Window_Style = .Regular, allocator := context.allocator) {
-    base.log_info("Creating window '%s'...", name)
+    base.log_info("Creating Window...")
 
-    ensure(_state != nil)
-    ensure(_state.window == {})
-    assert(platform._state != nil)
-    assert(audio._state != nil)
-
-    _state.window = platform.create_window(name, style = style)
+    _state.window = platform.create_window("Raven App", style = .Regular)
 
     base.log_info("Initializing GPU...")
 
-    gpu.init(&_state.gpu_state, platform.get_native_window_ptr(_state.window))
-
-    // TODO: more safety checking in the entire init function
-
-    if ODIN_OS == .Windows {
-        assert(_state.gpu_state.fully_initialized)
+    if !gpu.init(&_state.gpu_state, platform.get_native_window_ptr(_state.window)) {
+        panic("Failed to initialize GPU")
     }
 
-    if _state.gpu_state.fully_initialized {
-        _finish_init()
+    if ODIN_OS != .JS {
+        assert(gpu.is_init_done())
+        _post_gpu_init()
     }
 }
 
-_finish_init :: proc() {
+_post_gpu_init :: proc() {
     base.log_info("Finishing GPU Init...")
 
     assert(_state != nil)
@@ -967,6 +903,7 @@ _finish_init :: proc() {
 
     _state.quad_ibuf = gpu.create_index_buffer("rv-quad-index-buf", data = gpu.slice_bytes(quad_indices[:])) or_else panic("gpu")
 
+    // TODO: refactor all the asset loading here
 
     _state.default_texture = create_texture_from_encoded_data(
         "default",
@@ -1038,10 +975,19 @@ _finish_init :: proc() {
     _state.initialized = true
 }
 
+request_shutdown :: proc() {
+    _state.shutdown_requested = true
+}
+
+// Called automatically at the right time when you call rv.request_shutdown()!
 shutdown_state :: proc() {
     base.log_info("Shutting down Raven...")
     if _state == nil {
         return
+    }
+
+    if !_state.ended_frame {
+        end_frame(false)
     }
 
     _print_stats_report()
@@ -1133,7 +1079,7 @@ begin_frame :: proc() -> (keep_running: bool) {
     defer free_all(context.temp_allocator)
 
     if _state.frame_index == 0 {
-        base.log_info("Time to first frame: %.3f ms", f32((platform.get_time_ns() - _state.start_time) / 1e3) * 1e-3)
+        base.log_info("Time to first frame: %f ms", f32((platform.get_time_ns() - _state.start_time) / 1e3) * 1e-3)
     }
 
     keep_running = true
@@ -1167,7 +1113,7 @@ begin_frame :: proc() -> (keep_running: bool) {
     }
 
     gpu_can_begin_frame := gpu.begin_frame()
-    assert(gpu_can_begin_frame)
+    assert(gpu_can_begin_frame) // HACK
 
     audio.update()
 
@@ -1348,6 +1294,9 @@ begin_frame :: proc() -> (keep_running: bool) {
     bind_vertex_shader_by_handle({})
     bind_texture_by_handle({})
 
+    if _state.shutdown_requested {
+        keep_running = false
+    }
 
     return keep_running
 }
@@ -1391,7 +1340,7 @@ _clear_draw_layers :: proc() {
 // MARK: Util
 //
 
-// Frame's delta time
+// Last frame delta time
 @(require_results)
 get_delta_time :: proc() -> f32 {
     return f32(f64(_state.frame_dur_ns) * 1e-9)
@@ -1405,6 +1354,11 @@ get_frame_index :: proc() -> u64 {
 @(require_results)
 get_time :: proc() -> f32 {
     return f32(f64(_state.curr_time - _state.start_time) * 1e-9)
+}
+
+@(require_results)
+get_window :: proc() -> platform.Window {
+    return _state.window
 }
 
 @(require_results)
@@ -1595,7 +1549,7 @@ load_scene_from_data :: proc(txt: string, bin: []byte, dst_group: Group_Handle) 
             }
 
         case rscn.Mesh:
-            base.log_debug("Loading Mesh:", v.name)
+            base.log_debug("Loading Mesh: %s", v.name)
 
             index := mesh_counter
             mesh_counter += 1
@@ -1627,7 +1581,7 @@ load_scene_from_data :: proc(txt: string, bin: []byte, dst_group: Group_Handle) 
             mesh_list[index] = handle
 
         case rscn.Spline:
-            base.log_debug("Loading Spline:", v.name)
+            base.log_debug("Loading Spline: %s", v.name)
 
             index := spline_counter
             spline_counter += 1
@@ -1666,7 +1620,7 @@ load_scene_from_data :: proc(txt: string, bin: []byte, dst_group: Group_Handle) 
             spline_list[index] = handle
 
         case rscn.Object:
-            base.log_debug("Loading Object:", v.name)
+            base.log_debug("Loading Object: %s", v.name)
 
             index := object_counter
             object_counter += 1

@@ -435,6 +435,10 @@ window_dpi_scale :: proc(window: Window) -> f32 {
     return _window_dpi_scale(window)
 }
 
+set_window_title :: proc(window: Window, name: string) {
+    _set_window_title(window, name)
+}
+
 set_window_style :: proc(window: Window, style: Window_Style) {
     _set_window_style(window, style)
 }

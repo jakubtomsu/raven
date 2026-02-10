@@ -27,7 +27,7 @@ main :: proc() {
     rv.run_main_loop(_module_api())
 }
 
-@export _module_api :: proc "contextless" () -> (rv.Module_API) {
+@export _module_api :: proc "contextless" () -> (rv.Module_Desc) {
     return {
         state_size = size_of(State),
         init = transmute(rv.Init_Proc)_init,
@@ -233,7 +233,7 @@ sample_terrain :: proc(pos: rv.Vec2) -> f32 {
         read_terrain(coord + {0, 1}),
         read_terrain(coord + {1, 1}),
     }
-    
+
     // triangle check
     if sub.x + sub.y <= 1.0 {
         // interpolating within bottom left triangle

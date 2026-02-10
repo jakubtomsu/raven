@@ -1110,7 +1110,7 @@ when BACKEND == BACKEND_WINDOWS {
             hCursor = nil,
             hbrBackground = nil,
             lpszMenuName = nil,
-            lpszClassName = "jt",
+            lpszClassName = "raven",
         }
 
         if windows.RegisterClassW(&wndclass) == 0 {
@@ -1136,7 +1136,7 @@ when BACKEND == BACKEND_WINDOWS {
 
         hwnd := windows.CreateWindowExW(
             dwExStyle = 0,
-            lpClassName = "jt",
+            lpClassName = "raven",
             lpWindowName = wname,
             dwStyle = _win32_window_style(style) | windows.WS_VISIBLE,
             X = full_rect.min.x,
@@ -1196,6 +1196,13 @@ when BACKEND == BACKEND_WINDOWS {
         ) {
             _win32_log_last_error("SetWindowPos")
         }
+    }
+
+    _set_window_title :: proc(window: Window, name: string) {
+        name_buf: [256]u16
+        wname := windows.utf8_to_wstring_buf(name_buf[:], name)
+
+        windows.SetWindowTextW(window.hwnd, wname)
     }
 
     _set_window_pos :: proc(window: Window, pos: [2]i32) {

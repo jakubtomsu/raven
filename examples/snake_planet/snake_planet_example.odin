@@ -69,7 +69,7 @@ main :: proc() {
     rv.run_main_loop(_module_api())
 }
 
-@export _module_api :: proc "contextless" () -> (rv.Module_API) {
+@export _module_api :: proc "contextless" () -> (rv.Module_Desc) {
     return {
         state_size = size_of(State),
         init = transmute(rv.Init_Proc)_init,

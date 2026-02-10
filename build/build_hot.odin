@@ -7,6 +7,7 @@ import "core:strconv"
 import "core:log"
 import "base:runtime"
 import "../platform"
+import "../base"
 
 when ODIN_OS == .Windows {
     DLL_EXT :: ".dll"
@@ -16,19 +17,9 @@ when ODIN_OS == .Windows {
     DLL_EXT :: ".so"
 }
 
-Hotreload_Module_API_Proc :: #type proc "contextless" () -> Hotreload_Module_API
-
-Hotreload_Module_API :: struct {
-    state_size: i64,
-    init:       rawptr,
-    shutdown:   rawptr,
-    update:     rawptr,
-}
-
 Hotreload_Module :: struct {
-    mod:            platform.Module,
-    api:            Hotreload_Module_API,
-    callback:       proc "contextless" (prev_data: rawptr, api: Hotreload_Module_API) -> rawptr,
+    mod:    platform.Module,
+    desc:   base.Module_Desc,
 }
 
 Hotreload_File :: struct {
@@ -43,10 +34,6 @@ exec :: proc(str: string) -> bool {
         return false
     }
     return true
-}
-
-get_package_name_from_path :: proc() {
-
 }
 
 compile_hot :: proc(pkg: string, pkg_name: string, index: int) {
@@ -221,24 +208,14 @@ load_hotreload_module :: proc(path: string) -> (result: Hotreload_Module, ok: bo
         return {}, false
     }
 
-    get_module_api_proc := cast(Hotreload_Module_API_Proc)platform.module_symbol_address(module, "_module_api")
+    module_desc_ptr := cast(^base.Module_Desc)platform.module_symbol_address(module, "_module_desc")
 
-    if get_module_api_proc == nil {
-        log.info("Hotreload: Failed to find _module_api procedure")
+    if module_desc_ptr == nil {
+        log.info("Hotreload: Failed to find _module_desc data")
         return {}, false
     }
 
-    result.api = get_module_api_proc()
-
-
-    result.callback = auto_cast(platform.module_symbol_address(module, "_module_hot_step"))
-
-    // log.info("Hotreload API: ", result.api)
-    // log.info("Hotreload callback: ", result.callback)
-
-    if result.callback == nil {
-        return {}, false
-    }
+    result.desc = module_desc_ptr^
 
     return result, true
 }

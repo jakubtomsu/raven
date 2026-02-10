@@ -11,18 +11,20 @@ _ :: intrinsics
 
 when BACKEND == BACKEND_WGPU {
 
+    _WGPU_CALLBACK_MODE: wgpu.CallbackMode:
+        .WaitAnyOnly when ODIN_OS == .JS else .AllowProcessEvents
+
     _BIND_GROUP_CACHE_SIZE :: 512
     _SAMPLER_CACHE_BUCKET :: 8
     _DRAW_DATA_BUFFER_SIZE :: 1024 * 64
 
     _State :: struct {
-        ctx:                    runtime.Context,
-        surface:                wgpu.Surface,
-        surface_texture:        wgpu.SurfaceTexture,
-        surface_view:           wgpu.TextureView,
         instance:               wgpu.Instance,
         adapter:                wgpu.Adapter,
         device:                 wgpu.Device,
+        surface:                wgpu.Surface,
+        surface_texture:        wgpu.SurfaceTexture,
+        surface_view:           wgpu.TextureView,
         config:                 wgpu.SurfaceConfiguration,
         queue:                  wgpu.Queue,
         command_encoder:        wgpu.CommandEncoder,
@@ -72,7 +74,18 @@ when BACKEND == BACKEND_WGPU {
 
     @(require_results)
     _init :: proc(native_window: rawptr) -> bool {
-        _state.instance = wgpu.CreateInstance(nil)
+
+        inst_desc: wgpu.InstanceDescriptor
+
+        when _WGPU_CALLBACK_MODE == .WaitAnyOnly {
+            inst_desc.features = {
+                timedWaitAnyEnable = true,
+            }
+        }
+
+        _state.instance = wgpu.CreateInstance(&inst_desc)
+
+        wgpu.SetLogCallback(_wgpu_log_callback, nil)
 
         if _state.instance == nil {
             base.log_err("WebGPU is not supported")
@@ -86,19 +99,28 @@ when BACKEND == BACKEND_WGPU {
             return false
         }
 
-        base.log_debug("Requesting WebGPU adapter")
+        base.log_info("Requesting WebGPU adapter")
 
-        // This async shit sucks
-        wgpu.InstanceRequestAdapter(
+        adapter_options := wgpu.RequestAdapterOptions{
+            compatibleSurface = _state.surface,
+        }
+
+        if ODIN_OS != .JS {
+            adapter_options.powerPreference = .HighPerformance
+        }
+
+        _wgpu_wait(wgpu.InstanceRequestAdapter(
             _state.instance,
-            options = &{
-                compatibleSurface = _state.surface,
-                // powerPreference = .HighPerformance,
-            },
+            options = &adapter_options,
             callbackInfo = {
                 callback = on_adapter,
+                mode = _WGPU_CALLBACK_MODE,
             },
-        )
+        ))
+
+        if _WGPU_CALLBACK_MODE == .WaitAnyOnly {
+            _request_wgpu_device()
+        }
 
         return true
 
@@ -108,7 +130,7 @@ when BACKEND == BACKEND_WGPU {
             message: string,
             userdata1, userdata2: rawptr,
         ) {
-            context = _state.ctx
+            context = _state.init_context
 
             base.log_debug("Got WebGPU Adapter")
 
@@ -118,27 +140,39 @@ when BACKEND == BACKEND_WGPU {
             }
             _state.adapter = adapter
 
-            required_features := [?]wgpu.FeatureName{
-                // .TextureFormat16bitNorm,
+            if _WGPU_CALLBACK_MODE != .WaitAnyOnly {
+                _request_wgpu_device()
             }
-
-            for feature in required_features {
-                if !wgpu.AdapterHasFeature(_state.adapter, feature) {
-                    base.log_err("WebGPU adapter doesn't have a required feature:", feature)
-                    panic("WebGPU Adapter Feature")
-                }
-            }
-
-            base.log_debug("Requesting WebGPU Device")
-
-            wgpu.AdapterRequestDevice(_state.adapter,
-                &wgpu.DeviceDescriptor{
-                    // requiredFeatureCount = len(required_features),
-                    // requiredFeatures = &required_features[0],
-                },
-                wgpu.RequestDeviceCallbackInfo{ callback = on_device },
-            )
         }
+    }
+
+    _request_wgpu_device :: proc() {
+        base.log_info("Requesting WebGPU Device")
+
+        required_features := [?]wgpu.FeatureName{
+            // .TextureFormat16bitNorm,
+        }
+
+        for feature in required_features {
+            if !wgpu.AdapterHasFeature(_state.adapter, feature) {
+                base.log_err("WebGPU adapter doesn't have a required feature:", feature)
+                panic("WebGPU Adapter Feature")
+            }
+        }
+
+
+        _wgpu_wait(wgpu.AdapterRequestDevice(_state.adapter,
+            &wgpu.DeviceDescriptor{
+                // requiredFeatureCount = len(required_features),
+                // requiredFeatures = &required_features[0],
+            },
+            wgpu.RequestDeviceCallbackInfo{
+                callback = on_device,
+                mode = _WGPU_CALLBACK_MODE,
+            },
+        ))
+
+        return
 
         on_device :: proc "c" (
             status: wgpu.RequestDeviceStatus,
@@ -146,7 +180,7 @@ when BACKEND == BACKEND_WGPU {
             message: string,
             userdata1, userdata2: rawptr,
         ) {
-            context = _state.ctx
+            context = _state.init_context
 
             base.log_debug("Got WebGPU Device")
 
@@ -165,38 +199,44 @@ when BACKEND == BACKEND_WGPU {
                 panic("Failed to retreive device limits")
             }
 
-            base.log_debug("WebGPU limits: %#v", limits)
+            base.log_debug("WebGPU limits: %v", limits)
 
             _state.uniform_offset_align = limits.minUniformBufferOffsetAlignment
 
-            _state.fully_initialized = true
+            _state.init_done = true
 
             base.log_debug("WebGPU fully initialized")
         }
     }
 
     _shutdown :: proc() {
+        assert(_state.queue != nil)
+        assert(_state.surface != nil)
+        assert(_state.device != nil)
+        assert(_state.adapter != nil)
+        assert(_state.instance != nil)
+
+        if _state.surface_texture.texture != nil {
+            wgpu.TextureRelease(_state.surface_texture.texture)
+        }
+
         wgpu.QueueRelease(_state.queue)
-        wgpu.TextureRelease(_state.surface_texture.texture)
         wgpu.SurfaceRelease(_state.surface)
         wgpu.DeviceRelease(_state.device)
         wgpu.AdapterRelease(_state.adapter)
         wgpu.InstanceRelease(_state.instance)
     }
 
-    _resize_swapchain :: proc() {
-        // context = state.ctx
-
-        // state.config.width, state.config.height = os_get_framebuffer_size()
-        // wgpu.SurfaceConfigure(state.surface, &state.config)
-    }
-
     _begin_frame :: proc() -> bool {
+        assert(_state.adapter != {})
+        assert(_state.device != {})
         assert(_state.surface_texture == {})
         assert(_state.surface_view == nil)
         assert(_state.command_encoder == nil)
         assert(_state.render_pass_encoder == nil)
         assert(_state.surface != nil)
+
+        wgpu.InstanceProcessEvents(_state.instance)
 
         _state.surface_texture = wgpu.SurfaceGetCurrentTexture(_state.surface)
 
@@ -205,6 +245,7 @@ when BACKEND == BACKEND_WGPU {
             // All good, could handle suboptimal here.
 
         case .Timeout, .Outdated, .Lost:
+            base.log_info("%v", _state.surface_texture.status)
             // Skip this frame, and re-configure surface.
             if _state.surface_texture.texture != nil {
                 wgpu.TextureRelease(_state.surface_texture.texture)
@@ -1117,6 +1158,27 @@ when BACKEND == BACKEND_WGPU {
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
     // MARK: Misc
     //
+
+    _wgpu_log_callback :: proc "c" (level: wgpu.LogLevel, msg: wgpu.StringView, userdata: rawptr) {
+        context = _state.init_context
+
+        base.log(
+            wgpu.ConvertWGPUToOdinLogLevel(level),
+            "WGPU: %s",
+            msg,
+        )
+    }
+
+    _wgpu_wait :: proc(future: wgpu.Future) {
+        when _WGPU_CALLBACK_MODE == .WaitAnyOnly {
+            future := future
+            res := wgpu.InstanceWaitAny(_state.instance, 1, &future, max(u64))
+            if res == .Success {
+                return
+            }
+            base.log_err("WGPU Future wait failed: %v", res)
+        }
+    }
 
     _wgpu_clear_mode :: proc(mode: Clear_Mode) -> wgpu.LoadOp {
         switch mode {

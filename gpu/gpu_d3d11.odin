@@ -144,7 +144,7 @@ when BACKEND == BACKEND_D3D11 {
 
         _d3d11_messages()
 
-        _state.fully_initialized = true
+        _state.init_done = true
 
         return true
     }

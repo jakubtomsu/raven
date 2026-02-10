@@ -221,6 +221,11 @@ _set_window_style :: proc(window: Window, style: Window_Style) {
     _js_unsupported()
 }
 
+_set_window_title :: proc(window: Window, name: string) {
+
+}
+
+
 _set_window_pos :: proc(window: Window, pos: [2]i32) {
     _js_unsupported()
 }

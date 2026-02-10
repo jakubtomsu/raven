@@ -116,7 +116,7 @@ get_state_ptr :: proc() -> (state: ^State) {
 
 init :: proc(state: ^State) -> bool {
     if _state != nil {
-        return false
+        return true
     }
 
     _state = state

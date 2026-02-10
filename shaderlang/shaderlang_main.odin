@@ -29,7 +29,7 @@ main :: proc() {
 
     defer {
         dur := platform.get_time_ns() - start
-        fmt.printfln("Finished in %.3f ms", f32(dur / 1e3) / 1e3)
+        fmt.printfln("Finished in %f ms", f32(dur / 1e3) / 1e3)
     }
 
     root := flg.paths

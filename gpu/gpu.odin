@@ -66,10 +66,11 @@ _state: ^State
 State :: struct #align(64) {
     using native:           _State,
     in_frame:               bool,
+    init_context:           runtime.Context,
     allocator:              runtime.Allocator,
     swapchain_res:          Resource_Handle,
     // On WebGPU, the initialization is async.
-    fully_initialized:      bool,
+    init_done:              bool,
 
     pipeline_hash:          [MAX_PIPELINES]u64,
     pipeline_desc:          [MAX_PIPELINES]Pipeline_Desc,
@@ -443,25 +444,30 @@ get_state_ptr :: proc() -> (state: ^State) {
     return _state
 }
 
-init :: proc(state: ^State, native_window: rawptr) {
+init :: proc(state: ^State, native_window: rawptr) -> bool {
     if _state != nil {
-        return
+        return true
     }
 
     _state = state
+    _state.init_context = context
 
     base.bit_pool_set_1(&_state.shader_used, 0)
     base.bit_pool_set_1(&_state.resource_used, 0)
 
-    if !_init(native_window) {
-        panic("Failed to initialize GPU backend")
-    }
+    return _init(native_window)
+}
+
+is_init_done :: proc() -> bool {
+    return _state.init_done
 }
 
 shutdown :: proc() {
     if _state == nil {
         return
     }
+
+    assert(!_state.in_frame)
 
     _shutdown()
 
@@ -470,9 +476,7 @@ shutdown :: proc() {
 
 // return value of false means skip frame
 begin_frame :: proc() -> (ok: bool) {
-    if !_state.fully_initialized {
-        return false
-    }
+    assert(is_init_done())
 
     _state.curr_pass_desc = {}
     _state.pipeline_builder = {}
@@ -725,7 +729,7 @@ create_texture_2d :: proc(
     rw_resource:        bool = false,
     data:               []byte = nil,
 ) -> (result: Resource_Handle, ok: bool) {
-    base.log_debug("Creating texture:", name)
+    base.log_debug("Creating texture: %s", name)
 
     validate(format != .Invalid)
     validate(size.x > 0)
@@ -789,7 +793,7 @@ create_buffer :: proc(
     usage:              Usage = .Default,
     data:               []u8 = nil,
 ) -> (result: Resource_Handle, ok: bool) #optional_ok {
-    base.log_debug("Creating buffer:", name)
+    base.log_debug("Creating buffer: %s", name)
 
     size := size
 
