@@ -25,22 +25,19 @@ main :: proc() {
     rv.run_main_loop(_module_desc)
 }
 
-_init :: proc() -> ^State {
+_init :: proc() {
     state = new(State)
 
-    rv.init_window("Simple 3D Example")
     // TODO: FIXME: relative and non-relative mouse have inverted delta
     platform.set_mouse_relative(rv.get_window(), true)
     platform.set_mouse_visible(false)
 
     state.cam_pos = {25, 5, -25}
     state.cam_ang = {0.5, 0, 0}
-
-    return state
 }
 
-_shutdown :: proc(prev_state: ^State) {
-    free(prev_state)
+_shutdown :: proc() {
+    free(state)
 }
 
 _update :: proc(hot_state: rawptr) -> rawptr {
