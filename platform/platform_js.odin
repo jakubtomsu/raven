@@ -553,6 +553,8 @@ _js_event_callbacks := [js.Event_Kind]_JS_Event_Callback {
             button = _js_mouse_button(e.mouse.button),
             pressed = true,
         })
+
+
     },
 
     .Key_Up = proc(e: js.Event) {
