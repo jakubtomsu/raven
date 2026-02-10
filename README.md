@@ -47,18 +47,31 @@ Inspired by Sokol, PICO8 and Raylib.
 
 ## Simple Example
 
-This is what the per-frame code could look like in a simple hello world app.
-
 ```odin
-rv.set_layer_params(0, rv.make_screen_camera())
+import rv "raven"
 
-rv.bind_layer(0)
-rv.bind_texture("thick")
-rv.draw_text("Hello World!", {100, 100, 0})
+@export _module_desc := rv.Module_Desc{
+    update = _update,
+}
 
-rv.upload_gpu_layers()
-rv.render_gpu_layer(0, rv.DEFAULT_RENDER_TEXTURE,
-    clear_color = rv.Vec3{0, 0, 0.5} clear_depth = true)
+main :: proc() {
+    rv.run_main_loop(_module_desc)
+}
+
+_update :: proc(_: rawptr) -> rawptr {
+    if rv.key_pressed(.Escape) { rv.request_shutdown() }
+
+    rv.set_layer_params(0, rv.make_screen_camera())
+
+    rv.bind_texture("thick")
+    rv.draw_text("Hello World! ☺", {100, 100, 0}, scale = 4, spacing = 1)
+
+    rv.upload_gpu_layers()
+    rv.render_gpu_layer(0, rv.DEFAULT_RENDER_TEXTURE,
+        clear_color = rv.DARK_BLUE.rgb, clear_depth = true)
+
+    return nil
+}
 ```
 
 To see what the entire full code looks like, check out [examples/hello](examples/hello/hello_example.odin).
@@ -207,6 +220,7 @@ oklerp(a, b: Vec4, t: f32) -> Vec4          // Interpolate colors with OKLAB
 
 # Contributing
 For info about bug reports and contributing, see [CONTRIBUTING](CONTRIBUTING.md)
+
 
 
 
