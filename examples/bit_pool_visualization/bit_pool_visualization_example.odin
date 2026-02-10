@@ -33,14 +33,12 @@ main :: proc() {
     rv.run_main_loop(_module_desc)
 }
 
-_init :: proc() -> ^State {
+_init :: proc() {
     state = new(State)
-    rv.init_window("Raven Hello Example")
-    return state
 }
 
-_shutdown :: proc(prev_state: ^State) {
-    free(prev_state)
+_shutdown :: proc() {
+    free(state)
 }
 
 _update :: proc(hot_state: rawptr) -> rawptr {
