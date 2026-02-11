@@ -12,7 +12,6 @@ import "core:mem"
 import "core:bytes"
 import "base:intrinsics"
 import "core:slice"
-import "core:path/filepath"
 import "core:math/linalg"
 import "core:math"
 import "base:runtime"
@@ -1252,7 +1251,7 @@ begin_frame :: proc() -> (keep_running: bool) {
         for change in changes {
             base.log_info("changed file:", change)
 
-            file_path := filepath.join({path, change}, context.temp_allocator)
+            file_path := strings_join(path, platform.SEPARATOR, change, allocator = context.temp_allocator)
 
             data, ok := platform.read_file_by_path(file_path, allocator = _state.allocator)
 
@@ -2659,7 +2658,7 @@ load_asset_directory :: proc(path: string, watch := false) {
     files := make([dynamic]string, 0, 64, context.temp_allocator)
 
     for name in platform.iter_directory(&iter, pattern, context.temp_allocator) {
-        full := filepath.join({path, name}, context.temp_allocator)
+        full := strings_join(path, platform.SEPARATOR, name, allocator = context.temp_allocator)
 
         if !platform.is_file(full) {
             continue
