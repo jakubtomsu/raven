@@ -1270,8 +1270,7 @@ begin_frame :: proc() -> (keep_running: bool) {
                 file.flags += {.Dirty, .Dynamically_Allocated}
                 file.data = data
             } else {
-                // NEW file
-                create_file_by_name(change, data, flags = {.Dynamically_Allocated})
+                register_file_data(change, data, flags = {.Dynamically_Allocated})
             }
         }
     }
@@ -2641,86 +2640,25 @@ create_pixel_shader :: proc(name: string, data: []byte) -> (result: Pixel_Shader
 // Virtual file system
 //
 
-// Registers all files.
-// Loads all assets.
-// TODO: flag to keep/flush the file data.
-// TODO: flag to only register the file.
-// TODO: file blacklist?
-load_asset_directory :: proc(path: string, watch := false) {
-    iter: platform.Directory_Iter
-
-    if !platform.is_directory(path) {
-        base.log_err("Cannot load data, '%s' is not a valid directory path", path)
-    }
-
-    pattern := strings_join(path, "\\*", allocator = context.temp_allocator)
-
-    files := make([dynamic]string, 0, 64, context.temp_allocator)
-
-    for name in platform.iter_directory(&iter, pattern, context.temp_allocator) {
-        full := strings_join(path, platform.SEPARATOR, name, allocator = context.temp_allocator)
-
-        if !platform.is_file(full) {
-            continue
-        }
-
-        data, data_ok := platform.read_file_by_path(
-            full,
-            allocator = _state.allocator,
-        )
-
-        if !data_ok {
-            base.log_err("Failed to load file '%s' from directory '%s'", name, path)
-            continue
-        }
-
-        create_file_by_name(name, data, flags = {.Dynamically_Allocated})
-
-        append(&files, name)
-    }
-
-    for file in files {
-        load_asset(file, {})
-    }
-
-    watch_block: if watch {
-        // Add dir to watched paths
-
-        if _state.watched_dirs_num > MAX_WATCHED_DIRS {
-            base.log_err("Failed to watch data directory, too many watched directories")
-            return
-        }
-
-        index := _state.watched_dirs_num
-        dir := &_state.watched_dirs[index]
-
-        if !platform.init_file_watcher(&dir.watcher, path, recursive = false) {
-            intrinsics.mem_zero(dir, size_of(Watched_Dir))
-            break watch_block
-        }
-
-        dir.path_len = i32(copy(dir.path[:], path))
-
-        _state.watched_dirs_num += 1
-    }
+get_file_by_name :: proc(name: string, flush := true) -> (data: []byte, ok: bool) {
+    return get_file_by_hash(hash_name(name), flush = flush)
 }
 
-load_constant_asset_directory :: proc(files: []runtime.Load_Directory_File) -> (all_ok: bool) {
-    all_ok = true
+get_file_by_hash :: proc(hash: Hash, flush := true) -> (data: []byte, ok: bool) {
+    index :=_table_lookup_hash(&_state.files_hash, hash) or_return
 
-    for file in files {
-        base.log_info(file.name)
-        if !create_file_by_name(file.name, file.data, flags = {}) {
-            base.log_err("Failed to create file '%s' from a constant directory", file.name)
-            continue
+    file := &_state.files[index]
+
+    if flush {
+        if .Dirty in file.flags {
+            file.flags -= {.Dirty}
+            return file.data, true
+        } else {
+            return {}, false
         }
     }
 
-    for file in files {
-        load_asset(file.name, {})
-    }
-
-    return all_ok
+    return file.data, true
 }
 
 load_asset :: proc(name: string, dst_group: Group_Handle) -> bool {
@@ -2744,34 +2682,20 @@ load_asset :: proc(name: string, dst_group: Group_Handle) -> bool {
     return true
 }
 
-get_file_by_name :: proc(name: string, flush := true) -> (data: []byte, ok: bool) {
-    return get_file_by_hash(hash_name(name), flush = flush)
-}
-
-get_file_by_hash :: proc(hash: Hash, flush := true) -> (data: []byte, ok: bool) {
-    index :=_table_lookup_hash(&_state.files_hash, hash) or_return
-
-    file := &_state.files[index]
-
-    if flush {
-        if .Dirty in file.flags {
-            file.flags -= {.Dirty}
-            return file.data, true
-        } else {
-            return {}, false
-        }
+register_file :: proc(path: string) -> bool {
+    data, ok := platform.read_file_by_path(path, _state.allocator)
+    if !ok {
+        base.log_err("VFS failed to register '%s', couldn't read file data", path)
+        return false
     }
-
-    return file.data, true
+    return register_file_data_by_hash(hash_name(path), data, flags = {.Dynamically_Allocated})
 }
 
-
-create_file_by_name :: proc(name: string, data: []byte, flags: bit_set[File_Flag]) -> bool {
-    base.log_info("Creating file '%s' of size %M (%i bytes)", name, len(data), len(data))
-    return create_file_by_hash(hash_name(name), data, flags)
+register_file_data :: proc(path: string, data: []byte, flags: bit_set[File_Flag] = {}) -> bool {
+    return register_file_data_by_hash(hash_name(path), data, flags = flags)
 }
 
-create_file_by_hash :: proc(hash: Hash, data: []byte, flags: bit_set[File_Flag]) -> bool {
+register_file_data_by_hash :: proc(hash: Hash, data: []byte, flags: bit_set[File_Flag]) -> bool {
     index, _, ok := _table_insert_hash(&_state.files_hash, hash)
     if !ok {
         return false
@@ -2781,6 +2705,73 @@ create_file_by_hash :: proc(hash: Hash, data: []byte, flags: bit_set[File_Flag])
         data = data,
         flags = flags + {.Dirty},
     }
+
+    return true
+}
+
+register_const_directory :: proc(files: []runtime.Load_Directory_File) -> (ok: bool) {
+    ok = true
+    for file in files {
+        if !register_file_data(file.name, file.data) {
+            base.log_err("Failed to register file '%s' from a constant directory", file.name)
+            ok = false
+        }
+    }
+    return ok
+}
+
+// TODO: allow path patterns, just like platform dir iterator?
+register_directory :: proc(path: string) {
+    iter: platform.Directory_Iter
+
+    if !platform.is_directory(path) {
+        base.log_err("Cannot load data, '%s' is not a valid directory path", path)
+    }
+
+    pattern := strings_join(path, "\\*", allocator = context.temp_allocator)
+
+    files := make([dynamic]string, 0, 64, context.temp_allocator)
+
+    for name in platform.iter_directory(&iter, pattern, context.temp_allocator) {
+        full := strings_join(path, platform.SEPARATOR, name, allocator = context.temp_allocator)
+
+        if !platform.is_file(full) {
+            continue
+        }
+
+        data, data_ok := platform.read_file_by_path(
+            full,
+            allocator = _state.allocator,
+        )
+
+        if !data_ok {
+            base.log_err("VFS failed to register file '%s' from directory '%s', couldn't read file data", name, path)
+            continue
+        }
+
+        register_file_data(name, data, flags = {.Dynamically_Allocated})
+
+        append(&files, name)
+    }
+}
+
+watch_asset_directory :: proc(path: string) -> bool {
+    if _state.watched_dirs_num > MAX_WATCHED_DIRS {
+        base.log_err("Failed to watch asset directory, too many watched directories")
+        return false
+    }
+
+    index := _state.watched_dirs_num
+    dir := &_state.watched_dirs[index]
+
+    if !platform.init_file_watcher(&dir.watcher, path, recursive = false) {
+        intrinsics.mem_zero(dir, size_of(Watched_Dir))
+        return false
+    }
+
+    dir.path_len = i32(copy(dir.path[:], path))
+
+    _state.watched_dirs_num += 1
 
     return true
 }
@@ -2818,9 +2809,7 @@ create_render_texture :: proc(size: [2]i32, depth := true) -> (result: Render_Te
         render_texture = true,
     )
 
-    assert(ok)
-
-    if tex.color != {} {
+    if !ok {
         base.log_err("Failed to create render texture color buffer")
         return {}, false
     }
@@ -2833,9 +2822,7 @@ create_render_texture :: proc(size: [2]i32, depth := true) -> (result: Render_Te
             render_texture = true,
         )
 
-        assert(ok)
-
-        if tex.depth == {} {
+        if !ok {
             base.log_err("Failed to create render texture depth buffer")
             return {}, false
         }
