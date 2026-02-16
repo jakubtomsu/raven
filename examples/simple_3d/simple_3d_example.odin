@@ -107,7 +107,7 @@ _update :: proc(hot_state: rawptr) -> rawptr {
     }
 
     rv.bind_layer(1)
-    rv.bind_texture("thick")
+    rv.bind_texture(rv.get_builtin_texture(.CGA8x8thick))
     rv.bind_depth_test(true)
     rv.bind_depth_write(true)
     rv.draw_text("Use WASD and QE to move, mouse to look", {220, 18, 0.1}, scale = math.ceil(rv._state.dpi_scale)) // DPI HACK

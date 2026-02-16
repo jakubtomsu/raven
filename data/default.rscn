@@ -10,7 +10,7 @@ obj 5
 @imgs
 
 @mshs
-Circle 42 16 0 0
+Disk 42 16 0 0
 Cube 36 24 2A 10
 Cylinder 180 66 4E 28
 Icosphere 240 63 102 6A
@@ -19,7 +19,7 @@ Plane 6 4 1F2 A9
 @spls
 
 @objs
-msh 0 Circle -1 -1 [3 0 0] [1 0 0 0 1 0 0 0 1]
+msh 0 Disk -1 -1 [3 0 0] [1 0 0 0 1 0 0 0 1]
 msh 1 Cube -1 -1 [-3 0 0] [1 0 0 0 1 0 0 0 1]
 msh 2 Cylinder -1 -1 [-9 0 0] [1 0 0 0 1 0 0 0 1]
 msh 3 Icosphere -1 -1 [-6 0 0] [1 0 0 0 1 0 0 0 1]

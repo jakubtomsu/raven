@@ -1455,4 +1455,3 @@ texture_pixel_size :: proc(format: Texture_Format) -> i32 {
     validate(false)
     return 0
 }
-

@@ -204,7 +204,7 @@ _update :: proc(hot_state: rawptr) -> rawptr {
 
     rv.bind_layer(1)
 
-    rv.bind_texture("thick")
+    rv.bind_texture(rv.get_builtin_texture(.CGA8x8thick))
     rv.draw_text("Use WASD and QE to move, mouse to look", {14, 14, 0.1}, scale = 2)
     rv.draw_text(ufmt.tprintf("speed: %v, vel: %v", linalg.length(state.vel), state.vel),
         {14, 64, 0.1}, scale = math.ceil(rv._state.dpi_scale)) // DPI HACK

@@ -144,7 +144,6 @@ Fill_Mode :: enum u8 {
 }
 
 Sprite_Scaling :: enum u8 {
-    // Sprite scale determines the pixel scaling factor.
     // Scale of 1 means each pixel is exactly one screen pixel.
     Pixel = 0,
     // No scaling, sprite scale is the final scale in pixels
@@ -155,104 +154,101 @@ Sprite_Scaling :: enum u8 {
 _state: ^State
 
 State :: struct #align(64) {
-    initialized:            bool,
-    start_time:             u64,
-    curr_time:              u64,
-    last_time:              u64,
-    frame_dur_ns:           u64,
-    frame_index:            u64,
-    screen_size:            [2]i32,
-    screen_dirty:           bool,
-    ended_frame:            bool,
-    allocator:              runtime.Allocator,
-    window:                 platform.Window,
-    dpi_scale:              f32,
-    module_desc:            Module_Desc,
-    module_data:            rawptr,
-    shutdown_requested:     bool,
+    initialized:                bool,
+    start_time:                 u64,
+    curr_time:                  u64,
+    last_time:                  u64,
+    frame_dur_ns:               u64,
+    frame_index:                u64,
+    screen_size:                [2]i32,
+    screen_dirty:               bool,
+    ended_frame:                bool,
+    allocator:                  runtime.Allocator,
+    window:                     platform.Window,
+    dpi_scale:                  f32,
+    module_desc:                Module_Desc,
+    module_data:                rawptr,
+    shutdown_requested:         bool,
 
-    debug_trace_ctx:        debug_trace.Context,
-    context_state:          Context_State,
+    debug_trace_ctx:            debug_trace.Context,
+    context_state:              Context_State,
 
-    uploaded_gpu_draws:     bool,
+    uploaded_gpu_draws:         bool,
 
-    input:                  Input,
+    input:                      Input,
 
-    bind_state:             Bind_State,
-    bind_states:            [MAX_BIND_STATE_DEPTH]Bind_State,
-    bind_states_len:        i32,
+    bind_state:                 Bind_State,
+    bind_states:                [MAX_BIND_STATE_DEPTH]Bind_State,
+    bind_states_len:            i32,
 
-    default_group:          Group_Handle,
-    default_mesh:           Mesh_Handle,
-    default_texture:        Texture_Handle,
-    default_font_texture:   Texture_Handle,
-    error_texture:          Texture_Handle,
-    default_sprite_vs:      Vertex_Shader_Handle,
-    default_vs:             Vertex_Shader_Handle,
-    default_ps:             Pixel_Shader_Handle,
+    builtin_group:              Group_Handle,
+    builtin_mesh:               [Builtin_Mesh]Mesh_Handle,
+    builtin_texture:            [Builtin_Texture]Texture_Handle,
+    builtin_pixel_shader:       [Builtin_Pixel_Shader]Pixel_Shader_Handle,
+    builtin_vertex_shader:      [Builtin_Vertex_Shader]Vertex_Shader_Handle,
 
-    sprite_inst_buf:        gpu.Resource_Handle,
-    mesh_inst_buf:          gpu.Resource_Handle,
-    triangle_vbuf:          gpu.Resource_Handle,
-    quad_ibuf:              gpu.Resource_Handle,
+    sprite_inst_buf:            gpu.Resource_Handle,
+    mesh_inst_buf:              gpu.Resource_Handle,
+    triangle_vbuf:              gpu.Resource_Handle,
+    quad_ibuf:                  gpu.Resource_Handle,
 
-    global_consts:          gpu.Resource_Handle,
-    draw_layers_consts:     gpu.Resource_Handle,
-    draw_batch_consts:      gpu.Resource_Handle,
+    global_consts:              gpu.Resource_Handle,
+    draw_layers_consts:         gpu.Resource_Handle,
+    draw_batch_consts:          gpu.Resource_Handle,
 
-    counters:               [Counter_Kind]Counter_State,
+    counters:                   [Counter_Kind]Counter_State,
 
-    watched_dirs_num:       i32,
-    watched_dirs:           [MAX_WATCHED_DIRS]Watched_Dir,
+    watched_dirs_num:           i32,
+    watched_dirs:               [MAX_WATCHED_DIRS]Watched_Dir,
 
-    draw_layers:            [MAX_DRAW_LAYERS]Draw_Layer,
+    draw_layers:                [MAX_DRAW_LAYERS]Draw_Layer,
 
-    groups_used:            bit_set[0..<MAX_GROUPS],
-    groups_gen:             [MAX_GROUPS]Handle_Gen,
-    groups:                 [MAX_GROUPS]Group,
+    groups_used:                bit_set[0..<MAX_GROUPS],
+    groups_gen:                 [MAX_GROUPS]Handle_Gen,
+    groups:                     [MAX_GROUPS]Group,
 
-    render_textures_used:   bit_set[0..<MAX_RENDER_TEXTURES],
-    render_textures_gen:    [MAX_RENDER_TEXTURES]Handle_Gen,
-    render_textures:        [MAX_RENDER_TEXTURES]Render_Texture,
+    render_textures_used:       bit_set[0..<MAX_RENDER_TEXTURES],
+    render_textures_gen:        [MAX_RENDER_TEXTURES]Handle_Gen,
+    render_textures:            [MAX_RENDER_TEXTURES]Render_Texture,
 
-    objects_hash:           [MAX_OBJECTS]Hash,
-    objects_gen:            [MAX_OBJECTS]Handle_Gen,
-    objects:                [MAX_OBJECTS]Object,
+    objects_hash:               [MAX_OBJECTS]Hash,
+    objects_gen:                [MAX_OBJECTS]Handle_Gen,
+    objects:                    [MAX_OBJECTS]Object,
 
-    meshes_hash:            [MAX_MESHES]Hash,
-    meshes_gen:             [MAX_MESHES]Handle_Gen,
-    meshes:                 [MAX_MESHES]Mesh,
+    meshes_hash:                [MAX_MESHES]Hash,
+    meshes_gen:                 [MAX_MESHES]Handle_Gen,
+    meshes:                     [MAX_MESHES]Mesh,
 
-    splines_hash:           [MAX_SPLINES]Hash,
-    splines_gen:            [MAX_SPLINES]Handle_Gen,
-    splines:                [MAX_SPLINES]Spline,
+    splines_hash:               [MAX_SPLINES]Hash,
+    splines_gen:                [MAX_SPLINES]Handle_Gen,
+    splines:                    [MAX_SPLINES]Spline,
 
-    textures_hash:          [MAX_TEXTURES]Hash,
-    textures_gen:           [MAX_TEXTURES]Handle_Gen,
-    textures:               [MAX_TEXTURES]Texture,
-    texture_pools:          [MAX_TEXTURE_POOLS]Texture_Pool,
-    texture_pools_len:      i32,
+    textures_hash:              [MAX_TEXTURES]Hash,
+    textures_gen:               [MAX_TEXTURES]Handle_Gen,
+    textures:                   [MAX_TEXTURES]Texture,
+    texture_pools:              [MAX_TEXTURE_POOLS]Texture_Pool,
+    texture_pools_len:          i32,
 
-    pixel_shaders_hash:     [MAX_SHADERS]Hash,
-    pixel_shaders_gen:      [MAX_SHADERS]Handle_Gen,
-    pixel_shaders:          [MAX_SHADERS]Pixel_Shader,
+    pixel_shaders_hash:         [MAX_SHADERS]Hash,
+    pixel_shaders_gen:          [MAX_SHADERS]Handle_Gen,
+    pixel_shaders:              [MAX_SHADERS]Pixel_Shader,
 
-    vertex_shaders_hash:    [MAX_SHADERS]Hash,
-    vertex_shaders_gen:     [MAX_SHADERS]Handle_Gen,
-    vertex_shaders:         [MAX_SHADERS]Vertex_Shader,
+    vertex_shaders_hash:        [MAX_SHADERS]Hash,
+    vertex_shaders_gen:         [MAX_SHADERS]Handle_Gen,
+    vertex_shaders:             [MAX_SHADERS]Vertex_Shader,
 
-    files_hash:             [MAX_FILES]Hash,
-    files:                  [MAX_FILES]File,
+    files_hash:                 [MAX_FILES]Hash,
+    files:                      [MAX_FILES]File,
 
     // NOTE: currently, sound resource handles are direct handles into the audio package.
     // This means there is not necessarily an indirection, which simplifies things.
     // The name tracking is only important for hotreloads and name lookups.
-    sound_resources_hash:   [MAX_SHADERS]Hash,
-    sound_resources:        [MAX_SHADERS]Sound_Resource_Handle,
+    sound_resources_hash:       [MAX_SOUNDS]Hash,
+    sound_resources:            [MAX_SOUNDS]Sound_Resource_Handle,
 
-    platform_state:         platform.State,
-    gpu_state:              gpu.State,
-    audio_state:            audio.State,
+    platform_state:             platform.State,
+    gpu_state:                  gpu.State,
+    audio_state:                audio.State,
 }
 
 Context_State :: struct {
@@ -853,13 +849,6 @@ _post_gpu_init :: proc() {
         depth = gpu.create_texture_2d("rv-def-rentex-depth", .D_F32, _state.screen_size, render_texture = true) or_else panic("gpu"),
     }
 
-    _state.default_group = create_group(
-        max_mesh_verts = 1024,
-        max_mesh_indices = 1024,
-        max_spline_verts = 0,
-        max_total_children = 0,
-    ) or_else panic("Default group")
-
     _state.sprite_inst_buf = gpu.create_buffer("rv-sprite-inst-buf",
         stride = size_of(Sprite_Inst),
         size = size_of(Sprite_Inst) * MAX_TOTAL_SPRITE_INSTANCES,
@@ -899,72 +888,7 @@ _post_gpu_init :: proc() {
 
     _state.quad_ibuf = gpu.create_index_buffer("rv-quad-index-buf", data = gpu.slice_bytes(quad_indices[:])) or_else panic("gpu")
 
-    // TODO: refactor all the asset loading here
-
-    _state.default_texture = create_texture_from_encoded_data(
-        "default",
-        #load("data/default.png"),
-    ) or_else panic("Failed to load default texture")
-
-    _ = create_texture_from_encoded_data(
-        "white",
-        #load("data/white.png"),
-    ) or_else panic("Failed to load default texture")
-
-    _ = create_texture_from_encoded_data(
-        "uv_tex",
-        #load("data/uv_tex.png"),
-    ) or_else panic("Failed to load default texture")
-
-    _state.error_texture = create_texture_from_encoded_data(
-        "error",
-        #load("data/error.png"),
-    ) or_else panic("Failed to load error texture")
-
-    _state.default_font_texture = create_texture_from_encoded_data(
-        "thick",
-        #load("data/CGA8x8thick.png"),
-    ) or_else panic("Failed to load default font texture")
-
-    _ = create_texture_from_encoded_data(
-        "thin",
-        #load("data/CGA8x8thin.png"),
-    ) or_else panic("Failed to load default font texture")
-
-    default_sprite_vs: []byte
-    default_vs: []byte
-    default_ps: []byte
-
-    switch gpu.BACKEND {
-    case gpu.BACKEND_D3D11:
-
-        INCL :: #load("data/raven.hlsli", string)
-
-        default_sprite_vs = transmute([]byte)(INCL + #load("data/default_sprite.vs.hlsl", string))
-        default_vs = transmute([]byte)(INCL + #load("data/default.vs.hlsl", string))
-        default_ps = transmute([]byte)(INCL + #load("data/default.ps.hlsl", string))
-
-    case gpu.BACKEND_WGPU:
-
-        INCL :: #load("data/raven.wgsl", string)
-
-        default_sprite_vs = transmute([]byte)(INCL + #load("data/default_sprite.vs.wgsl", string))
-        default_vs = transmute([]byte)(INCL + #load("data/default.vs.wgsl", string))
-        default_ps = transmute([]byte)(INCL + #load("data/default.ps.wgsl", string))
-
-    case:
-        panic("GPU backend not supported or unknown")
-    }
-
-    _state.default_sprite_vs = create_vertex_shader("default_sprite", default_sprite_vs) or_else panic("Failed to load default sprite vertex shader")
-    _state.default_vs = create_vertex_shader("default", default_vs) or_else panic("Failed to load default vertex shader")
-    _state.default_ps = create_pixel_shader("default", default_ps) or_else panic("Failed to load default pixel shader")
-
-    _state.default_group = load_scene_from_data(
-        #load("data/default.rscn", string),
-        #load("data/default.rscn.bin"),
-        dst_group = {},
-    ) or_else panic("Failed to load default scene")
+    _load_builtin_assets()
 
     base.log_info("Raven initialized successfully")
 
@@ -1281,10 +1205,10 @@ begin_frame :: proc() -> (keep_running: bool) {
 
     _state.bind_states_len = 0
     _state.bind_state = {
-        pixel_shader = int_cast(u8, _state.default_ps.index),
-        vertex_shader = int_cast(u8, _state.default_vs.index),
+        pixel_shader = int_cast(u8, _state.builtin_pixel_shader[.Default].index),
+        vertex_shader = int_cast(u8, _state.builtin_vertex_shader[.Default].index),
         blend = .Opaque,
-        texture = u8(_state.default_texture.index),
+        texture = u8(_state.builtin_texture[.Default].index),
     }
 
     bind_pixel_shader_by_handle({})
@@ -1331,6 +1255,108 @@ _clear_draw_layers :: proc() {
     }
 }
 
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// MARK: Builtins
+//
+
+Builtin_Texture :: enum u8 {
+    Default = 0,
+    Error,
+    CGA8x8thick,
+    CGA8x8thin,
+}
+
+Builtin_Mesh :: enum u8 {
+    Icosphere,
+    Cube,
+    Plane,
+    Disk,
+    Cylinder,
+}
+
+Builtin_Vertex_Shader :: enum u8 {
+    Default = 0,
+    Default_Sprite,
+}
+
+Builtin_Pixel_Shader :: enum u8 {
+    Default,
+}
+
+
+@(require_results)
+get_builtin_texture :: proc(id: Builtin_Texture) -> Texture_Handle {
+    return _state.builtin_texture[id]
+}
+
+@(require_results)
+get_builtin_mesh :: proc(id: Builtin_Mesh) -> Mesh_Handle {
+    return _state.builtin_mesh[id]
+}
+
+@(require_results)
+get_builtin_vertex_shader :: proc(id: Builtin_Vertex_Shader) -> Vertex_Shader_Handle {
+    return _state.builtin_vertex_shader[id]
+}
+
+@(require_results)
+get_builtin_pixel_shader :: proc(id: Builtin_Pixel_Shader) -> Pixel_Shader_Handle {
+    return _state.builtin_pixel_shader[id]
+}
+
+_load_builtin_assets :: proc() {
+    register_const_directory(#load_directory("data"))
+
+    for &tex, id in _state.builtin_texture {
+        tex = load_texture(
+            ufmt.tprintf("%s.png", enum_to_string(id)),
+        ) or_else panic("Failed to load builtin texture")
+    }
+
+    default_sprite_vs: []byte
+    default_vs: []byte
+    default_ps: []byte
+
+    switch gpu.BACKEND {
+    case gpu.BACKEND_D3D11:
+
+        INCL :: #load("data/raven.hlsli", string)
+
+        default_sprite_vs = transmute([]byte)(INCL + #load("data/default_sprite.vs.hlsl", string))
+        default_vs = transmute([]byte)(INCL + #load("data/default.vs.hlsl", string))
+        default_ps = transmute([]byte)(INCL + #load("data/default.ps.hlsl", string))
+
+    case gpu.BACKEND_WGPU:
+
+        INCL :: #load("data/raven.wgsl", string)
+
+        default_sprite_vs = transmute([]byte)(INCL + #load("data/default_sprite.vs.wgsl", string))
+        default_vs = transmute([]byte)(INCL + #load("data/default.vs.wgsl", string))
+        default_ps = transmute([]byte)(INCL + #load("data/default.ps.wgsl", string))
+
+    case:
+        panic("GPU backend not supported or unknown")
+    }
+
+    _state.builtin_vertex_shader = {
+        .Default = create_vertex_shader("default", default_vs) or_else panic("Failed to load default vertex shader"),
+        .Default_Sprite = create_vertex_shader("default_sprite", default_sprite_vs) or_else panic("Failed to load default sprite vertex shader"),
+    }
+
+    _state.builtin_pixel_shader = {
+        .Default = create_pixel_shader("default", default_ps) or_else panic("Failed to load default pixel shader"),
+    }
+
+    _state.builtin_group = load_scene_from_data(
+        #load("data/default.rscn", string),
+        #load("data/default.rscn.bin"),
+        dst_group = {},
+    ) or_else panic("Failed to load default scene")
+
+    for &handle, id in _state.builtin_mesh {
+        handle = get_mesh_by_name(enum_to_string(id)) or_else panic("Failed to get builtin mesh")
+    }
+}
 
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1440,8 +1466,8 @@ get_viewport :: proc() -> [3]f32 {
 
 load_scene :: proc(name: string, dst_group: Group_Handle) -> (result_group: Group_Handle, ok: bool) {
     bin_name := strings_join(name, ".bin", allocator = context.temp_allocator)
-    txt_data := get_file_by_name(name) or_return
-    bin_data := get_file_by_name(bin_name) or_return
+    txt_data := get_file(name) or_return
+    bin_data := get_file(bin_name) or_return
 
     return load_scene_from_data(string(txt_data), bin_data, dst_group)
 }
@@ -2439,6 +2465,18 @@ get_internal_texture :: proc(handle: Texture_Handle) -> (result: ^Texture, ok: b
     return _table_get(&_state.textures, _state.textures_gen, handle)
 }
 
+load_texture :: proc(path: string) -> (result: Texture_Handle, ok: bool) #optional_ok {
+    npath := normalize_path(path, context.temp_allocator)
+    name := strip_path_name(npath)
+    base.log_info("Loading texture '%s' from path '%s'", name, npath)
+    data, data_ok := get_file(npath)
+    if !data_ok {
+        base.log_err("Failed to load texture '%s', couldn't get file data", name)
+        return {}, false
+    }
+    return create_texture_from_encoded_data(name, data)
+}
+
 create_texture_from_encoded_data :: proc(name: string, data: []byte) -> (result: Texture_Handle, ok: bool) {
     tex, tex_ok := decode_texture_data(data)
     if !tex_ok {
@@ -2640,7 +2678,7 @@ create_pixel_shader :: proc(name: string, data: []byte) -> (result: Pixel_Shader
 // Virtual file system
 //
 
-get_file_by_name :: proc(name: string, flush := true) -> (data: []byte, ok: bool) {
+get_file :: proc(name: string, flush := true) -> (data: []byte, ok: bool) {
     return get_file_by_hash(hash_name(name), flush = flush)
 }
 
@@ -2663,7 +2701,7 @@ get_file_by_hash :: proc(hash: Hash, flush := true) -> (data: []byte, ok: bool) 
 
 load_asset :: proc(name: string, dst_group: Group_Handle) -> bool {
     if string_has_suffix(name, ".png") {
-        data, data_ok := get_file_by_name(name)
+        data, data_ok := get_file(name)
         if !data_ok {
             base.log_err("Failed to load texture '%s', file not found", name)
             return false
@@ -2683,16 +2721,20 @@ load_asset :: proc(name: string, dst_group: Group_Handle) -> bool {
 }
 
 register_file :: proc(path: string) -> bool {
-    data, ok := platform.read_file_by_path(path, _state.allocator)
+    npath := normalize_path(path, context.temp_allocator)
+    base.log_err("VFS registering file '%s'", npath)
+    data, ok := platform.read_file_by_path(npath, _state.allocator)
     if !ok {
-        base.log_err("VFS failed to register '%s', couldn't read file data", path)
+        base.log_err("VFS failed to register '%s', couldn't read file data", npath)
         return false
     }
-    return register_file_data_by_hash(hash_name(path), data, flags = {.Dynamically_Allocated})
+    return register_file_data_by_hash(hash_name(npath), data, flags = {.Dynamically_Allocated})
 }
 
 register_file_data :: proc(path: string, data: []byte, flags: bit_set[File_Flag] = {}) -> bool {
-    return register_file_data_by_hash(hash_name(path), data, flags = flags)
+    npath := normalize_path(path, context.temp_allocator)
+    base.log_err("VFS registering file data '%s'", npath)
+    return register_file_data_by_hash(hash_name(npath), data, flags = flags)
 }
 
 register_file_data_by_hash :: proc(hash: Hash, data: []byte, flags: bit_set[File_Flag]) -> bool {
@@ -2980,7 +3022,7 @@ bind_pixel_shader_by_handle :: proc(handle: Pixel_Shader_Handle) {
     if _, ok := get_internal_pixel_shader(handle); ok {
         _state.bind_state.pixel_shader = u8(handle.index)
     } else {
-        _state.bind_state.pixel_shader = u8(_state.default_ps.index)
+        _state.bind_state.pixel_shader = u8(_state.builtin_pixel_shader[.Default].index)
     }
 }
 
@@ -2988,13 +3030,13 @@ bind_vertex_shader_by_handle :: proc(handle: Vertex_Shader_Handle) {
     if _, ok := get_internal_vertex_shader(handle); ok {
         _state.bind_state.vertex_shader = u8(handle.index)
     } else {
-        _state.bind_state.vertex_shader = u8(_state.default_vs.index)
+        _state.bind_state.vertex_shader = u8(_state.builtin_vertex_shader[.Default].index)
     }
 }
 
 bind_texture_by_handle :: proc(handle: Texture_Handle) {
     if !_bind_texture(handle) {
-        _bind_texture(_state.error_texture)
+        _bind_texture(_state.builtin_texture[.Error])
     }
 }
 
@@ -3029,7 +3071,7 @@ bind_render_texture_by_handle :: proc(handle: Render_Texture_Handle) {
     assert(handle != DEFAULT_RENDER_TEXTURE)
     tex, tex_ok := get_internal_render_texture(handle)
     if !tex_ok {
-        _bind_texture(_state.error_texture)
+        _bind_texture(_state.builtin_texture[.Error])
         return
     }
     assert(tex.color != {})
@@ -3142,7 +3184,7 @@ draw_sprite_inst :: proc(inst: Sprite_Inst) {
         texture         = _state.bind_state.texture,
         texture_mode    = _state.bind_state.texture_mode,
         ps              = _state.bind_state.pixel_shader,
-        vs              = u8(_state.default_sprite_vs.index), // for now the VS is fixed
+        vs              = u8(_state.builtin_vertex_shader[.Default_Sprite].index), // for now the VS is fixed
         blend           = _state.bind_state.blend,
         fill            = _state.bind_state.fill,
         depth_test      = _state.bind_state.depth_test,
@@ -3388,7 +3430,7 @@ draw_sprite_line :: proc(
         texture         = _state.bind_state.texture,
         texture_mode    = _state.bind_state.texture_mode,
         ps              = _state.bind_state.pixel_shader,
-        vs              = u8(_state.default_sprite_vs.index), // for now the VS is fixed
+        vs              = u8(_state.builtin_vertex_shader[.Default_Sprite].index), // for now the VS is fixed
         blend           = _state.bind_state.blend,
         fill            = _state.bind_state.fill,
         depth_test      = _state.bind_state.depth_test,
@@ -4356,7 +4398,7 @@ screen_to_world_ray :: proc(pos: Vec2, cam: Camera) -> Vec3 {
 load_sound_resource :: proc(path: string) -> (result: Sound_Resource_Handle, ok: bool) #optional_ok {
     name := strip_path_name(path)
     // TODO: register the resource internally for hot-reload
-    data, data_ok := get_file_by_name(path)
+    data, data_ok := get_file(path)
     if !data_ok {
         base.log_err("Failed to load sound resource '%s' from '%s', VFS file not found", name, path)
     }
@@ -4466,6 +4508,37 @@ log_internal :: proc(format: string, args: ..any, loc := #caller_location) {
     }
 }
 
+// Clean up a VFS path
+normalize_path :: proc(path: string, allocator := context.temp_allocator) -> (result: string) {
+    buf := make([]byte, len(path), allocator = allocator)
+    read_offs := 0
+    write_offs := 0
+
+    for _ in 0..<len(path) {
+        r, r_size := runtime.string_decode_rune(path[read_offs:])
+
+        switch r {
+        case:
+            for j in 0..<r_size {
+                buf[write_offs] = path[read_offs + j]
+                write_offs += 1
+            }
+
+        case '\\':
+            buf[write_offs] = '/'
+            write_offs += 1
+
+        case 'A'..='Z':
+            buf[write_offs] = 'a' + u8(r) - 'A'
+            write_offs += 1
+        }
+
+        read_offs += r_size
+    }
+
+    return string(buf[:write_offs])
+}
+
 // Convert VFS path to an asset name, for example:
 // foo/bar/something.bin -> something
 // foo.data.txt -> foo
@@ -4480,6 +4553,17 @@ strip_path_name :: proc "contextless" (str: string) -> (result: string) {
 @(require_results)
 string_has_suffix :: proc(s, suffix: string) -> bool {
     return len(s) >= len(suffix) && s[len(s)-len(suffix):] == suffix
+}
+
+@(require_results)
+enum_to_string :: proc(val: $T) -> string where intrinsics.type_is_enum(T) {
+    ti := runtime.type_info_base(type_info_of(T)).variant.(runtime.Type_Info_Enum)
+    for v, i in ti.values {
+        if v == runtime.Type_Info_Enum_Value(val) {
+            return ti.names[i]
+        }
+    }
+    return "INVALID"
 }
 
 @(require_results)
@@ -4717,7 +4801,7 @@ _counter_flush :: proc(counter: ^Counter_State) {
 // 'unit' is for converting e.g. nanoseconds into a reasonable range.
 draw_counter :: proc(kind: Counter_Kind, pos: Vec3, scale: f32 = 1, unit: f32 = 1, col: Vec4 = 1, show_text := true) {
     scope_binds()
-    bind_texture_by_handle(_state.default_font_texture)
+    bind_texture_by_handle(_state.builtin_texture[.CGA8x8thick])
     bind_blend(.Alpha)
     bind_depth_test(true)
     bind_depth_write(true)

@@ -51,7 +51,7 @@ _update :: proc(_: rawptr) -> rawptr {
 
     rv.set_layer_params(0, rv.make_screen_camera())
 
-    rv.bind_texture("thick")
+    rv.bind_texture(rv.get_builtin_texture(.CGA8x8thick))
     rv.draw_text("Hello World! ☺", {100, 100, 0}, scale = 4, spacing = 1)
 
     rv.upload_gpu_layers()
@@ -228,6 +228,3 @@ oklerp(a, b: Vec4, t: f32) -> Vec4          // Interpolate colors with OKLAB
 
 # Contributing
 For info about bug reports and contributing, see [CONTRIBUTING](CONTRIBUTING.md)
-
-
-

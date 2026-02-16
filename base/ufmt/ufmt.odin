@@ -123,10 +123,10 @@ tprintf :: proc(format: string, args: ..any) -> string {
 
 
         case 'v':
-            _append_any(&buf, arg, nested = false, pretty = false, depth = 0)
+            _append_any(&buf, arg, pretty = false, depth = 0)
 
         case '#':
-            _append_any(&buf, arg, nested = false, pretty = true, depth = 0)
+            _append_any(&buf, arg, pretty = true, depth = 0)
 
 
         case '%', ' ':
@@ -284,7 +284,7 @@ _append_slice :: proc(buf: ^[dynamic]byte, data: rawptr, len: int, stride: int, 
             _append_indent(buf, depth + 1)
         }
 
-        _append_any(buf, any{rawptr(uintptr(data) + uintptr(stride * i)), elem_id}, nested = true, pretty = multiline, depth = depth + 1)
+        _append_any(buf, any{rawptr(uintptr(data) + uintptr(stride * i)), elem_id}, pretty = multiline, depth = depth + 1)
 
         if i + 1 < len || multiline {
             append_elem_string(buf, ", ")
@@ -301,13 +301,13 @@ _append_slice :: proc(buf: ^[dynamic]byte, data: rawptr, len: int, stride: int, 
     append_elem(buf, '}')
 }
 
-_append_any :: proc(buf: ^[dynamic]byte, value: any, nested := false, pretty := false, depth := 0) {
+_append_any :: proc(buf: ^[dynamic]byte, value: any, pretty := false, depth := 0) {
     assert(depth < 64)
 
     switch val in value {
     case rune:      _append_rune(buf, val); return
-    case string:    _append_string(buf, val, quoted = nested); return
-    case cstring:   _append_string(buf, string(val), quoted = nested); return
+    case string:    _append_string(buf, val, quoted = depth > 0); return
+    case cstring:   _append_string(buf, string(val), quoted = depth > 0); return
     case u8:        _append_int(buf, int(val)); return
     case i8:        _append_int(buf, int(val)); return
     case u16:       _append_int(buf, int(val)); return
@@ -330,7 +330,7 @@ _append_any :: proc(buf: ^[dynamic]byte, value: any, nested := false, pretty := 
 
     switch v in ti.variant {
     case runtime.Type_Info_Named:
-        _append_any(buf, any({data = value.data, id = v.base.id}), nested, pretty, depth)
+        _append_any(buf, any({data = value.data, id = v.base.id}), pretty, depth)
 
     case runtime.Type_Info_Integer, runtime.Type_Info_Rune, runtime.Type_Info_Float, runtime.Type_Info_String:
         unreachable()
@@ -419,7 +419,7 @@ _append_any :: proc(buf: ^[dynamic]byte, value: any, nested := false, pretty := 
                 id = v.types[i].id,
             }
 
-            _append_any(buf, val, true, multiline, depth + 1)
+            _append_any(buf, val, multiline, depth + 1)
 
             if i + 1 < v.field_count || multiline {
                 append_elem_string(buf, ", ")
@@ -501,7 +501,7 @@ _append_any :: proc(buf: ^[dynamic]byte, value: any, nested := false, pretty := 
             append_elem_string(buf, index_enum.names[i])
             append_elem_string(buf, " = ")
 
-            _append_any(buf, any{rawptr(uintptr(value.data) + uintptr(v.elem_size * i)), v.elem.id}, nested = true, pretty = multiline, depth = depth + 1)
+            _append_any(buf, any{rawptr(uintptr(value.data) + uintptr(v.elem_size * i)), v.elem.id}, pretty = multiline, depth = depth + 1)
 
             if i + 1 < v.count || multiline {
                 append_elem_string(buf, ", ")
@@ -532,7 +532,7 @@ _append_any :: proc(buf: ^[dynamic]byte, value: any, nested := false, pretty := 
         _append_slice(buf, raw.data, raw.len, v.elem_size, v.elem.id, pretty = pretty, depth = depth)
 
     case runtime.Type_Info_Any:
-        _append_any(buf, (cast(^any)value.data)^, nested = true, pretty = pretty, depth = depth)
+        _append_any(buf, (cast(^any)value.data)^, pretty = pretty, depth = depth)
 
     case runtime.Type_Info_Type_Id:
         ti := type_info_of((cast(^typeid)value.data)^)
