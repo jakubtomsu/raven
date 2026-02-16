@@ -16,7 +16,7 @@ _strip_path_name_test :: proc(t: ^testing.T) {
 @(test)
 _normalize_path_test :: proc(t: ^testing.T) {
     testing.expect(t, normalize_path("foo") == "foo")
-    testing.expect(t, normalize_path("Foo") == "Foo")
+    testing.expect(t, normalize_path("Foo") == "foo")
     testing.expect(t, normalize_path("Hello\\World") == "hello/world")
     testing.expect(t, normalize_path("_123_!@+你好!") == "_123_!@+你好!")
 }
