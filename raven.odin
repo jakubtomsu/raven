@@ -2818,9 +2818,7 @@ create_render_texture :: proc(size: [2]i32, depth := true) -> (result: Render_Te
         render_texture = true,
     )
 
-    assert(ok)
-
-    if tex.color != {} {
+    if !ok {
         base.log_err("Failed to create render texture color buffer")
         return {}, false
     }
@@ -2833,9 +2831,7 @@ create_render_texture :: proc(size: [2]i32, depth := true) -> (result: Render_Te
             render_texture = true,
         )
 
-        assert(ok)
-
-        if tex.depth == {} {
+        if !ok {
             base.log_err("Failed to create render texture depth buffer")
             return {}, false
         }
