@@ -16,8 +16,9 @@ state: ^State
 State :: struct {
     pos:            rv.Vec3,
     vel:            rv.Vec3,
-    ang:            rv.Vec3,
-    gun_pos:        rv.Vec3,
+    angle:          rv.Vec3,
+    pos_spr:        [2]rv.Vec3,
+    angle_spr:      [2]rv.Vec3,
     group:          rv.Group_Handle,
     terrain_mesh:   rv.Mesh_Handle,
     terrain:        [TERRAIN_SIZE][TERRAIN_SIZE]f16
@@ -46,7 +47,7 @@ _init :: proc() {
     platform.set_mouse_visible(false)
 
     state.pos = {0, 1, 0}
-    state.ang = {0, 0, 0}
+    state.angle = {0, 0, 0}
 
     // Generate a simple heightmap
 
@@ -123,6 +124,9 @@ _update :: proc(hot_state: rawptr) -> rawptr {
 
     delta := rv.get_delta_time()
 
+    ground_height := sample_terrain(state.pos.xz)
+    grounded := state.pos.y <= (ground_height + 1)
+
     // TODO: abstract basic flycam controls into a simple util?
 
     move: rv.Vec2
@@ -131,18 +135,22 @@ _update :: proc(hot_state: rawptr) -> rawptr {
     if rv.key_down(.W) do move.y += 1
     if rv.key_down(.S) do move.y -= 1
 
-    state.ang.xy += rv.mouse_delta().yx * {-1, 1} * 0.002
-    state.ang.x = clamp(state.ang.x, -math.PI * 0.49, math.PI * 0.49)
-    state.ang.z = rv.lexp(state.ang.z, 0, delta * 5)
+    state.angle.xy += rv.mouse_delta().yx * {-1, 1} * 0.002
+    state.angle.x = clamp(state.angle.x, -math.PI * 0.49, math.PI * 0.49)
+    state.angle.z = rv.lexp(state.angle.z, 0, delta * 5)
+    state.angle.z += move.x * delta * -0.2
+    state.angle.z += rv.mouse_delta().x * -0.0001
 
-    state.ang.z += move.x * delta * -0.2
+    state.angle_spr[1].xy += rv.mouse_delta().yx * {-1, 1} * 0.006
+    state.angle_spr[1].z += move.x * delta * -30
 
-    cam_rot := linalg.quaternion_normalize(rv.euler_rot(state.ang))
+    rv.spring2(&state.pos_spr, state.pos, 0.5, 22.0, delta)
+    rv.spring2(&state.angle_spr, 0, 0.5, 20.0, delta)
+    state.angle_spr[1].x += state.vel.y * delta * 4
+
+    gun_rot := linalg.quaternion_normalize(rv.euler_rot(state.angle + state.angle_spr[0]))
+    cam_rot := linalg.quaternion_normalize(rv.euler_rot(state.angle))
     mat := linalg.matrix3_from_quaternion_f32(cam_rot)
-
-    ground_height := sample_terrain(state.pos.xz)
-
-    grounded := state.pos.y <= (ground_height + 1)
 
     speed: f32 = grounded ? 60 : 20
     state.vel += mat[0] * move.x * delta * speed
@@ -166,16 +174,18 @@ _update :: proc(hot_state: rawptr) -> rawptr {
         state.vel = rv.lexp(state.vel, 0, delta * 8)
     }
 
-    cam_pos := state.pos
+    gun_pos := state.pos_spr[0] + mat * rv.Vec3{0.2, -0.1, 0.1}
 
     if grounded {
-        // cam_pos.y += 0.1 * math.sin_f32(rv.get_time() * 11) * rv.remap_clamped(linalg.length(state.vel.xz), 0, 2, 0, 1)
+        gun_pos.y += 0.005 * math.sin_f32(rv.get_time() * 11) * rv.remap_clamped(linalg.length(state.vel.xz), 0, 2, 0, 1)
     }
 
-    // state.gun_pos = rv.lexp(state.gun_pos, cam_pos + mat * rv.Vec3{0.2, -0.1, 0.2}, delta * 100)
-    state.gun_pos = cam_pos + mat * rv.Vec3{0.2, -0.1, 0.2}
+    if rv.mouse_pressed(.Left) {
+        state.angle_spr[1].x -= 10
+    }
 
-    rv.set_layer_params(0, rv.make_3d_perspective_camera(cam_pos, cam_rot, rv.deg(110)))
+    fov := 110 + rv.smoothstep(5, 40, linalg.length(state.vel)) * 10
+    rv.set_layer_params(0, rv.make_3d_perspective_camera(state.pos_spr[0], cam_rot, rv.deg(fov)))
     rv.set_layer_params(1, rv.make_screen_camera())
 
     rv.bind_texture("default")
@@ -183,17 +193,13 @@ _update :: proc(hot_state: rawptr) -> rawptr {
     rv.bind_depth_write(true)
     rv.bind_fill(.All)
 
-    rv.draw_mesh(
-        rv.get_mesh("Cube"),
-        state.gun_pos,
-        rot = cam_rot,
-        scale = {0.03, 0.05, 0.12},
+    rv.draw_mesh(rv.get_mesh("Cube"),
+        gun_pos,
+        rot = gun_rot,
+        scale = {0.03, 0.05, 0.25},
     )
 
-    rv.draw_mesh(
-        state.terrain_mesh,
-        0,
-    )
+    rv.draw_mesh(state.terrain_mesh, 0)
 
     rv.draw_mesh(
         rv.get_mesh("Plane"),
@@ -237,13 +243,13 @@ sample_terrain :: proc(pos: rv.Vec2) -> f32 {
         read_terrain(coord + {1, 1}),
     }
 
-    // triangle check
+    // trianglele check
     if sub.x + sub.y <= 1.0 {
-        // interpolating within bottom left triangle
+        // interpolating within bottom left trianglele
         return samples[0] + sub.x * (samples[1] - samples[0]) + sub.y * (samples[2] - samples[0])
     }
     else {
-        // interpolating within upper right triangle
+        // interpolating within upper right trianglele
         sub = rv.Vec2{1.0, 1.0} - sub
         return samples[3] + sub.x * (samples[2] - samples[3]) + sub.y * (samples[1] - samples[3])
     }
