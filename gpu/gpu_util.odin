@@ -2,7 +2,6 @@
 package raven_gpu
 
 import "../base"
-import "base:intrinsics"
 import "base:runtime"
 
 ptr_bytes :: proc(ptr: ^$T, len := 1) -> []byte {

@@ -13,6 +13,13 @@ _strip_path_name_test :: proc(t: ^testing.T) {
     testing.expect(t, strip_path_name("foo/foo2/bar.txt.bin") == "bar")
 }
 
+@(test)
+_normalize_path_test :: proc(t: ^testing.T) {
+    testing.expect(t, normalize_path("foo") == "foo")
+    testing.expect(t, normalize_path("Foo") == "foo")
+    testing.expect(t, normalize_path("Hello\\World") == "hello/world")
+    testing.expect(t, normalize_path("_123_!@+你好!") == "_123_!@+你好!")
+}
 
 @(test)
 _uv_packing :: proc(t: ^testing.T) {

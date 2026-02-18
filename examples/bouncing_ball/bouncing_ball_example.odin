@@ -90,7 +90,7 @@ _update :: proc(hot_state: rawptr) -> rawptr {
         scaling = .Absolute,
     )
 
-    rv.bind_texture("thick")
+    rv.bind_texture(rv.get_builtin_texture(.CGA8x8thick))
     rv.bind_blend(.Alpha)
     rv.draw_text("PRESS SPACE to PAUSE BALL MOVEMENT", {20, 20, 0}, scale = 4, col = {0, 0, 0, 1})
 

@@ -109,7 +109,7 @@ _update :: proc(hot_state: rawptr) -> rawptr {
         for blend in rv.Blend_Mode {
             rv.bind_blend(.Opaque)
             rv.bind_fill(.All)
-            rv.bind_texture("thick")
+            rv.bind_texture(rv.get_builtin_texture(.CGA8x8thick))
             rv.draw_text(fmt.tprint(blend), offs + {-40, 0, 0}, scale = 0.15)
 
             rv.bind_blend(blend)
@@ -138,7 +138,7 @@ _update :: proc(hot_state: rawptr) -> rawptr {
     }
 
     rv.bind_layer(1)
-    rv.bind_texture("thick")
+    rv.bind_texture(rv.get_builtin_texture(.CGA8x8thick))
     rv.bind_depth_test(true)
     rv.bind_depth_write(true)
     rv.draw_text("Use WASD and QE to move, mouse to look", {200, 14, 0.1}, scale = math.ceil(rv._state.dpi_scale)) // DPI HACK

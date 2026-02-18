@@ -1,3 +1,5 @@
+// Gameplay utilities.
+// WARNING: all of this will likely be moved to a separate utils package.
 #+vet explicit-allocators shadowing unused
 package raven
 
@@ -207,6 +209,35 @@ euler_rot :: proc(angles: Vec3) -> Quat {
            linalg.quaternion_from_euler_angle_x_f32(angles.x) *
            linalg.quaternion_from_euler_angle_z_f32(angles.z)
 }
+
+
+// Spring Integration
+// Source: http://allenchou.net/2015/04/game-math-precise-control-over-numeric-springing/
+// damp: zeta, smoothness halflife
+// freq: omega, the oscillation frequency
+spring :: proc "contextless" (x, v: ^$T, x_target: T, damp: f32, freq: f32, delta: f32)
+    where intrinsics.type_is_float(T) || (intrinsics.type_is_array(T) && intrinsics.type_is_float(intrinsics.type_elem_type(T)))
+{
+    x_temp := x^
+    v_temp := v^
+    f := 1.0 + 2.0 * delta * damp * freq
+    oo := freq * freq
+    hoo := delta * oo
+    hhoo := delta * hoo
+    det_inv := 1.0 / (f + hhoo)
+    det_x := f * x_temp + delta * v_temp + hhoo * x_target
+    det_v := v_temp + hoo * (x_target - x_temp)
+    x^ = det_x * det_inv
+    v^ = det_v * det_inv
+}
+
+// Utility for springs where X and V are packed in an array.
+spring2 :: proc "contextless" (xv: ^[2]$T, x_target: T, damp: f32, freq: f32, delta: f32)
+    where intrinsics.type_is_float(T) || (intrinsics.type_is_array(T) && intrinsics.type_is_float(intrinsics.type_elem_type(T)))
+{
+    spring(&xv[0], &xv[1], x_target = x_target, damp = damp, freq = freq, delta = delta)
+}
+
 
 
 

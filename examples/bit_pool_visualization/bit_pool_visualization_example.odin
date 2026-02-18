@@ -53,7 +53,7 @@ _update :: proc(hot_state: rawptr) -> rawptr {
     delta := rv.get_delta_time()
 
     rv.set_layer_params(0, rv.make_screen_camera())
-    rv.bind_texture("thick")
+    rv.bind_texture(rv.get_builtin_texture(.CGA8x8thick))
     rv.bind_blend(.Alpha)
 
     if rv.mouse_down(.Left) {
