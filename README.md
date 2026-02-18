@@ -32,7 +32,7 @@ Inspired by Sokol, PICO8 and Raylib.
 - Minimal dependencies
     - the core of the engine is implemented fully from scratch, see `platform` and `gpu`
 - Zero hidden internal state
-    - Reading and especially manipulating it is discouraged, but for practical reasons `@private` is strictly unused.
+    - Especially manipulating it is discouraged, but for practical reasons `@private` is strictly unused.
 
 
 ## Simple Example
@@ -230,3 +230,4 @@ oklerp(a, b: Vec4, t: f32) -> Vec4          // Interpolate colors with OKLAB
 
 # Contributing
 For info about bug reports and contributing, see [CONTRIBUTING](CONTRIBUTING.md)
+
