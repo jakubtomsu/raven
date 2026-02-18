@@ -3,6 +3,8 @@ package raven_base
 import "base:runtime"
 import "ufmt"
 
+
+
 // MARK: Log
 
 Log_Level :: runtime.Logger_Level
@@ -35,6 +37,13 @@ log :: proc(level: Log_Level, format: string, args: ..any, loc := #caller_locati
     runtime.DEFAULT_TEMP_ALLOCATOR_TEMP_GUARD()
     str := ufmt.tprintf(format = format, args = args)
     context.logger.procedure(logger.data, level, str, logger.options, location = loc)
+}
+
+create_logger :: proc() -> runtime.Logger {
+    return {
+        procedure = _logger_proc,
+        data = nil,
+    }
 }
 
 _logger_proc :: proc(logger_data: rawptr, level: runtime.Logger_Level, text: string, options: bit_set[runtime.Logger_Option], loc := #caller_location) {

@@ -11,6 +11,7 @@ state: ^State
 State :: struct {
     cam_pos:    rv.Vec3,
     cam_ang:    rv.Vec3,
+    shader:     rv.Pixel_Shader_Handle,
 }
 
 @export _module_desc := rv.Module_Desc {
@@ -24,12 +25,20 @@ main :: proc() {
     rv.run_main_loop(_module_desc)
 }
 
+SHADER :: `
+
+`
+
 _init :: proc() {
     state = new(State)
 
     // TODO: FIXME: relative and non-relative mouse have inverted delta
     platform.set_mouse_relative(rv.get_window(), true)
     platform.set_mouse_visible(false)
+
+    rv.register_file_data("test_shader.ps.hlsl", #load("test_shader.ps.hlsl"))
+
+    state.shader = rv.load_pixel_shader("test_shader.ps.hlsl")
 
     state.cam_pos = {1.5, 3, -8}
     state.cam_ang = {0.3, 0, 0}
@@ -86,7 +95,7 @@ _update :: proc(hot_state: rawptr) -> rawptr {
     if rv.scope_binds() {
         rv.bind_texture("default")
 
-        rv.draw_mesh(rv.get_mesh("Circle"), {-3, 0, 0}, col = rv.YELLOW)
+        rv.draw_mesh(rv.get_mesh("Disk"), {-3, 0, 0}, col = rv.YELLOW)
         rv.draw_mesh(rv.get_mesh("Plane"), {0, 0, 0}, col = rv.GREEN)
         rv.draw_mesh(rv.get_mesh("Cube"), {3, 0, 0}, rv.quat_angle_axis(rv.get_time(), {0, 1, 0}), col = rv.GRAY, add_col = rv.WHITE * rv.nsin(rv.get_time()))
         rv.draw_mesh(rv.get_mesh("Icosphere"), {6, 0, 0}, col = rv.CYAN)
@@ -104,6 +113,9 @@ _update :: proc(hot_state: rawptr) -> rawptr {
                 {0, 0, 1},
             },
         )
+
+        rv.bind_pixel_shader(state.shader)
+        rv.draw_mesh(rv.get_mesh("Cube"), {3, -5, 0}, rv.quat_angle_axis(rv.get_time(), {0, 1, 0}), col = rv.GRAY, add_col = rv.WHITE * rv.nsin(rv.get_time()))
     }
 
     rv.bind_layer(1)

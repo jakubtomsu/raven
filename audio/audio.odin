@@ -3,7 +3,6 @@ package raven_audio
 
 import "../base"
 import "base:intrinsics"
-import "base:runtime"
 
 // TODO: sound fading
 // TODO: sound trim range for dynamically chopping big sounds
@@ -466,19 +465,4 @@ set_group_delay_dry :: proc(handle: Group_Handle, dry: f32) {
     if group, ok := get_internal_group(handle); ok && .Delay in group.filters {
         _set_group_delay_dry(group, dry)
     }
-}
-
-
-
-
-// MARK: Utils
-
-// Clones a string and appends a null-byte to make it a cstring
-clone_to_cstring :: proc(s: string, allocator := context.allocator, loc := #caller_location) ->
-    (res: cstring, err: runtime.Allocator_Error) #optional_allocator_error
-{
-    c := make([]byte, len(s)+1, allocator, loc) or_return
-    copy(c, s)
-    c[len(s)] = 0
-    return cstring(&c[0]), nil
 }

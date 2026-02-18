@@ -7,6 +7,7 @@ import "gpu"
 import "platform"
 import "rscn"
 import "audio"
+import "shader_compiler"
 
 import "core:mem"
 import "core:bytes"
@@ -20,17 +21,16 @@ import stbi "vendor:stb/image"
 
 // TODO: go through all TODOs
 
-// TODO: fix triangles and pooled textures
+// TODO: fix triangles with pooled textures
 // TODO: actual 3d transform structure
 // TODO: objects in scene data
 // TODO: asset_load and reload
 // TODO: consistent get_* and no get API!
 // TODO: font state
-// TODO: audio
-// TODO: try core:image
+// TODO: try core:image?
 // TODO: separate hash table size from backing array size?
 // TODO: abstract log_error and log_warn etc to comptime disable logging?
-// TODO: compress vertex and instance data more
+// TODO: compress vertex data more
 // TODO: More "summary" info when app exist - min/max/avg cpu/gpu frame time, num draws, temp allocs, ..?
 // TODO: uniform anchor values
 // TODO: drawing real lines, not quads
@@ -38,6 +38,8 @@ import stbi "vendor:stb/image"
 // TODO: load_* vs create_*, insert_* naming convention, and resource management naming in general
 // TODO: DXT texture compression
 // TODO: triangle drawing with a dynamic mesh?
+// TODO: figure out file flushing and custom file data loop
+// TODO: all resources should return a handle if an identifier exists already
 
 RELEASE :: #config(RAVEN_RELEASE, false)
 VALIDATION :: #config(RAVEN_VALIDATION, !RELEASE)
@@ -258,7 +260,6 @@ Context_State :: struct {
 // VFS file
 File :: struct {
     flags:          bit_set[File_Flag],
-    watched_dir:    u8,
     data:           []byte,
 }
 
@@ -1466,8 +1467,8 @@ get_viewport :: proc() -> [3]f32 {
 
 load_scene :: proc(name: string, dst_group: Group_Handle) -> (result_group: Group_Handle, ok: bool) {
     bin_name := strings_join(name, ".bin", allocator = context.temp_allocator)
-    txt_data := get_file(name) or_return
-    bin_data := get_file(bin_name) or_return
+    txt_data := get_file_data(name) or_return
+    bin_data := get_file_data(bin_name) or_return
 
     return load_scene_from_data(string(txt_data), bin_data, dst_group)
 }
@@ -2469,7 +2470,7 @@ load_texture :: proc(path: string) -> (result: Texture_Handle, ok: bool) #option
     npath := normalize_path(path, context.temp_allocator)
     name := strip_path_name(npath)
     base.log_info("Loading texture '%s' from path '%s'", name, npath)
-    data, data_ok := get_file(npath)
+    data, data_ok := get_file_data(npath)
     if !data_ok {
         base.log_err("Failed to load texture '%s', couldn't get file data", name)
         return {}, false
@@ -2593,7 +2594,6 @@ destroy_texture :: proc(handle: Texture_Handle) {
     _state.textures_hash[handle.index] = 0
 }
 
-
 @(require_results)
 decode_texture_data :: proc(data: []byte) -> (result: Texture_Data, ok: bool) {
     size: [2]i32
@@ -2634,17 +2634,70 @@ destroy_decoded_texture_data :: proc(data: ^Texture_Data) {
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // MARK: Shaders
 //
+// TODO:
 // Two ways to create:
 // - from source: run shaderprep with VFS includes. Primarily for development.
 // - from native: load HLSL/GLSL or whatever directly. Primarily for pakfiles.
 //
 
+@(require_results)
+load_vertex_shader :: proc(path: string) -> (result: Vertex_Shader_Handle, ok: bool) #optional_ok {
+    npath := normalize_path(path, context.temp_allocator)
+    data, data_ok := get_file_data(npath)
+
+    if !data_ok {
+        base.log_err("Failed to load vertex shader: couldn't load '%s'", path)
+        return {}, false
+    }
+
+    name := strip_path_name(npath)
+    return create_vertex_shader(name, data)
+}
+
+@(require_results)
+load_pixel_shader :: proc(path: string) -> (result: Pixel_Shader_Handle, ok: bool) #optional_ok {
+    npath := normalize_path(path, context.temp_allocator)
+    data, data_ok := get_file_data(npath)
+
+    if !data_ok {
+        base.log_err("Failed to load pixel shader: couldn't load '%s'", path)
+        return {}, false
+    }
+
+    name := strip_path_name(npath)
+
+    return create_pixel_shader(name, data)
+}
+
+_shader_include_proc :: proc(path: string, user: rawptr) -> (result: string, ok: bool) {
+    npath := normalize_path(path, context.temp_allocator)
+    data := get_file_data(npath, flush = false) or_return
+    return string(data), true
+}
 
 @(require_results)
 create_vertex_shader :: proc(name: string, data: []byte) -> (result: Vertex_Shader_Handle, ok: bool) {
     shader: Vertex_Shader
 
-    shader.shader, ok = gpu.create_shader(name, data, .Vertex)
+    compiled := data
+    when !RELEASE {
+        compiled, ok = shader_compiler.compile(
+            name = name,
+            source = string(data),
+            opts = {
+                target = .D3D11,
+                stage = .Vertex,
+                include_proc = _shader_include_proc,
+            },
+        )
+
+        if !ok {
+            base.log_err("Failed to compile vertex shader '%s'", name)
+            return {}, false
+        }
+    }
+
+    shader.shader, ok = gpu.create_shader(name, compiled, .Vertex)
 
     if !ok {
         base.log_err("RV: Failed to create vertex shader")
@@ -2661,7 +2714,25 @@ create_vertex_shader :: proc(name: string, data: []byte) -> (result: Vertex_Shad
 create_pixel_shader :: proc(name: string, data: []byte) -> (result: Pixel_Shader_Handle, ok: bool) {
     shader: Pixel_Shader
 
-    shader.shader, ok = gpu.create_shader(name, data, .Pixel)
+    compiled := data
+    when !RELEASE {
+        compiled, ok = shader_compiler.compile(
+            name = name,
+            source = string(data),
+            opts = {
+                target = .D3D11,
+                stage = .Pixel,
+                include_proc = _shader_include_proc,
+            },
+        )
+
+        if !ok {
+            base.log_err("Failed to compile pixel shader '%s'", name)
+            return {}, false
+        }
+    }
+
+    shader.shader, ok = gpu.create_shader(name, compiled, .Pixel)
 
     if !ok {
         base.log_err("RV: Failed to create pixel shader")
@@ -2678,11 +2749,11 @@ create_pixel_shader :: proc(name: string, data: []byte) -> (result: Pixel_Shader
 // Virtual file system
 //
 
-get_file :: proc(name: string, flush := true) -> (data: []byte, ok: bool) {
-    return get_file_by_hash(hash_name(name), flush = flush)
+get_file_data :: proc(name: string, flush := false) -> (data: []byte, ok: bool) {
+    return get_file_data_by_hash(hash_name(name), flush = flush)
 }
 
-get_file_by_hash :: proc(hash: Hash, flush := true) -> (data: []byte, ok: bool) {
+get_file_data_by_hash :: proc(hash: Hash, flush := false) -> (data: []byte, ok: bool) {
     index :=_table_lookup_hash(&_state.files_hash, hash) or_return
 
     file := &_state.files[index]
@@ -2701,7 +2772,7 @@ get_file_by_hash :: proc(hash: Hash, flush := true) -> (data: []byte, ok: bool) 
 
 load_asset :: proc(name: string, dst_group: Group_Handle) -> bool {
     if string_has_suffix(name, ".png") {
-        data, data_ok := get_file(name)
+        data, data_ok := get_file_data(name)
         if !data_ok {
             base.log_err("Failed to load texture '%s', file not found", name)
             return false
@@ -2722,7 +2793,7 @@ load_asset :: proc(name: string, dst_group: Group_Handle) -> bool {
 
 register_file :: proc(path: string) -> bool {
     npath := normalize_path(path, context.temp_allocator)
-    base.log_err("VFS registering file '%s'", npath)
+    base.log_info("VFS registering file '%s'", npath)
     data, ok := platform.read_file_by_path(npath, _state.allocator)
     if !ok {
         base.log_err("VFS failed to register '%s', couldn't read file data", npath)
@@ -2733,7 +2804,7 @@ register_file :: proc(path: string) -> bool {
 
 register_file_data :: proc(path: string, data: []byte, flags: bit_set[File_Flag] = {}) -> bool {
     npath := normalize_path(path, context.temp_allocator)
-    base.log_err("VFS registering file data '%s'", npath)
+    base.log_info("VFS registering file data '%s'", npath)
     return register_file_data_by_hash(hash_name(npath), data, flags = flags)
 }
 
@@ -4398,7 +4469,7 @@ screen_to_world_ray :: proc(pos: Vec2, cam: Camera) -> Vec3 {
 load_sound_resource :: proc(path: string) -> (result: Sound_Resource_Handle, ok: bool) #optional_ok {
     name := strip_path_name(path)
     // TODO: register the resource internally for hot-reload
-    data, data_ok := get_file(path)
+    data, data_ok := get_file_data(path)
     if !data_ok {
         base.log_err("Failed to load sound resource '%s' from '%s', VFS file not found", name, path)
     }

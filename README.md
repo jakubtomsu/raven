@@ -31,6 +31,8 @@ Inspired by Sokol, PICO8 and Raylib.
     - the `platform`, `gpu` and `audio` packages can be used independently from the Raven engine
 - Minimal dependencies
     - the core of the engine is implemented fully from scratch, see `platform` and `gpu`
+- Zero hidden internal state
+    - Reading and especially manipulating it is discouraged, but for practical reasons `@private` is strictly unused.
 
 
 ## Simple Example
