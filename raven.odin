@@ -2675,6 +2675,14 @@ _shader_include_proc :: proc(path: string, user: rawptr) -> (result: string, ok:
     return string(data), true
 }
 
+when gpu.BACKEND == gpu.BACKEND_D3D11 {
+    SHADER_COMPILER_TARGET :: shader_compiler.Target.D3D11
+} else when gpu.BACKEND == gpu.BACKEND_WGPU {
+    SHADER_COMPILER_TARGET :: shader_compiler.Target.WGPU
+} else {
+    SHADER_COMPILER_TARGET :: shader_compiler.Target.Invalid
+}
+
 @(require_results)
 create_vertex_shader :: proc(name: string, data: []byte) -> (result: Vertex_Shader_Handle, ok: bool) {
     shader: Vertex_Shader
@@ -2685,7 +2693,7 @@ create_vertex_shader :: proc(name: string, data: []byte) -> (result: Vertex_Shad
             name = name,
             source = string(data),
             opts = {
-                target = .D3D11,
+                target = SHADER_COMPILER_TARGET,
                 stage = .Vertex,
                 include_proc = _shader_include_proc,
             },
@@ -2720,7 +2728,7 @@ create_pixel_shader :: proc(name: string, data: []byte) -> (result: Pixel_Shader
             name = name,
             source = string(data),
             opts = {
-                target = .D3D11,
+                target = SHADER_COMPILER_TARGET,
                 stage = .Pixel,
                 include_proc = _shader_include_proc,
             },
