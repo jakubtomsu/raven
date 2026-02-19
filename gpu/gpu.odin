@@ -1333,13 +1333,6 @@ _depth_enable :: proc(comp: Comparison_Op, write: bool) -> bool {
     return comp != .Always || write
 }
 
-clone_to_cstring :: proc(s: string, allocator := context.allocator, loc := #caller_location) -> (res: cstring, err: runtime.Allocator_Error) #optional_allocator_error {
-    c := make([]byte, len(s)+1, allocator, loc) or_return
-    copy(c, s)
-    c[len(s)] = 0
-    return cstring(&c[0]), nil
-}
-
 @(require_results)
 texture_format_is_depth_stencil :: proc(format: Texture_Format) -> bool {
     #partial switch format {

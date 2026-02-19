@@ -1,12 +1,13 @@
 #+private=file
 package raven_build
 
-import "core:fmt"
+import "../platform"
+import "../base"
+import "../base/ufmt"
+
 import "core:strings"
 import "core:strconv"
 import "base:runtime"
-import "../platform"
-import "../base"
 
 when ODIN_OS == .Windows {
     DLL_EXT :: ".dll"
@@ -30,16 +31,16 @@ Hotreload_File :: struct {
 exec :: proc(str: string) -> bool {
     res := platform.run_shell_command(str)
     if 0 != res {
-        fmt.printfln("Error: Command '%s' failed with exit code %i", str, res)
+        base.log_err("Error: Command '%s' failed with exit code %i", str, res)
         return false
     }
     return true
 }
 
 compile_hot :: proc(pkg: string, pkg_name: string, index: int) {
-    path := fmt.tprintf("%s%i" + DLL_EXT, pkg_name, index)
+    path := ufmt.tprintf("%s%i" + DLL_EXT, pkg_name, index)
     assert(!platform.file_exists(path))
-    exec(fmt.tprintf("%s build %s -out:%s -debug -build-mode:dll", ODIN_EXE, pkg, path))
+    exec(ufmt.tprintf("%s build %s -out:%s -debug -build-mode:dll", ODIN_EXE, pkg, path))
 }
 
 find_last_slash :: proc(str: string) -> int {
@@ -49,11 +50,11 @@ find_last_slash :: proc(str: string) -> int {
 }
 
 clean_hot :: proc(pkg: string) {
-    remove_all(fmt.tprintf("%s*.dll", pkg))
-    remove_all(fmt.tprintf("%s*.pdb", pkg))
-    remove_all(fmt.tprintf("%s*.exp", pkg))
-    remove_all(fmt.tprintf("%s*.lib", pkg))
-    remove_all(fmt.tprintf("%s*.rdi", pkg))
+    remove_all(ufmt.tprintf("%s*.dll", pkg))
+    remove_all(ufmt.tprintf("%s*.pdb", pkg))
+    remove_all(ufmt.tprintf("%s*.exp", pkg))
+    remove_all(ufmt.tprintf("%s*.lib", pkg))
+    remove_all(ufmt.tprintf("%s*.rdi", pkg))
 }
 
 remove_all :: proc(pattern: string) {
@@ -67,7 +68,7 @@ remove_all :: proc(pattern: string) {
 }
 
 hotreload_find_latest_dll :: proc(pkg_name: string) -> (result: Hotreload_File, ok: bool) {
-    pattern := fmt.tprintf("%s*" + DLL_EXT, pkg_name)
+    pattern := ufmt.tprintf("%s*" + DLL_EXT, pkg_name)
 
     max_index: int = -1
 
@@ -111,7 +112,7 @@ hotreload_run :: proc(pkg: string, pkg_path: string) -> bool {
         return false
     }
 
-    fmt.printfln("Hotreload: Loading initial module %s ...", initial.path)
+    base.log_info("Hotreload: Loading initial module %s ...", initial.path)
 
     module, module_ok := load_hotreload_module(initial.path)
 

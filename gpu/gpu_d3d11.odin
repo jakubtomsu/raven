@@ -4,12 +4,10 @@ package raven_gpu
 
 import "../base"
 
-import "base:intrinsics"
 import "base:runtime"
 import "core:sys/windows"
 import d3d "vendor:directx/d3d11"
 import dxgi "vendor:directx/dxgi"
-import d3d_compiler "vendor:directx/d3d_compiler"
 
 // https://www.gamedevs.org/uploads/efficient-buffer-management.pdf
 // TODO: all input constraints must be spelled out at the top if each proc in gpu.odin.
@@ -360,98 +358,26 @@ when BACKEND == BACKEND_D3D11 {
         return true
     }
 
-
+    // data: DXIL bytecode
     _create_shader :: proc(name: string, data: []u8, kind: Shader_Kind) -> (result: _Shader, ok: bool) {
-        entry_point_name: cstring
-        target_name: cstring
-        switch kind {
-        case .Invalid:
-            assert(false)
-            return {}, false
-
-        case .Vertex:
-            entry_point_name = "vs_main"
-            target_name = "vs_5_0"
-
-        case .Pixel:
-            entry_point_name = "ps_main"
-            target_name = "ps_5_0"
-
-        case .Compute:
-            entry_point_name = "cs_main"
-            target_name = "cs_5_0"
-        }
-
-        flags: d3d_compiler.D3DCOMPILE
-        if RELEASE {
-            flags = {
-                .PACK_MATRIX_COLUMN_MAJOR,
-                .OPTIMIZATION_LEVEL3,
-            }
-        } else {
-            flags = {
-                .DEBUG,
-                .SKIP_OPTIMIZATION,
-                .PACK_MATRIX_COLUMN_MAJOR,
-                .ENABLE_STRICTNESS,
-                .WARNINGS_ARE_ERRORS,
-                .ALL_RESOURCES_BOUND,
-            }
-        }
-
-        binary: ^d3d.IBlob
-        errors: ^d3d.IBlob
-        res := d3d_compiler.Compile(
-            pSrcData = raw_data(data),
-            SrcDataSize = len(data),
-            pSourceName = clone_to_cstring(name, context.temp_allocator),
-            pDefines = nil,
-            pInclude = nil,
-            pEntrypoint = entry_point_name,
-            pTarget = target_name,
-            Flags1 = transmute(u32)flags,
-            Flags2 = 0,
-            ppCode = &binary,
-            ppErrorMsgs = &errors,
-        )
-
-
-        if res != 0 {
-            if errors != nil {
-                str := string((cast([^]u8)errors->GetBufferPointer())[:errors->GetBufferSize()])
-                base.log_err("Shader compile error:\n%s", str)
-            }
-            return {}, false
-        }
-
-        _d3d11_messages()
-
         switch kind {
         case .Invalid:
             unreachable()
 
         case .Vertex:
             _d3d11_check(_state.device->CreateVertexShader(
-                pShaderBytecode = binary->GetBufferPointer(),
-                BytecodeLength = binary->GetBufferSize(),
+                pShaderBytecode = raw_data(data),
+                BytecodeLength = uint(len(data)),
                 pClassLinkage = nil,
                 ppVertexShader = &result.vs,
             )) or_return
 
             _d3d11_setlabel(result.vs, name)
 
-            // _d3d11_check(_state.device->CreateInputLayout(
-            //     pInputElementDescs: [^]INPUT_ELEMENT_DESC,
-            //     NumElements: u32,
-            //     pShaderBytecodeWithInputSignature: rawptr,
-            //     BytecodeLength: SIZE_T,
-            //     ppInputLayout: ^^IInputLayout,
-            // )) or_return
-
         case .Pixel:
             _d3d11_check(_state.device->CreatePixelShader(
-                pShaderBytecode = binary->GetBufferPointer(),
-                BytecodeLength = binary->GetBufferSize(),
+                pShaderBytecode = raw_data(data),
+                BytecodeLength = uint(len(data)),
                 pClassLinkage = nil,
                 ppPixelShader = &result.ps,
             )) or_return
@@ -460,16 +386,14 @@ when BACKEND == BACKEND_D3D11 {
 
         case .Compute:
             _d3d11_check(_state.device->CreateComputeShader(
-                pShaderBytecode = binary->GetBufferPointer(),
-                BytecodeLength = binary->GetBufferSize(),
+                pShaderBytecode = raw_data(data),
+                BytecodeLength = uint(len(data)),
                 pClassLinkage = nil,
                 ppComputeShader = &result.cs,
             )) or_return
 
             _d3d11_setlabel(result.cs, name)
         }
-
-        binary->Release()
 
         _d3d11_messages()
 

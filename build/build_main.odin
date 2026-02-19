@@ -1,10 +1,11 @@
 #+vet unused style shadowing
 package raven_build
 
-import "core:log"
+import "../platform"
+import "../base"
+
 import "core:flags"
 import "core:strings"
-import "../platform"
 
 ODIN_EXE :: "odin"
 
@@ -21,7 +22,7 @@ Flags :: struct {
 }
 
 main :: proc() {
-    context.logger = log.create_console_logger(allocator = context.allocator)
+    context.logger = base.create_logger()
 
     args := platform.get_commandline_args(context.allocator)
 
@@ -45,7 +46,7 @@ main :: proc() {
 
     case .build_hot:
         latest, _ := hotreload_find_latest_dll(pkg_name)
-        log.infof("Building %i", latest.index + 1)
+        base.log_info("Building %i", latest.index + 1)
         compile_hot(fl.pkg, pkg_name = pkg_name, index = latest.index + 1)
     }
 }

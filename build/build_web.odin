@@ -1,9 +1,12 @@
 package raven_build
 
+import "../platform"
+import "../base"
+import "../base/ufmt"
+
 import "core:strconv"
 import "core:strings"
 import "core:fmt"
-import "../platform"
 
 WASM_PAGE_SIZE :: 65536
 
@@ -17,7 +20,7 @@ export_web :: proc(dst_dir: string, pkg_name: string, pkg_path: string) {
     initial_mem_pages := DEFAULT_INITIAL_MEM_PAGES
     max_mem_pages := DEFAULT_MAX_MEM_PAGES
 
-    fmt.println("Compiling WASM ...")
+    base.log_info("Compiling WASM ...")
 
     if !compile_web(dst_dir,
         pkg_name = pkg_name,
@@ -25,11 +28,11 @@ export_web :: proc(dst_dir: string, pkg_name: string, pkg_path: string) {
         initial_mem_pages = initial_mem_pages,
         max_mem_pages = max_mem_pages,
     ) {
-        fmt.println("Error: failed to compile to WASM")
+        base.log_info("Error: failed to compile to WASM")
         return
     }
 
-    fmt.println("Generating HTML and JS files ...")
+    base.log_info("Generating HTML and JS files ...")
 
     html := generate_html(
         title = pkg_name,
@@ -39,23 +42,23 @@ export_web :: proc(dst_dir: string, pkg_name: string, pkg_path: string) {
     )
 
     platform.write_file_by_path(
-        fmt.tprintf("%s/index.html", dst_dir),
+        ufmt.tprintf("%s/index.html", dst_dir),
         transmute([]byte)html,
     )
 
     clone_file(
-        fmt.tprintf("%s/odin.js", dst_dir),
-        fmt.tprintf("%score/sys/wasm/js/odin.js", ODIN_ROOT),
+        ufmt.tprintf("%s/odin.js", dst_dir),
+        ufmt.tprintf("%score/sys/wasm/js/odin.js", ODIN_ROOT),
     )
 
     clone_file(
-        fmt.tprintf("%s/wgpu.js", dst_dir),
-        fmt.tprintf("%svendor/wgpu/wgpu.js", ODIN_ROOT),
+        ufmt.tprintf("%s/wgpu.js", dst_dir),
+        ufmt.tprintf("%svendor/wgpu/wgpu.js", ODIN_ROOT),
     )
 
     clone_file(
-        fmt.tprintf("%s/raven_platform.js", dst_dir),
-        fmt.tprintf("platform/raven_platform.js"), // TODO: raven root path
+        ufmt.tprintf("%s/raven_platform.js", dst_dir),
+        ufmt.tprintf("platform/raven_platform.js"), // TODO: raven root path
     )
 }
 
@@ -73,7 +76,7 @@ compile_web :: proc(dst_dir: string, pkg_name: string, pkg_path: string, initial
         OPT_FLAGS +
         "-extra-linker-flags:\"--export-table --import-memory --initial-memory=%i --max-memory=%i\""
 
-    return exec(fmt.tprintf(FORMAT, ODIN_EXE, pkg_path, dst_dir, pkg_name,
+    return exec(ufmt.tprintf(FORMAT, ODIN_EXE, pkg_path, dst_dir, pkg_name,
         initial_mem_pages * WASM_PAGE_SIZE,
         max_mem_pages * WASM_PAGE_SIZE,
     ))
