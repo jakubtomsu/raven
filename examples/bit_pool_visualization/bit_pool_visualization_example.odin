@@ -179,8 +179,8 @@ _update :: proc(hot_state: rawptr) -> rawptr {
     rv.bind_texture(rv.get_builtin_texture(.White))
 
     for i in 0..<64 {
-        block_full := (state.pool.l0[0] & (1 << uint(i))) != 0
-        block := state.pool.l1[i]
+        block_full := (state.pool.l1[0] & (1 << uint(i))) != 0
+        block := state.pool.l0[i]
 
         if block_full {
             assert(~block == 0)
