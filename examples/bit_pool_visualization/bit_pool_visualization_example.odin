@@ -5,14 +5,21 @@ import rv "../.."
 import "../../base"
 import "core:math/rand"
 import "core:math/linalg"
-import "core:fmt"
+
+N :: 4096
 
 state: ^State
 
+// NOTE: those pools are not generational. That can be easily added.
 State :: struct {
     // Using the GPU bit pool. A datastructure package for users might get added later.
-    pool:   base.Bit_Pool(4096),
-    parts:  [4096]Particle,
+    pool:       base.Bit_Pool(4096),
+    parts:      [4096]Particle,
+
+    ll_parts:   [N]Particle,
+    ll_next:    [N]u32,
+    ll_free:    u32,
+    ll_max:     u32,
 }
 
 Particle :: struct {
@@ -41,6 +48,26 @@ _shutdown :: proc() {
     free(state)
 }
 
+ll_find_index :: proc() -> (index: int, ok: bool) {
+    index = int(state.ll_free)
+    if index > 0 && index < N {
+        state.ll_free = state.ll_next[index]
+    } else {
+        // push to the end
+        if state.ll_max < 0 || int(state.ll_max) >= N {
+            return 0, false
+        }
+        state.ll_max += 1
+        index = int(state.ll_max)
+    }
+    return index, true
+}
+
+ll_remove_index :: proc(index: int) {
+    state.ll_next[index] = state.ll_free
+    state.ll_free = u32(index)
+}
+
 _update :: proc(hot_state: rawptr) -> rawptr {
     if hot_state != nil {
         state = cast(^State)hot_state
@@ -60,8 +87,7 @@ _update :: proc(hot_state: rawptr) -> rawptr {
         num := 32
         vel: f32 = 200
         if rv.mouse_pressed(.Left) {
-            num *= 10
-            vel *= 2
+            num *= 2
         }
 
         for i in 0..<num {
@@ -77,16 +103,33 @@ _update :: proc(hot_state: rawptr) -> rawptr {
                 timer = rand.float32_range(2, 4),
             }
 
-            index, index_ok := base.bit_pool_find_0(state.pool)
-            if index_ok {
-                base.bit_pool_set_1(&state.pool, index)
-                state.parts[index] = p
-            } else {
-                log.error("Pool full!")
+            {
+                index, index_ok := base.bit_pool_find_0(state.pool)
+                if index_ok {
+                    base.bit_pool_set_1(&state.pool, index)
+                    state.parts[index] = p
+                } else {
+                    log.error("Bit Pool full!")
+                }
+            }
+
+            {
+                index, index_ok := ll_find_index()
+                if index_ok {
+                    state.ll_next[index] = max(u32)
+                    state.ll_parts[index] = p
+                } else {
+                    log.error("List Pool full!")
+                }
             }
         }
     }
 
+    sim_delta := delta
+
+    if rv.key_down(.Space) {
+        sim_delta *= 5
+    }
 
     for &p, index in state.parts {
         if !base.bit_pool_check_1(state.pool, index) {
@@ -98,18 +141,42 @@ _update :: proc(hot_state: rawptr) -> rawptr {
             continue
         }
 
-        p.timer -= delta
-        p.vel = rv.lexp(p.vel, 0, delta)
-        p.pos += p.vel * delta
+        p.timer -= sim_delta
+        p.vel = rv.lexp(p.vel, 0, sim_delta)
+        p.pos += p.vel * sim_delta
 
         rv.draw_sprite(
             {p.pos.x, p.pos.y, 0.5},
-            rv.font_slot('+'),
-            col = rv.fade(rv.smoothstep(0, 1, p.timer)),
+            rv.font_slot(rv.rune_to_char('■')),
+            scale = 2,
+            col = rv.YELLOW * rv.fade(rv.smoothstep(0, 1, p.timer)),
         )
     }
 
-    solid := rv.font_slot(0)
+
+    for &p, index in state.ll_parts {
+        if state.ll_next[index] != max(u32) {
+            continue
+        }
+
+        if p.timer < 0 {
+            ll_remove_index(index)
+            continue
+        }
+
+        p.timer -= sim_delta
+        p.vel = rv.lexp(p.vel, 0, sim_delta)
+        p.pos += p.vel * sim_delta
+
+        rv.draw_sprite(
+            {p.pos.x, p.pos.y, 0.25},
+            rv.font_slot(rv.rune_to_char('■')),
+            scale = 1,
+            col = rv.GREEN * rv.fade(rv.smoothstep(0, 1, p.timer)),
+        )
+    }
+
+    rv.bind_texture(rv.get_builtin_texture(.White))
 
     for i in 0..<64 {
         block_full := (state.pool.l0[0] & (1 << uint(i))) != 0
@@ -125,11 +192,12 @@ _update :: proc(hot_state: rawptr) -> rawptr {
             0.1,
         }
 
+        block_any := block != 0
+
         rv.draw_sprite(
             base_pos,
-            solid,
             scale = {32, 32},
-            col = block_full ? rv.RED : rv.BLACK,
+            col = block_full ? rv.RED : (block_any ? rv.PURPLE : rv.TRANSPARENT),
             scaling = .Absolute,
         )
 
@@ -145,7 +213,6 @@ _update :: proc(hot_state: rawptr) -> rawptr {
             if local_full {
                 rv.draw_sprite(
                     local_pos,
-                    solid,
                     scale = {2, 2},
                     scaling = .Absolute,
                 )
@@ -155,10 +222,63 @@ _update :: proc(hot_state: rawptr) -> rawptr {
         }
     }
 
+    // LL
+
+    for i in 0..<64 {
+        base_pos := rv.Vec3{
+            64  + f32(i % 8) * (32 + 4),
+            512 + f32(i / 8) * (32 + 4),
+            0.1,
+        }
+
+        block_full := true
+        block_any := false
+
+        // "emulate" the block masks to get the same comparison
+        for i_local in 0..<64 {
+            index := i * 64 + i_local
+            local_full := state.ll_next[index] == max(u32)
+            if local_full {
+                block_any = true
+            } else {
+                block_full = false
+            }
+        }
+
+        rv.draw_sprite(
+            base_pos,
+            scale = {32, 32},
+            col = block_full ? rv.RED : (block_any ? rv.PURPLE : rv.TRANSPARENT),
+            scaling = .Absolute,
+        )
+
+        for i_local in 0..<64 {
+            local_pos := base_pos + rv.Vec3{
+                f32(i_local % 8) * 4 - 14,
+                f32(i_local / 8) * 4 - 14,
+                -0.05,
+            }
+
+            index := i * 64 + i_local
+
+            local_full := state.ll_next[index] == max(u32)
+
+            if local_full {
+                rv.draw_sprite(
+                    local_pos,
+                    scale = {2, 2},
+                    scaling = .Absolute,
+                )
+            }
+        }
+    }
+
+    rv.bind_texture(rv.get_builtin_texture(.CGA8x8thick))
+
     rv.draw_text("LMB to spawn particles", {10, 10, 0}, scale = 2)
 
     rv.upload_gpu_layers()
-    rv.render_gpu_layer(0, rv.DEFAULT_RENDER_TEXTURE, clear_color = rv.Vec3{0, 0, 0.5}, clear_depth = true)
+    rv.render_gpu_layer(0, rv.DEFAULT_RENDER_TEXTURE, clear_color = rv.Vec3{0, 0, 0.1}, clear_depth = true)
 
     return state
 }

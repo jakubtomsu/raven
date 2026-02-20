@@ -1263,6 +1263,7 @@ _clear_draw_layers :: proc() {
 Builtin_Texture :: enum u8 {
     Default = 0,
     Error,
+    White,
     CGA8x8thick,
     CGA8x8thin,
 }
@@ -1429,6 +1430,7 @@ font_cell :: proc(coord: [2]i32) -> Rect {
     return atlas_cell(FONT_SPLIT, coord)
 }
 
+// Use rune_to_char to convert unicode symbols to the index.
 @(require_results)
 font_slot :: proc(#any_int index: i32) -> Rect {
     return font_cell([2]i32{

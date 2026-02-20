@@ -3,6 +3,7 @@ package raven_base
 import "base:intrinsics"
 
 // 2-level bitset with accelerated 0 search.
+// Size overhead is 1 bit per 4096 "fields"
 Bit_Pool :: struct($N: int) where N % 64 == 0 {
     l0: [(N + 4095) / 4096]u64,
     l1: [N / 64]u64,
