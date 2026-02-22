@@ -144,7 +144,7 @@ hotreload_run :: proc(pkg: string, pkg_path: string) -> bool {
 
         prev_any_changes := any_changes
 
-        changes := platform.watch_file_changes(&watcher)
+        changes := platform.poll_file_watcher(&watcher)
         for change in changes {
             // base.log_info("Hotreload: file changed:", change)
             if strings.ends_with(change, ".odin") {

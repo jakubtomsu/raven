@@ -54,12 +54,13 @@ ll_find_index :: proc() -> (index: int, ok: bool) {
         state.ll_free = state.ll_next[index]
     } else {
         // push to the end
-        if state.ll_max < 0 || int(state.ll_max) >= N {
+        if state.ll_max < 0 || int(state.ll_max + 1) >= N {
             return 0, false
         }
         state.ll_max += 1
         index = int(state.ll_max)
     }
+    assert(index < N)
     return index, true
 }
 
@@ -84,7 +85,7 @@ _update :: proc(hot_state: rawptr) -> rawptr {
     rv.bind_blend(.Alpha)
 
     if rv.mouse_down(.Left) {
-        num := 32
+        num := 64
         vel: f32 = 200
         if rv.mouse_pressed(.Left) {
             num *= 2
@@ -100,7 +101,7 @@ _update :: proc(hot_state: rawptr) -> rawptr {
                     rand.float32() * 2.0 - 1.0,
                     rand.float32() * 2.0 - 1.0,
                 }),
-                timer = rand.float32_range(2, 4),
+                timer = rand.float32_range(1, 2),
             }
 
             {

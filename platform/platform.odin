@@ -46,8 +46,8 @@ File_Handle :: struct {
     using native: _File_Handle,
 }
 
-File_Request :: struct {
-    using native: _File_Request,
+Async_File :: struct {
+    using native: _Async_File,
 }
 
 File_Watcher :: struct {
@@ -421,6 +421,27 @@ get_current_thread_id :: proc() -> u64 {
 
 
 
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// MARK: Barrier
+//
+// Synchronization primitive, useful for lockstep SMPD
+//
+
+@(require_results)
+barrier_create :: proc(num_threads: int) -> (result: Barrier) {
+    return barrier_create(num_threads)
+}
+
+barrier_delete :: proc(barrier: ^Barrier) {
+    barrier_delete(barrier)
+}
+
+barrier_sync :: proc(barrier: ^Barrier) {
+    barrier_sync(barrier)
+}
+
+
+
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // MARK: Window
 //
@@ -433,11 +454,6 @@ create_window :: proc(name: string, style: Window_Style = .Regular, full_rect: R
 
 destroy_window :: proc(window: Window) {
     _destroy_window(window)
-}
-
-@(require_results)
-window_dpi_scale :: proc(window: Window) -> f32 {
-    return _window_dpi_scale(window)
 }
 
 set_window_title :: proc(window: Window, name: string) {
@@ -477,7 +493,12 @@ is_window_focused :: proc(window: Window) -> bool {
     return _is_window_focused(window)
 }
 
+@(require_results)
+get_window_dpi_scale :: proc(window: Window) -> f32 {
+    return _get_window_dpi_scale(window)
+}
 
+// HWND on windows
 @(require_results)
 get_native_window_ptr :: proc(window: Window) -> rawptr {
     return _get_native_window_ptr(window)
@@ -508,27 +529,6 @@ poll_window_events :: proc(window: Window) -> (event: Event, should_continue: bo
 
     _state.event_counter = 0
     return nil, false
-}
-
-
-
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-// MARK: Barrier
-//
-// Synchronization primitive for lockstep SMPD
-//
-
-@(require_results)
-barrier_create :: proc(num_threads: int) -> (result: Barrier) {
-    return barrier_create(num_threads)
-}
-
-barrier_delete :: proc(barrier: ^Barrier) {
-    barrier_delete(barrier)
-}
-
-barrier_sync :: proc(barrier: ^Barrier) {
-    barrier_sync(barrier)
 }
 
 
@@ -576,22 +576,22 @@ write_file_by_path :: proc(path: string, data: []u8) -> bool {
 }
 
 @(require_results)
+read_file_by_path_async :: proc(file: ^Async_File, path: string, allocator := context.allocator) -> (bool) {
+    return _read_file_by_path_async(file, path, allocator)
+}
+
+@(require_results)
+async_file_wait :: proc(file: ^Async_File) -> (buffer: []byte, ok: bool) {
+    return _async_file_wait(file)
+}
+
+@(require_results)
 file_exists :: proc(path: string) -> bool {
     return _file_exists(path)
 }
 
 clone_file :: proc(dst_path: string, src_path: string, fail_if_exists := false) -> bool {
     return _clone_file(path = src_path, new_path = dst_path, fail_if_exists = fail_if_exists)
-}
-
-@(require_results)
-read_file_by_path_async :: proc(path: string, allocator := context.allocator) -> (file: File_Request, ok: bool) {
-    return _read_file_by_path_async(path, allocator)
-}
-
-@(require_results)
-file_request_wait :: proc(file: ^File_Request) -> (buffer: []byte, ok: bool) {
-    return _file_request_wait(file)
 }
 
 create_directory :: proc(path: string) -> bool {
@@ -609,11 +609,6 @@ is_directory :: proc(path: string) -> bool {
 }
 
 @(require_results)
-get_directory :: proc(path: string, buf: []string) -> []string {
-    return _get_directory(path, buf)
-}
-
-@(require_results)
 iter_directory :: proc(iter: ^Directory_Iter, pattern: string, allocator := context.temp_allocator) -> (result: string, ok: bool) {
     return _iter_directory(iter, pattern, allocator)
 }
@@ -623,8 +618,8 @@ init_file_watcher :: proc(watcher: ^File_Watcher, path: string, recursive := fal
     return _init_file_watcher(watcher, path, recursive = recursive)
 }
 
-watch_file_changes :: proc(watcher: ^File_Watcher) -> []string {
-    return _watch_file_changes(watcher)
+poll_file_watcher :: proc(watcher: ^File_Watcher) -> []string {
+    return _poll_file_watcher(watcher)
 }
 
 destroy_file_watcher :: proc(watcher: ^File_Watcher) {
@@ -670,4 +665,21 @@ _event_queue_pop :: proc(loc := #caller_location) -> (result: Event, ok: bool) {
 _event_queue_clear :: proc() {
     _state.event_queue.len = 0
     _state.event_queue.offset = 0
+}
+
+
+// Misc
+
+clone_to_cstring :: proc(
+    s: string,
+    allocator := context.allocator,
+    loc := #caller_location,
+) -> (
+    res: cstring,
+    err: runtime.Allocator_Error,
+) #optional_allocator_error {
+    c := make([]byte, len(s)+1, allocator, loc) or_return
+    copy(c, s)
+    c[len(s)] = 0
+    return cstring(&c[0]), nil
 }

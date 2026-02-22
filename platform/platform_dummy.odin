@@ -8,7 +8,7 @@ when BACKEND == BACKEND_DUMMY {
     _State :: struct { _: u8 }
 
     _File_Handle :: struct { _: u8 }
-    _File_Request :: struct { _: u8 }
+    _Async_File :: struct { _: u8 }
     _File_Watcher :: struct { _: u8 }
     _Directory_Iter :: struct { _: u8 }
     _Barrier :: struct { _: u8 }
@@ -68,7 +68,7 @@ when BACKEND == BACKEND_DUMMY {
 
     @(require_results) _create_window :: proc(name: string, style: Window_Style = .Regular, full_rect: Rect = {}) -> Window { dummy() }
     _destroy_window :: proc(window: Window) { dummy() }
-    @(require_results) _window_dpi_scale :: proc(window: Window) -> f32 { dummy() }
+    @(require_results) _get_window_dpi_scale :: proc(window: Window) -> f32 { dummy() }
     _set_window_title :: proc(window: Window, name: string) { dummy() }
     _set_window_style :: proc(window: Window, style: Window_Style) { dummy() }
     _set_window_pos :: proc(window: Window, pos: [2]i32) { dummy() }
@@ -103,15 +103,14 @@ when BACKEND == BACKEND_DUMMY {
     @(require_results) _write_file_by_path :: proc(path: string, data: []u8) -> bool { dummy() }
     @(require_results) _file_exists :: proc(path: string) -> bool { dummy() }
     @(require_results) _clone_file :: proc(path: string, new_path: string, fail_if_exists := true) -> bool { dummy() }
-    @(require_results) _read_file_by_path_async :: proc(path: string, allocator := context.allocator) -> (file: File_Request, ok: bool) { dummy() }
-    @(require_results) _file_request_wait :: proc(file: ^File_Request) -> (buffer: []byte, ok: bool) { dummy() }
+    @(require_results) _read_file_by_path_async :: proc(path: string, allocator := context.allocator) -> (file: Async_File, ok: bool) { dummy() }
+    @(require_results) _async_file_wait :: proc(file: ^Async_File) -> (buffer: []byte, ok: bool) { dummy() }
     @(require_results) _create_directory :: proc(path: string) -> bool { dummy() }
     @(require_results) _is_file :: proc(path: string) -> bool { dummy() }
     @(require_results) _is_directory :: proc(path: string) -> bool { dummy() }
-    @(require_results) _get_directory :: proc(path: string, buf: []string) -> []string { dummy() }
     @(require_results) _iter_directory :: proc(iter: ^Directory_Iter, pattern: string, allocator := context.temp_allocator) -> (result: string, ok: bool) { dummy() }
     @(require_results) _init_file_watcher :: proc(watcher: ^File_Watcher, path: string, recursive := false) -> bool { dummy() }
-    @(require_results) _watch_file_changes :: proc(watcher: ^File_Watcher) -> []string { dummy() }
+    @(require_results) _poll_file_watcher :: proc(watcher: ^File_Watcher) -> []string { dummy() }
     _destroy_file_watcher :: proc(watcher: ^File_Watcher) { dummy() }
     @(require_results) _file_dialog :: proc(mode: File_Dialog_Mode, default_path: string, patterns: []File_Pattern, title := "") -> (string, bool) { dummy() }
 }

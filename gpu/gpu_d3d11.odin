@@ -38,6 +38,10 @@ when BACKEND == BACKEND_D3D11 {
 
     }
 
+    _Compute_Pipeline :: struct {
+
+    }
+
     _Sampler :: struct {
         smp:    ^d3d.ISamplerState,
     }
@@ -172,6 +176,10 @@ when BACKEND == BACKEND_D3D11 {
     //
 
     _create_pipeline :: proc(name: string, desc: Pipeline_Desc) -> (result: _Pipeline, ok: bool) {
+        return {}, true
+    }
+
+    _create_compute_pipeline :: proc(name: string, desc: Compute_Pipeline_Desc) -> (result: _Compute_Pipeline, ok: bool) {
         return {}, true
     }
 

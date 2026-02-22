@@ -58,7 +58,7 @@ when BACKEND == BACKEND_WINDOWS {
         handle: windows.HANDLE,
     }
 
-    _File_Request :: struct {
+    _Async_File :: struct {
         pending:    bool,
         handle:     windows.HANDLE,
         overlapped: windows.OVERLAPPED,
@@ -266,7 +266,7 @@ when BACKEND == BACKEND_WINDOWS {
     }
 
     @(require_results)
-    _window_dpi_scale :: proc(window: Window) -> f32 {
+    _get_window_dpi_scale :: proc(window: Window) -> f32 {
         // https://learn.microsoft.com/en-us/windows/win32/learnwin32/dpi-and-device-independent-pixels
         return f32(windows.GetDpiForWindow(window.hwnd)) / 96.0
     }
@@ -810,10 +810,8 @@ when BACKEND == BACKEND_WINDOWS {
         return true == windows.CreateDirectoryW(windows.utf8_to_wstring(path, context.temp_allocator), nil)
     }
 
-    _read_file_by_path_async :: proc(path: string, allocator := context.allocator) -> (file: File_Request, ok: bool) {
+    _read_file_by_path_async :: proc(file: ^Async_File, path: string, allocator := context.allocator) -> bool {
         windows.SetLastError(0)
-
-        assert(false, "THIS IS INCORRECT, POINTER TO OVERLAPPED IS POSSIBLY INVALID!!!!!")
 
         file.handle = windows.CreateFileW(
             lpFileName = windows.utf8_to_wstring(path, context.temp_allocator),
@@ -831,7 +829,7 @@ when BACKEND == BACKEND_WINDOWS {
 
         if file.handle == windows.INVALID_HANDLE_VALUE {
             _win32_log_last_error("CreateFile failed")
-            return {}, false
+            return false
         }
 
         windows.SetLastError(0)
@@ -839,7 +837,7 @@ when BACKEND == BACKEND_WINDOWS {
         size: windows.LARGE_INTEGER
         if !windows.GetFileSizeEx(file.handle, &size) {
             _win32_log_last_error("GetSize Failed")
-            return {}, false
+            return false
         }
 
         SECTOR_SIZE :: 4096 // assume it's no bigger than this
@@ -850,7 +848,7 @@ when BACKEND == BACKEND_WINDOWS {
         file.buffer, err = runtime.mem_alloc_non_zeroed(aligned_size, SECTOR_SIZE, allocator)
         if err != nil {
             base.log_err("Failed to Allocate buffer of size %i bytes", size)
-            return {}, false
+            return false
         }
 
         windows.SetLastError(0)
@@ -864,18 +862,16 @@ when BACKEND == BACKEND_WINDOWS {
         ) {
             if windows.GetLastError() != windows.ERROR_IO_PENDING {
                 _win32_log_last_error("ReadFile Failed")
-                return {}, false
+                return false
             }
         }
 
         file.pending = true
 
-        return file, true
+        return true
     }
 
-
-
-    _file_request_wait :: proc(file: ^File_Request) -> (buffer: []byte, ok: bool) {
+    _async_file_wait :: proc(file: ^Async_File) -> (buffer: []byte, ok: bool) {
         assert(file.pending)
 
         defer windows.CloseHandle(file.handle)
@@ -935,19 +931,6 @@ when BACKEND == BACKEND_WINDOWS {
         )
 
         return (attribs & windows.FILE_ATTRIBUTE_DIRECTORY) != 0
-    }
-
-    _get_directory :: proc(dir_path: string, buf: []string) -> []string {
-        iter: Directory_Iter
-        num := 0
-        for path in iter_directory(&iter, dir_path, context.temp_allocator) {
-            if num >= len(buf) {
-                break
-            }
-            buf[num] = path
-            num += 1
-        }
-        return buf[:num]
     }
 
     _iter_directory :: proc(iter: ^Directory_Iter, path: string, allocator := context.temp_allocator) -> (result: string, ok: bool) {
@@ -1018,7 +1001,7 @@ when BACKEND == BACKEND_WINDOWS {
         return true
     }
 
-    _watch_file_changes :: proc(watcher: ^File_Watcher) -> []string {
+    _poll_file_watcher :: proc(watcher: ^File_Watcher) -> []string {
         assert(watcher.handle != {})
 
         result := make([dynamic]string, 0, 0, context.temp_allocator)

@@ -28,6 +28,7 @@ when BACKEND == BACKEND_WGPU {
         queue:                  wgpu.Queue,
         command_encoder:        wgpu.CommandEncoder,
         render_pass_encoder:    wgpu.RenderPassEncoder,
+        compute_pass_encoder:   wgpu.ComputePassEncoder,
         draw_data_buf:          wgpu.Buffer,
 
         bind_group_hash:        [_BIND_GROUP_CACHE_SIZE]Hash,
@@ -42,6 +43,11 @@ when BACKEND == BACKEND_WGPU {
 
     _Pipeline :: struct {
         pip:        wgpu.RenderPipeline,
+        bind_group: _Bind_Group_Handle,
+    }
+
+    _Compute_Pipeline :: struct {
+        pip:        wgpu.ComputePipeline,
         bind_group: _Bind_Group_Handle,
     }
 
@@ -221,6 +227,7 @@ when BACKEND == BACKEND_WGPU {
         assert(_state.surface_view == nil)
         assert(_state.command_encoder == nil)
         assert(_state.render_pass_encoder == nil)
+        assert(_state.compute_pass_encoder == nil)
         assert(_state.surface != nil)
 
         // The browser event loop does this for us
@@ -270,6 +277,11 @@ when BACKEND == BACKEND_WGPU {
             wgpu.RenderPassEncoderRelease(_state.render_pass_encoder)
         }
 
+        if _state.compute_pass_encoder != nil {
+            wgpu.ComputePassEncoderEnd(_state.compute_pass_encoder)
+            wgpu.ComputePassEncoderRelease(_state.compute_pass_encoder)
+        }
+
         command_buffer := wgpu.CommandEncoderFinish(_state.command_encoder, nil)
         wgpu.CommandEncoderRelease(_state.command_encoder)
 
@@ -286,6 +298,7 @@ when BACKEND == BACKEND_WGPU {
 
         _state.command_encoder = nil
         _state.render_pass_encoder = nil
+        _state.compute_pass_encoder = nil
         _state.surface_view = nil
         _state.surface_texture = {}
     }
@@ -331,7 +344,7 @@ when BACKEND == BACKEND_WGPU {
         return result
     }
 
-    _get_or_create_bind_group :: proc(desc: Draw_Pipeline_Bindings) -> (result: _Bind_Group, handle: _Bind_Group_Handle, ok: bool) {
+    _get_or_create_bind_group :: proc(desc: Pipeline_Bindings_Desc) -> (result: _Bind_Group, handle: _Bind_Group_Handle, ok: bool) {
         hash := hash_pipeline_bindings_desc(desc)
         index, prev := _table_find_empty_hash(&_state.bind_group_hash, hash) or_return
 
@@ -348,7 +361,7 @@ when BACKEND == BACKEND_WGPU {
         return result, {index = Handle_Index(index), gen = 0}, true
     }
 
-    _create_bind_group :: proc(desc: Draw_Pipeline_Bindings) -> (result: _Bind_Group, ok: bool) {
+    _create_bind_group :: proc(desc: Pipeline_Bindings_Desc) -> (result: _Bind_Group, ok: bool) {
         base.log_debug("GPU: Creating WebGPU bind group")
 
         num_entries := 0
@@ -511,7 +524,8 @@ when BACKEND == BACKEND_WGPU {
     _create_pipeline :: proc(name: string, desc: Pipeline_Desc) -> (result: _Pipeline, ok: bool) {
         // base.log_debug("GPU: Creating WebGPU pipeline '%s'", name)
 
-        bind_group, bind_group_handle, bind_group_ok := _get_or_create_bind_group(desc.bindings)
+        bindings := get_pipeline_desc_bindings(desc)
+        bind_group, bind_group_handle, bind_group_ok := _get_or_create_bind_group(bindings)
         if !bind_group_ok {
             base.log_err("WGPU: Failed to create pipeline: bind group creation failed")
             return {}, false
@@ -665,6 +679,44 @@ when BACKEND == BACKEND_WGPU {
         result.bind_group = bind_group_handle
 
         return result, true
+    }
+
+    _create_compute_pipeline :: proc(name: string, desc: Compute_Pipeline_Desc) -> (result: _Compute_Pipeline, ok: bool) {
+        bind_group, bind_group_handle, bind_group_ok := _get_or_create_bind_group(desc.bindings)
+        if !bind_group_ok {
+            base.log_err("WGPU: Failed to create pipeline: bind group creation failed")
+            return {}, false
+        }
+
+        pip_layout := wgpu.DeviceCreatePipelineLayout(_state.device, &wgpu.PipelineLayoutDescriptor{
+            label = name,
+            bindGroupLayoutCount = 1,
+            bindGroupLayouts = &bind_group.layout,
+        })
+
+        if pip_layout == nil {
+            base.log_err("WGPU: Failed to create pipeline layout")
+            return {}, false
+        }
+
+        cs, cs_ok := get_internal_shader(desc.cs)
+        assert(cs_ok)
+
+        result.pip = wgpu.DeviceCreateComputePipeline(
+            _state.device,
+            &wgpu.ComputePipelineDescriptor{
+                label = name,
+                layout = nil,
+                compute = wgpu.ProgrammableStageDescriptor{
+                    module = cs.module,
+                    entryPoint = "cs_main",
+                    constants = nil,
+                    constantCount = 0,
+                },
+            },
+        )
+
+        return {}, true
     }
 
     _update_swapchain :: proc(_: ^_Resource, _: rawptr, size: [2]i32) -> (ok: bool) {
@@ -997,6 +1049,14 @@ when BACKEND == BACKEND_WGPU {
         wgpu.RenderPassEncoderSetPipeline(_state.render_pass_encoder, curr_pip.pip)
     }
 
+    _begin_compute_pipeline :: proc(
+        curr_pip:   Compute_Pipeline_State,
+        curr:       Compute_Pipeline_Desc,
+        prev:       Compute_Pipeline_Desc,
+    ) {
+        wgpu.ComputePassEncoderSetPipeline(_state.compute_pass_encoder, curr_pip.pip)
+    }
+
     _update_buffer :: proc(res: ^Resource_State, data: []u8, offset: int) {
         wgpu.QueueWriteBuffer(_state.queue,
             res.buf,
@@ -1139,7 +1199,12 @@ when BACKEND == BACKEND_WGPU {
     }
 
     _dispatch_compute :: proc(size: [3]i32) {
-        unimplemented()
+        wgpu.ComputePassEncoderDispatchWorkgroups(
+            _state.compute_pass_encoder,
+            workgroupCountX = u32(size.x),
+            workgroupCountY = u32(size.y),
+            workgroupCountZ = u32(size.z),
+        )
     }
 
 

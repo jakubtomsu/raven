@@ -19,7 +19,7 @@ _State :: struct {
 }
 
 _File_Handle :: struct { _: u8 }
-_File_Request :: struct { _: u8 }
+_Async_File :: struct { _: u8 }
 _File_Watcher :: struct { _: u8 }
 _Directory_Iter :: struct { _: u8 }
 _Barrier :: struct { _: u8 }
@@ -215,7 +215,7 @@ _destroy_window :: proc(window: Window) {
 }
 
 @(require_results)
-_window_dpi_scale :: proc(window: Window) -> f32 {
+_get_window_dpi_scale :: proc(window: Window) -> f32 {
     // _js_unsupported()
     return 1.0
 }
@@ -353,13 +353,13 @@ _clone_file :: proc(path: string, new_path: string, fail_if_exists := true) -> b
 }
 
 @(require_results)
-_read_file_by_path_async :: proc(path: string, allocator := context.allocator) -> (file: File_Request, ok: bool) {
+_read_file_by_path_async :: proc(path: string, allocator := context.allocator) -> (file: Async_File, ok: bool) {
     _js_unsupported()
     return {}, false
 }
 
 @(require_results)
-_file_request_wait :: proc(file: ^File_Request) -> (buffer: []byte, ok: bool) {
+_async_file_wait :: proc(file: ^Async_File) -> (buffer: []byte, ok: bool) {
     _js_unsupported()
     return {}, false
 }
@@ -381,11 +381,6 @@ _is_directory :: proc(path: string) -> bool {
 }
 
 @(require_results)
-_get_directory :: proc(path: string, buf: []string) -> []string {
-    return nil
-}
-
-@(require_results)
 _iter_directory :: proc(iter: ^Directory_Iter, pattern: string, allocator := context.temp_allocator) -> (result: string, ok: bool) {
     return "", false
 }
@@ -396,7 +391,7 @@ _init_file_watcher :: proc(watcher: ^File_Watcher, path: string, recursive := fa
 }
 
 @(require_results)
-_watch_file_changes :: proc(watcher: ^File_Watcher) -> []string {
+_poll_file_watcher :: proc(watcher: ^File_Watcher) -> []string {
     return nil
 }
 

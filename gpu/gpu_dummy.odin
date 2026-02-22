@@ -8,6 +8,7 @@ when BACKEND == BACKEND_DUMMY {
     _State :: struct { _: u8 }
 
     _Pipeline :: struct { _: u8 }
+    _Compute_Pipeline :: struct { _: u8 }
     _Shader :: struct { _: u8 }
     _Resource :: struct { _: u8 }
 
@@ -35,6 +36,7 @@ when BACKEND == BACKEND_DUMMY {
     @(require_results) _update_swapchain :: proc(swapchain: ^_Resource, window: rawptr, size: [2]i32) -> (ok: bool) { dummy() }
 
     @(require_results) _create_pipeline :: proc(name: string, desc: Pipeline_Desc) -> (result: _Pipeline, ok: bool) { dummy() }
+    @(require_results) _create_compute_pipeline :: proc(name: string, desc: Compute_Pipeline_Desc) -> (result: _Compute_Pipeline, ok: bool) { dummy() }
     @(require_results) _create_constants :: proc(name: string, item_size: i32, item_num: i32) -> (result: _Resource, ok: bool) { dummy() }
     @(require_results) _create_shader :: proc(name: string, data: []u8, kind: Shader_Kind) -> (result: _Shader, ok: bool) { dummy() }
     @(require_results) _create_texture_2d :: proc(name: string, format: Texture_Format, size: [2]i32, usage: Usage, mips: i32, array_depth: i32, render_texture: bool, rw_resource: bool, data: []byte) -> (result: _Resource, ok: bool) { dummy() }

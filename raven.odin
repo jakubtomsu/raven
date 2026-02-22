@@ -1059,7 +1059,7 @@ begin_frame :: proc() -> (keep_running: bool) {
 
     _clear_draw_layers()
 
-    _state.dpi_scale = platform.window_dpi_scale(_state.window)
+    _state.dpi_scale = platform.get_window_dpi_scale(_state.window)
     // base.log_info("DPI scale: ", _state.dpi_scale)
 
     _state.input.mouse_delta = 0
@@ -1171,7 +1171,7 @@ begin_frame :: proc() -> (keep_running: bool) {
 
         path := string(dir.path[:dir.path_len])
 
-        changes := platform.watch_file_changes(&dir.watcher)
+        changes := platform.poll_file_watcher(&dir.watcher)
 
         for change in changes {
             base.log_info("changed file:", change)

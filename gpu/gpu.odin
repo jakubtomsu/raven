@@ -53,6 +53,7 @@ RW_RESOURCE_BIND_SLOTS :: 32
 // If you ever hit the pipeline limit it's probably a good idea to investigate
 // *why* you have so many pipelines in the first place, before raising it.
 MAX_PIPELINES :: #config(GPU_MAX_PIPELINES, 256)
+MAX_COMPUTE_PIPELINES :: #config(GPU_MAX_COMPUTE_PIPELINES, 128)
 MAX_RESOURCES :: #config(GPU_MAX_RESOURCES, 1024)
 MAX_SHADERS :: #config(GPU_MAX_SHADERS, 128)
 MAX_CONSTANTS :: #config(GPU_MAX_RESOURCES, 64)
@@ -76,6 +77,11 @@ State :: struct #align(64) {
     pipeline_desc:          [MAX_PIPELINES]Pipeline_Desc,
     pipeline_data:          [MAX_PIPELINES]Pipeline_State,
     pipeline_gen:           [MAX_PIPELINES]Handle_Gen,
+
+    compute_pipeline_hash:  [MAX_COMPUTE_PIPELINES]u64,
+    compute_pipeline_desc:  [MAX_COMPUTE_PIPELINES]Compute_Pipeline_Desc,
+    compute_pipeline_data:  [MAX_COMPUTE_PIPELINES]Compute_Pipeline_State,
+    compute_pipeline_gen:   [MAX_COMPUTE_PIPELINES]Handle_Gen,
 
     resource_used:          base.Bit_Pool(MAX_RESOURCES),
     resource_gen:           [MAX_RESOURCES]Handle_Gen,
@@ -103,11 +109,16 @@ Handle :: struct #packed {
 Hash :: u64
 
 Pipeline_Handle :: distinct Handle
+Compute_Pipeline_Handle :: distinct Handle
 Shader_Handle :: distinct Handle
 Resource_Handle :: distinct Handle
 
 Pipeline_State :: struct {
     using native:   _Pipeline,
+}
+
+Compute_Pipeline_State :: struct {
+    using native:   _Compute_Pipeline,
 }
 
 Shader_State :: struct {
@@ -145,18 +156,18 @@ Pipeline_Desc :: struct #align(64) {
     color_format:       [RENDER_TEXTURE_BIND_SLOTS]Texture_Format,
     depth_format:       Texture_Format,
 
-    using bindings:     Draw_Pipeline_Bindings,
-}
-
-Draw_Pipeline_Bindings :: struct {
+    // partial Pipeline_Bindings
     samplers:           [SAMPLER_BIND_SLOTS]Sampler_Desc,
     constants:          [CONSTANTS_BIND_SLOTS]Resource_Handle,
     resources:          [RESOURCE_BIND_SLOTS]Resource_Handle,
 }
 
-// TODO
-Compute_Pipeline :: struct {
+Compute_Pipeline_Desc :: struct {
     cs:                 Shader_Handle,
+    using bindings:     Pipeline_Bindings_Desc,
+}
+
+Pipeline_Bindings_Desc :: struct {
     samplers:           [SAMPLER_BIND_SLOTS]Sampler_Desc,
     constants:          [CONSTANTS_BIND_SLOTS]Resource_Handle,
     resources:          [RESOURCE_BIND_SLOTS]Resource_Handle,
@@ -609,9 +620,57 @@ hash_pipeline_desc :: proc(desc: Pipeline_Desc) -> Hash {
 }
 
 @(require_results)
-hash_pipeline_bindings_desc :: proc(desc: Draw_Pipeline_Bindings) -> Hash {
+hash_pipeline_bindings_desc :: proc(desc: Pipeline_Bindings_Desc) -> Hash {
     data := transmute([size_of(desc)]u8)desc
     return xxhash.XXH3_64_with_seed(data[:], HASH_SEED)
+}
+
+@(require_results)
+hash_compute_pipeline_desc :: proc(desc: Compute_Pipeline_Desc) -> Hash {
+    data := transmute([size_of(desc)]u8)desc
+    return xxhash.XXH3_64_with_seed(data[:], HASH_SEED)
+}
+
+
+@(require_results)
+create_compute_pipeline :: proc(
+    name:   string,
+    desc:   Compute_Pipeline_Desc,
+    loc     := #caller_location,
+) -> (result: Compute_Pipeline_Handle, ok: bool) {
+    validate_compute_pipeline_desc(desc, loc = loc)
+
+    hash := hash_compute_pipeline_desc(desc)
+
+    index, prev := _table_find_empty_hash(&_state.compute_pipeline_hash, hash) or_return
+
+    // Already exists
+    if prev != 0 {
+        assert(_state.compute_pipeline_desc[index] != {})
+        validate(desc == _state.compute_pipeline_desc[index], "Hash Collision")
+        result = {
+            index = Handle_Index(index),
+            gen = _state.compute_pipeline_gen[index],
+        }
+
+        return result, true
+    }
+
+    base.log_debug("Creating compute pipeline '%s' %x", name, hash)
+
+    state: Compute_Pipeline_State
+    state.native = _create_compute_pipeline(name, desc) or_return
+
+    _state.compute_pipeline_desc[index] = desc
+    _state.compute_pipeline_data[index] = state
+    _state.compute_pipeline_hash[index] = hash
+
+    result = {
+        index = Handle_Index(index),
+        gen = _state.compute_pipeline_gen[index],
+    }
+
+    return result, true
 }
 
 // Set 'item_num' to 2 or more to enable multi const buffers with dynamic offsets.
@@ -1186,7 +1245,7 @@ validate_pipeline_desc :: proc(desc: Pipeline_Desc, loc := #caller_location) {
         validate(index_ok)
     }
 
-    for handle in desc.bindings.constants {
+    for handle in desc.constants {
         if handle == {} {
             continue
         }
@@ -1195,7 +1254,7 @@ validate_pipeline_desc :: proc(desc: Pipeline_Desc, loc := #caller_location) {
         validate(res.kind == .Constants)
     }
 
-    for handle in desc.bindings.resources {
+    for handle in desc.resources {
         if handle == {} {
             continue
         }
@@ -1226,6 +1285,34 @@ validate_pipeline_for_pass :: proc(pip: Pipeline_Desc, pass: Pass_Desc) {
         validate(pip.depth_format != .Invalid)
     } else {
         validate(pip.depth_format == .Invalid)
+    }
+}
+
+validate_compute_pipeline_desc :: proc(desc: Compute_Pipeline_Desc, loc := #caller_location) {
+    sh, sh_ok := get_internal_shader(desc.cs)
+    validate(sh_ok)
+    validate(sh.kind == .Compute)
+
+    for handle in desc.constants {
+        if handle == {} {
+            continue
+        }
+        res, res_ok := get_internal_resource(handle)
+        validate(res_ok)
+        validate(res.kind == .Constants)
+    }
+
+    for handle in desc.resources {
+        if handle == {} {
+            continue
+        }
+        res, res_ok := get_internal_resource(handle)
+        validate(res_ok)
+        #partial switch res.kind {
+        case .Buffer, .Texture2D, .Texture3D:
+        case:
+            validate(false)
+        }
     }
 }
 
@@ -1322,6 +1409,16 @@ _table_get :: proc(table: ^[$N]$T, table_gen: [N]Handle_Gen, handle: $H/Handle) 
     }
 
     return &table[handle.index], true
+}
+
+@(require_results)
+get_pipeline_desc_bindings :: proc(desc: Pipeline_Desc) -> Pipeline_Bindings_Desc {
+    return {
+        samplers = desc.samplers,
+        constants = desc.constants,
+        resources = desc.resources,
+        rw_resources = {},
+    }
 }
 
 
