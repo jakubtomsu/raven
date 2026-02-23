@@ -2,6 +2,7 @@
 package audio_wav
 
 import "base:runtime"
+
 RIFF_CHUNK_ID: [4]byte: "RIFF"
 FORMAT_CHUNK_ID: [4]byte: "fmt "
 DATA_CHUNK_ID: [4]byte: "data"
@@ -29,7 +30,7 @@ Format_Chunk :: struct {
     using chunk:        Chunk, // FORMAT_BLOC_ID + Chunk size minus 8 bytes, which is 16 bytes here (0x10)
     format:             Format,
     num_channels:       u16,
-    frequency:          u32, // Sample rate (in hertz)
+    sample_rate:        u32, // Sample rate frequency in hertz
     byte_per_sec:       u32, // Number of bytes to read per second (Frequency * BytePerBloc).
     byte_per_bloc:      u16, // Number of bytes per block (NbrChannels * BitsPerSample / 8).
     bits_per_sample:    u16, // Number of bits per sample

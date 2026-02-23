@@ -1,0 +1,184 @@
+#+vet explicit-allocators shadowing unused
+package qoa
+
+
+encode :: proc(desc: ^Desc, sample_data: []i16, allocator := context.allocator) -> (result: []byte, ok: bool) {
+    desc.samples = u32(len(sample_data))
+    if
+        desc.samples == 0 ||
+        desc.samplerate == 0 || desc.samplerate > 0xffffff ||
+        desc.channels == 0 || desc.channels > MAX_CHANNELS
+    {
+        return nil, false
+    }
+
+    // Calculate the encoded size and allocate
+    num_frames := (desc.samples + FRAME_LEN-1) / FRAME_LEN
+    num_slices := (desc.samples + SLICE_LEN-1) / SLICE_LEN
+    encoded_size := 8 +                    /* 8 byte file header */
+        num_frames * 8 +                               /* 8 byte frame headers */
+        num_frames * LMS_LEN * 4 * desc.channels + /* 4 * 4 bytes lms state per channel */
+        num_slices * 8 * desc.channels                /* 8 byte slices */
+
+    bytes := make([]byte, encoded_size, allocator)
+
+    buf: Buffer = {
+        data = bytes,
+        offs = 0,
+    }
+
+    for c in 0..<desc.channels {
+        // Set the initial LMS weights to {0, 0, -1, 2}.
+        // This helps with the prediction of the first few ms of a file.
+        desc.lms[c].weights[0] = 0
+        desc.lms[c].weights[1] = 0
+        desc.lms[c].weights[2] = -(1<<13)
+        desc.lms[c].weights[3] =  (1<<14)
+
+        // Explicitly set the history samples to 0, as we might have some garbage in there.
+        for i in 0..<LMS_LEN {
+            desc.lms[c].history[i] = 0
+        }
+    }
+
+
+    // Encode the header and go through all frames
+    encode_header(&buf, desc.samples)
+    if RECORD_TOTAL_ERROR {
+        desc.error = 0
+    }
+
+    frame_len: i32 = FRAME_LEN
+    for sample_index: u32; sample_index < desc.samples; sample_index += u32(frame_len) {
+        frame_len = i32(clamp(FRAME_LEN, 0, desc.samples - sample_index))
+        frame_samples := sample_data[sample_index * desc.channels:]
+        encode_frame(&buf, desc, sample_data = frame_samples, frame_len = u32(frame_len))
+    }
+
+    return buf.data[:buf.offs], true
+}
+
+encode_header :: proc(buf: ^Buffer, num_samples: u32) {
+    write_u64(buf, (u64(MAGIC) << 32) | u64(num_samples))
+}
+
+encode_frame :: proc(buf: ^Buffer, desc: ^Desc, sample_data: []i16, frame_len: u32) {
+    channels := desc.channels
+
+    slices: u32 = (frame_len + SLICE_LEN - 1) / SLICE_LEN
+    frame_size: u32 = _frame_size(channels, slices)
+    prev_scalefactor: [MAX_CHANNELS]i32
+
+    // Write the frame header
+    write_u64(buf,
+        u64(desc.channels)   << 56 |
+        u64(desc.samplerate) << 32 |
+        u64(frame_len)      << 16 |
+        u64(frame_size)
+    )
+
+
+    for c in 0..<channels {
+        // Write the current LMS state
+        weights: u64
+        history: u64
+        for i in 0..<LMS_LEN {
+            history = (history << 16) | u64(desc.lms[c].history[i] & 0xffff)
+            weights = (weights << 16) | u64(desc.lms[c].weights[i] & 0xffff)
+        }
+        write_u64(buf, history)
+        write_u64(buf, weights)
+    }
+
+    // We encode all samples with the channels interleaved on a slice level.
+    // E.g. for stereo: (ch-0, slice 0), (ch 1, slice 0), (ch 0, slice 1), ...
+    for sample_index: u32; sample_index < frame_len; sample_index += SLICE_LEN {
+
+        for c in 0..<channels {
+            slice_len := i32(clamp(SLICE_LEN, 0, frame_len - sample_index))
+            slice_start := i32(sample_index * channels + c)
+            slice_end: i32 = (i32(sample_index) + slice_len) * i32(channels + c)
+
+            // Brute force search for the best scalefactor. Just go through all
+            // 16 scalefactors, encode all samples for the current slice and
+            // meassure the total squared error.
+            best_rank: u64 = max(u64)
+            best_error: u64 = max(u64)
+            best_slice: u64 = 0
+            best_lms: LMS
+            best_scalefactor: i32 = 0
+
+            for sfi in 0..<i32(16) {
+                /* There is a strong correlation between the scalefactors of
+                neighboring slices. As an optimization, start testing
+                the best scalefactor of the previous slice first. */
+                scalefactor := (sfi + prev_scalefactor[c]) & (16 - 1)
+
+                /* We have to reset the LMS state to the last known good one
+                before trying each scalefactor, as each pass updates the LMS
+                state when encoding. */
+                lms := desc.lms[c]
+                slice := u64(scalefactor)
+                current_rank: u64 = 0
+                current_error: u64 = 0
+
+                for si := slice_start; si < slice_end; si += i32(channels) {
+                    sample := sample_data[si]
+                    predicted := lms_predict(lms)
+                    residual := i32(sample) - predicted
+                    scaled := div(residual, scalefactor)
+                    clamped := clamp(scaled, -8, 8)
+                    quantized := _quant_tab[clamped + 8]
+                    dequantized := _dequant_tab[scalefactor][quantized]
+                    reconstructed := clamp_s16(predicted + dequantized)
+
+                    /* If the weights have grown too large, we i32roduce a penalty
+                    here. This prevents pops/clicks in certain problem cases */
+                    weights_penalty := ((
+                        lms.weights[0] * lms.weights[0] +
+                        lms.weights[1] * lms.weights[1] +
+                        lms.weights[2] * lms.weights[2] +
+                        lms.weights[3] * lms.weights[3]
+                    ) >> 18) - 0x8ff
+                    if (weights_penalty < 0) {
+                        weights_penalty = 0
+                    }
+
+                    error := (i32(sample) - reconstructed)
+                    error_sq := error * error
+
+                    current_rank += u64(error_sq + weights_penalty * weights_penalty)
+                    current_error += u64(error_sq)
+                    if (current_rank > best_rank) {
+                        break
+                    }
+
+                    lms_update(&lms, reconstructed, dequantized)
+                    slice = (slice << 3) | u64(quantized)
+                }
+
+                if (current_rank < best_rank) {
+                    best_rank = current_rank
+                    best_error = current_error
+                    best_slice = slice
+                    best_lms = lms
+                    best_scalefactor = scalefactor
+                }
+            }
+
+            prev_scalefactor[c] = best_scalefactor
+
+            desc.lms[c] = best_lms
+            if RECORD_TOTAL_ERROR {
+                desc.error += f64(best_error)
+            }
+
+            /* If this slice was shorter than SLICE_LEN, we have to left-
+            shift all encoded data, to ensure the rightmost bits are the empty
+            ones. This should only happen in the last frame of a file as all
+            slices are completely filled otherwise. */
+            best_slice <<= uint(SLICE_LEN - slice_len) * 3
+            write_u64(buf, best_slice)
+        }
+    }
+}

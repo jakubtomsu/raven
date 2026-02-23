@@ -236,6 +236,7 @@ create_resource_decoded :: proc(data: []byte, format: Sample_Format, stereo: boo
     return result, true
 }
 
+// NOTE: created sound is stopped by default
 create_sound :: proc(resource_handle: Resource_Handle, group_handle: Group_Handle = {}, async_decode := false) -> (result: Sound_Handle, ok: bool) {
     index := base.bit_pool_find_0(_state.sounds_used) or_return
 
