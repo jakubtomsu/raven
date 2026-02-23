@@ -214,7 +214,7 @@ _update :: proc(hot_state: rawptr) -> rawptr {
             if local_full {
                 rv.draw_sprite(
                     local_pos,
-                    scale = {2, 2},
+                    scale = 4,
                     scaling = .Absolute,
                 )
             }
@@ -267,7 +267,7 @@ _update :: proc(hot_state: rawptr) -> rawptr {
             if local_full {
                 rv.draw_sprite(
                     local_pos,
-                    scale = {2, 2},
+                    scale = 4,
                     scaling = .Absolute,
                 )
             }
