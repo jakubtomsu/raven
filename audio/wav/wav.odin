@@ -102,21 +102,34 @@ decode_samples :: proc(format: Format_Chunk, data: []byte, allocator := context.
 
     case .PCM_Integer:
         switch format.bits_per_sample {
-        case 8: // i16, -32768..32767 with 0 as center
+        case 8:  // u8, 0..255 with 128 as center
             result = make([]f32, len(data), allocator)
 
             for i in 0..<len(result) {
-                result[i] = f32(data[i]) * 255.0 - 128.0
+                result[i] = (f32(data[i]) - 128.0) * (1.0 / 255.0)
             }
 
-        case 16: // u8, 0..255 with 128 as center
+        case 16: // i16, -32768..32767 with 0 as center
             assert(len(data) % 2 == 0)
 
             data16 := reinterpret_bytes(i16, data)
             result = make([]f32, len(data16), allocator)
 
             for i in 0..<len(result) {
-                result[i] = f32(data16[i]) / 32768.0
+                result[i] = f32(data16[i]) * (1.0 / 32768.0)
+            }
+
+        case 24:
+            assert(len(data) % 3 == 0)
+            result = make([]f32, len(data) / 3, allocator)
+
+            for i in 0..<len(result) {
+                val := i32(
+                    (u32(data[i*3 + 0]) << 8 ) |
+                    (u32(data[i*3 + 1]) << 16) |
+                    (u32(data[i*3 + 2]) << 24)) >> 8 // arithmetic shift to sign extend
+
+                result[i] = f32(val) * (1.0 / 8388608.0) // Normalize using 2^23
             }
 
         case:

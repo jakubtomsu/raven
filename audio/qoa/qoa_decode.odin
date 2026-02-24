@@ -5,6 +5,14 @@ max_frame_size :: proc(desc: ^Desc) -> u32 {
     return _frame_size(desc.channels, SLICES_PER_FRAME)
 }
 
+pack_sample :: proc(val: f32) -> i16 {
+    return i16(clamp(val * 32768.0, -f32(min(i16)), f32(max(i16))))
+}
+
+unpack_sample :: proc(val: i16) -> f32 {
+    return f32(val) * (1.0 / 32768.0)
+}
+
 decode :: proc(data: []byte, allocator := context.allocator) -> (desc: Desc, result: []i16, ok: bool) {
     buf: Buffer = {
         data = data,
@@ -99,21 +107,19 @@ decode_frame :: proc(buf: ^Buffer, desc: ^Desc, sample_data: []i16) -> (frame_le
         return 0
     }
 
-
-    /* Read the LMS state: 4 x 2 bytes history, 4 x 2 bytes weights per channel */
+    // Read the LMS state: 4 x 2 bytes history, 4 x 2 bytes weights per channel
     for c in 0..<channels {
         history := read_u64(buf)
         weights := read_u64(buf)
         for i in 0..<LMS_LEN {
-            desc.lms[c].history[i] = i32(history >> 48)
+            desc.lms[c].history[i] = i32(i16(history >> 48))
             history <<= 16
-            desc.lms[c].weights[i] = i32(weights >> 48)
+            desc.lms[c].weights[i] = i32(i16(weights >> 48))
             weights <<= 16
         }
     }
 
-
-    /* Decode all slices for all channels in this frame */
+    // Decode all slices for all channels in this frame
     for sample_index: u32; sample_index < samples; sample_index += SLICE_LEN {
         for c in 0..<channels {
             slice := read_u64(buf)

@@ -1,10 +1,13 @@
-// Quite OK Audio
+// Quite OK Audio format
 // Fast, lossy compression
 //
 // https://qoaformat.org/
 //
 // Implementation based on:
 // https://github.com/phoboslab/qoa/blob/master/qoa.h
+//
+// Licensed under MIT, see:
+// https://github.com/phoboslab/qoa/blob/master/LICENSE
 #+vet explicit-allocators shadowing unused
 package qoa
 

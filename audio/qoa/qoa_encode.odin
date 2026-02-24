@@ -1,16 +1,18 @@
 #+vet explicit-allocators shadowing unused
 package qoa
 
-
 encode :: proc(desc: ^Desc, sample_data: []i16, allocator := context.allocator) -> (result: []byte, ok: bool) {
-    desc.samples = u32(len(sample_data))
     if
-        desc.samples == 0 ||
-        desc.samplerate == 0 || desc.samplerate > 0xffffff ||
-        desc.channels == 0 || desc.channels > MAX_CHANNELS
+        len(sample_data) == 0 ||
+        desc.channels == 0 || desc.channels > MAX_CHANNELS ||
+        u32(len(sample_data)) % desc.channels != 0 ||
+        desc.samplerate == 0 || desc.samplerate > 0xffffff
     {
+        log(.Error, "Invalid input desc")
         return nil, false
     }
+
+    desc.samples = u32(len(sample_data)) / desc.channels
 
     // Calculate the encoded size and allocate
     num_frames := (desc.samples + FRAME_LEN-1) / FRAME_LEN
@@ -40,7 +42,6 @@ encode :: proc(desc: ^Desc, sample_data: []i16, allocator := context.allocator) 
             desc.lms[c].history[i] = 0
         }
     }
-
 
     // Encode the header and go through all frames
     encode_header(&buf, desc.samples)
@@ -77,7 +78,6 @@ encode_frame :: proc(buf: ^Buffer, desc: ^Desc, sample_data: []i16, frame_len: u
         u64(frame_size)
     )
 
-
     for c in 0..<channels {
         // Write the current LMS state
         weights: u64
@@ -93,11 +93,10 @@ encode_frame :: proc(buf: ^Buffer, desc: ^Desc, sample_data: []i16, frame_len: u
     // We encode all samples with the channels interleaved on a slice level.
     // E.g. for stereo: (ch-0, slice 0), (ch 1, slice 0), (ch 0, slice 1), ...
     for sample_index: u32; sample_index < frame_len; sample_index += SLICE_LEN {
-
         for c in 0..<channels {
             slice_len := i32(clamp(SLICE_LEN, 0, frame_len - sample_index))
             slice_start := i32(sample_index * channels + c)
-            slice_end: i32 = (i32(sample_index) + slice_len) * i32(channels + c)
+            slice_end: i32 = (i32(sample_index) + slice_len) * i32(channels) + i32(c)
 
             // Brute force search for the best scalefactor. Just go through all
             // 16 scalefactors, encode all samples for the current slice and
