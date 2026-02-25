@@ -1,16 +1,8 @@
 #+vet explicit-allocators shadowing unused
 package qoa
 
-max_frame_size :: proc(desc: ^Desc) -> u32 {
-    return _frame_size(desc.channels, SLICES_PER_FRAME)
-}
-
-pack_sample :: proc(val: f32) -> i16 {
-    return i16(clamp(val * 32768.0, -f32(min(i16)), f32(max(i16))))
-}
-
-unpack_sample :: proc(val: i16) -> f32 {
-    return f32(val) * (1.0 / 32768.0)
+max_frame_size :: proc(desc: ^Desc) -> int {
+    return _frame_size(int(desc.channels), SLICES_PER_FRAME)
 }
 
 decode :: proc(data: []byte, allocator := context.allocator) -> (desc: Desc, result: []i16, ok: bool) {
@@ -40,6 +32,8 @@ decode :: proc(data: []byte, allocator := context.allocator) -> (desc: Desc, res
             break
         }
     }
+
+    assert(sample_index == desc.samples)
 
     desc.samples = sample_index
     return desc, result, true
@@ -77,10 +71,12 @@ decode_header :: proc(buf: ^Buffer) -> (desc: Desc, ok: bool) {
         return {}, false
     }
 
+    buf.offs = 8 // continue right after the header
+
     return desc, true
 }
 
-decode_frame :: proc(buf: ^Buffer, desc: ^Desc, sample_data: []i16) -> (frame_len: u32) {
+decode_frame :: proc(buf: ^Buffer, desc: ^Desc, sample_data: []i16) -> u32 {
     size := len(buf.data[buf.offs:])
     if u32(size) < 8 + LMS_LEN * 4 * desc.channels {
 		log(.Error, "QOA: Input buffer is too small to decode a frame")
@@ -98,12 +94,13 @@ decode_frame :: proc(buf: ^Buffer, desc: ^Desc, sample_data: []i16) -> (frame_le
     num_slices: u32 = data_size / 8
     max_total_samples: u32 = num_slices * SLICE_LEN
 
-    if (
+    if
         channels != desc.channels ||
         samplerate != desc.samplerate ||
         int(frame_size) > size ||
         samples * channels > max_total_samples
-    ) {
+    {
+        log(.Error, "QOA: Invalid frame parameters")
         return 0
     }
 
@@ -112,27 +109,27 @@ decode_frame :: proc(buf: ^Buffer, desc: ^Desc, sample_data: []i16) -> (frame_le
         history := read_u64(buf)
         weights := read_u64(buf)
         for i in 0..<LMS_LEN {
-            desc.lms[c].history[i] = i32(i16(history >> 48))
+            desc.lms[c].history[i] = i32(transmute(i16)(u16(history >> 48)))
             history <<= 16
-            desc.lms[c].weights[i] = i32(i16(weights >> 48))
+            desc.lms[c].weights[i] = i32(transmute(i16)(u16(weights >> 48)))
             weights <<= 16
         }
     }
 
     // Decode all slices for all channels in this frame
-    for sample_index: u32; sample_index < samples; sample_index += SLICE_LEN {
-        for c in 0..<channels {
+    for sample_index := 0; sample_index < int(samples); sample_index += SLICE_LEN {
+        for c in 0..<int(channels) {
             slice := read_u64(buf)
 
-            scalefactor := i32(slice >> 60) & 0xf
+            scalefactor := i32((slice >> 60) & 0xf)
             slice <<= 4
 
-            slice_start := i32(sample_index * channels + c)
-            slice_end := i32(clamp(sample_index + SLICE_LEN, 0, samples) * channels + c)
+            slice_start := sample_index * int(channels) + c
+            slice_end := clamp(sample_index + SLICE_LEN, 0, int(samples)) * int(channels) + c
 
-            for si := slice_start; si < slice_end; si += i32(channels) {
-                predicted: i32 = lms_predict(desc.lms[c])
-                quantized := i32(slice >> 61) & 0x7
+            for si := slice_start; si < slice_end; si += int(channels) {
+                predicted := lms_predict(desc.lms[c])
+                quantized := i32((slice >> 61) & 0x7)
                 dequantized := _dequant_tab[scalefactor][quantized]
                 reconstructed := clamp_s16(predicted + dequantized)
 
@@ -144,6 +141,5 @@ decode_frame :: proc(buf: ^Buffer, desc: ^Desc, sample_data: []i16) -> (frame_le
         }
     }
 
-    frame_len = samples
-    return frame_len
+    return samples
 }

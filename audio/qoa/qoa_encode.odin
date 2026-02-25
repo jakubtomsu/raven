@@ -3,6 +3,7 @@ package qoa
 
 encode :: proc(desc: ^Desc, sample_data: []i16, allocator := context.allocator) -> (result: []byte, ok: bool) {
     if
+        desc.samples != 0 ||
         len(sample_data) == 0 ||
         desc.channels == 0 || desc.channels > MAX_CHANNELS ||
         u32(len(sample_data)) % desc.channels != 0 ||
@@ -17,10 +18,10 @@ encode :: proc(desc: ^Desc, sample_data: []i16, allocator := context.allocator) 
     // Calculate the encoded size and allocate
     num_frames := (desc.samples + FRAME_LEN-1) / FRAME_LEN
     num_slices := (desc.samples + SLICE_LEN-1) / SLICE_LEN
-    encoded_size := 8 +                    /* 8 byte file header */
-        num_frames * 8 +                               /* 8 byte frame headers */
-        num_frames * LMS_LEN * 4 * desc.channels + /* 4 * 4 bytes lms state per channel */
-        num_slices * 8 * desc.channels                /* 8 byte slices */
+    encoded_size := 8 +                             // 8 byte file header
+        num_frames * 8 +                            // 8 byte frame headers
+        num_frames * LMS_LEN * 4 * desc.channels +  // 4 * 4 bytes lms state per channel
+        num_slices * 8 * desc.channels              // 8 byte slices
 
     bytes := make([]byte, encoded_size, allocator)
 
@@ -38,9 +39,7 @@ encode :: proc(desc: ^Desc, sample_data: []i16, allocator := context.allocator) 
         desc.lms[c].weights[3] =  (1<<14)
 
         // Explicitly set the history samples to 0, as we might have some garbage in there.
-        for i in 0..<LMS_LEN {
-            desc.lms[c].history[i] = 0
-        }
+        desc.lms[c].history = {}
     }
 
     // Encode the header and go through all frames
@@ -49,11 +48,11 @@ encode :: proc(desc: ^Desc, sample_data: []i16, allocator := context.allocator) 
         desc.error = 0
     }
 
-    frame_len: i32 = FRAME_LEN
-    for sample_index: u32; sample_index < desc.samples; sample_index += u32(frame_len) {
-        frame_len = i32(clamp(FRAME_LEN, 0, desc.samples - sample_index))
-        frame_samples := sample_data[sample_index * desc.channels:]
-        encode_frame(&buf, desc, sample_data = frame_samples, frame_len = u32(frame_len))
+    frame_len := FRAME_LEN
+    for sample_index := 0; sample_index < int(desc.samples); sample_index += frame_len {
+        frame_len = clamp(FRAME_LEN, 0, int(desc.samples) - sample_index)
+        frame_samples := sample_data[sample_index * int(desc.channels):]
+        encode_frame(&buf, desc, sample_data = frame_samples, frame_len = frame_len)
     }
 
     return buf.data[:buf.offs], true
@@ -63,18 +62,18 @@ encode_header :: proc(buf: ^Buffer, num_samples: u32) {
     write_u64(buf, (u64(MAGIC) << 32) | u64(num_samples))
 }
 
-encode_frame :: proc(buf: ^Buffer, desc: ^Desc, sample_data: []i16, frame_len: u32) {
-    channels := desc.channels
+encode_frame :: proc(buf: ^Buffer, desc: ^Desc, sample_data: []i16, frame_len: int) {
+    channels := int(desc.channels)
 
-    slices: u32 = (frame_len + SLICE_LEN - 1) / SLICE_LEN
-    frame_size: u32 = _frame_size(channels, slices)
+    slices := (frame_len + SLICE_LEN - 1) / SLICE_LEN
+    frame_size := _frame_size(channels, slices)
     prev_scalefactor: [MAX_CHANNELS]i32
 
     // Write the frame header
     write_u64(buf,
         u64(desc.channels)   << 56 |
         u64(desc.samplerate) << 32 |
-        u64(frame_len)      << 16 |
+        u64(frame_len)       << 16 |
         u64(frame_size)
     )
 
@@ -92,11 +91,11 @@ encode_frame :: proc(buf: ^Buffer, desc: ^Desc, sample_data: []i16, frame_len: u
 
     // We encode all samples with the channels interleaved on a slice level.
     // E.g. for stereo: (ch-0, slice 0), (ch 1, slice 0), (ch 0, slice 1), ...
-    for sample_index: u32; sample_index < frame_len; sample_index += SLICE_LEN {
+    for sample_index := 0; sample_index < frame_len; sample_index += SLICE_LEN {
         for c in 0..<channels {
-            slice_len := i32(clamp(SLICE_LEN, 0, frame_len - sample_index))
-            slice_start := i32(sample_index * channels + c)
-            slice_end: i32 = (i32(sample_index) + slice_len) * i32(channels) + i32(c)
+            slice_len := clamp(SLICE_LEN, 0, frame_len - sample_index)
+            slice_start := sample_index * channels + c
+            slice_end := (sample_index + slice_len) * channels + c
 
             // Brute force search for the best scalefactor. Just go through all
             // 16 scalefactors, encode all samples for the current slice and
@@ -121,7 +120,7 @@ encode_frame :: proc(buf: ^Buffer, desc: ^Desc, sample_data: []i16, frame_len: u
                 current_rank: u64 = 0
                 current_error: u64 = 0
 
-                for si := slice_start; si < slice_end; si += i32(channels) {
+                for si := slice_start; si < slice_end; si += channels {
                     sample := sample_data[si]
                     predicted := lms_predict(lms)
                     residual := i32(sample) - predicted
@@ -131,24 +130,25 @@ encode_frame :: proc(buf: ^Buffer, desc: ^Desc, sample_data: []i16, frame_len: u
                     dequantized := _dequant_tab[scalefactor][quantized]
                     reconstructed := clamp_s16(predicted + dequantized)
 
-                    /* If the weights have grown too large, we i32roduce a penalty
+                    /* If the weights have grown too large, we introduce a penalty
                     here. This prevents pops/clicks in certain problem cases */
                     weights_penalty := ((
-                        lms.weights[0] * lms.weights[0] +
-                        lms.weights[1] * lms.weights[1] +
-                        lms.weights[2] * lms.weights[2] +
-                        lms.weights[3] * lms.weights[3]
+                        i64(lms.weights[0]) * i64(lms.weights[0]) +
+                        i64(lms.weights[1]) * i64(lms.weights[1]) +
+                        i64(lms.weights[2]) * i64(lms.weights[2]) +
+                        i64(lms.weights[3]) * i64(lms.weights[3])
                     ) >> 18) - 0x8ff
-                    if (weights_penalty < 0) {
+
+                    if weights_penalty < 0 {
                         weights_penalty = 0
                     }
 
-                    error := (i32(sample) - reconstructed)
-                    error_sq := error * error
+                    error := i64(sample) - i64(reconstructed)
+                    error_sq := u64(error * error)
 
-                    current_rank += u64(error_sq + weights_penalty * weights_penalty)
+                    current_rank += error_sq + u64(weights_penalty) * u64(weights_penalty)
                     current_error += u64(error_sq)
-                    if (current_rank > best_rank) {
+                    if current_rank > best_rank {
                         break
                     }
 
@@ -156,7 +156,7 @@ encode_frame :: proc(buf: ^Buffer, desc: ^Desc, sample_data: []i16, frame_len: u
                     slice = (slice << 3) | u64(quantized)
                 }
 
-                if (current_rank < best_rank) {
+                if current_rank < best_rank {
                     best_rank = current_rank
                     best_error = current_error
                     best_slice = slice
