@@ -7,6 +7,9 @@ https://qoaformat.org/
 Implementation based on https://github.com/phoboslab/qoa/blob/master/qoa.h
 Licensed under MIT, see https://github.com/phoboslab/qoa/blob/master/LICENSE
 
+Code used for testing:
+https://gist.github.com/jakubtomsu/ec8675231e6cf19e04bfaa20cc7e19f8
+
 Original Documentation:
 
 Copyright (c) 2023, Dominic Szablewski - https://phoboslab.org
@@ -238,11 +241,11 @@ This is all done with fixed point integers. Hence the right-shifts when updating
 the weights and calculating the prediction. */
 
 lms_predict :: proc(lms: LMS) -> i32 {
-    prediction: i32
+    prediction: i64
     for i in 0..<LMS_LEN {
-        prediction += lms.weights[i] * lms.history[i]
+        prediction += i64(lms.weights[i]) * i64(lms.history[i])
     }
-    return prediction >> 13
+    return i32(prediction >> 13)
 }
 
 lms_update :: proc(lms: ^LMS, sample: i32, residual: i32) {
