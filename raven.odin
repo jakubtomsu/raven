@@ -1095,9 +1095,9 @@ begin_frame :: proc() -> (keep_running: bool) {
 
         case platform.Event_Mouse:
             _state.input.mouse_delta.x += f32(v.move.x)
-            _state.input.mouse_delta.y += f32(-v.move.y)
+            _state.input.mouse_delta.y += f32(v.move.y)
             _state.input.mouse_pos.x = f32(v.pos.x)
-            _state.input.mouse_pos.y = f32(_state.screen_size.y - v.pos.y)
+            _state.input.mouse_pos.y = f32(v.pos.y)
 
         case platform.Event_Scroll:
             _state.input.scroll_delta += v.delta
