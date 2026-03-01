@@ -143,8 +143,8 @@ _update :: proc(hot_state: rawptr) -> rawptr {
     rv.bind_depth_write(true)
     rv.draw_text("Use WASD and QE to move, mouse to look", {200, 14, 0.1}, scale = math.ceil(rv._state.dpi_scale)) // DPI HACK
 
-    rv.draw_counter(.CPU_Frame_Ns, {10, 10, 0.2}, scale = 2, unit = 1e-6, col = rv.DARK_GREEN)
-    rv.draw_counter(.CPU_Frame_Work_Ns, {10, 10, 0.1}, scale = 2, unit = 1e-6, col = rv.GREEN, show_text = false)
+    rv.draw_counter(.CPU_Frame_Ns, {10, 50, 0.2}, scale = 2, unit = 1e-6, col = rv.DARK_GREEN)
+    rv.draw_counter(.CPU_Frame_Work_Ns, {10, 50, 0.1}, scale = 2, unit = 1e-6, col = rv.GREEN, show_text = false)
     rv.draw_counter(.Num_Draw_Calls, {10, 100, 0.1}, col = rv.ORANGE)
 
     rv.upload_gpu_layers()

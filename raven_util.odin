@@ -370,8 +370,8 @@ make_screen_camera :: proc(offset: Vec3 = 0) -> Camera {
         projection = orthographic_projection(
             left = 0,
             right = screen.x,
-            top = screen.y,
-            bottom = 0,
+            top = 0,
+            bottom = screen.y,
             near = 2,
             far = 0,
         ),

@@ -315,21 +315,21 @@ _update :: proc(hot_state: rawptr) -> rawptr {
 
     switch state.screen {
     case .Game:
-        rv.draw_text(ufmt.tprintf("SCORE %i", score), {screen.x * 0.5, screen.y - 30, 0.1}, anchor = 0.5,
+        rv.draw_text(ufmt.tprintf("SCORE %i", score), {screen.x * 0.5, screen.y - 30, 0.1}, anchor = 0,
             scale = rv.remap_clamped(state.berry_timer, 0, 0.4, 4, 2))
 
-        rv.draw_text("Use WASD to move", {screen.x * 0.5, 24, 0.1}, anchor = 0.5, scale = 2)
+        rv.draw_text("Use WASD to move", {screen.x * 0.5, 24, 0.1}, anchor = 0, scale = 2)
 
     case .Death:
 
         rv.draw_text("GAME OVER!",
-            {screen.x * 0.5, screen.y * 0.5, 0.1}, anchor = 0.5,
+            {screen.x * 0.5, screen.y * 0.5, 0.1}, anchor = 0,
             scale = 4,
             col = rv.RED,
         )
 
-        rv.draw_text(ufmt.tprintf("SCORE %i", score), {screen.x * 0.5, screen.y * 0.35, 0.1}, anchor = 0.5, scale = 2)
-        rv.draw_text("Press SPACE to continue", {screen.x * 0.5, screen.y * 0.25, 0.1}, anchor = 0.5, scale = 2, col = rv.LIGHT_GRAY)
+        rv.draw_text(ufmt.tprintf("SCORE %i", score), {screen.x * 0.5, screen.y * 0.65, 0.1}, anchor = 0, scale = 2)
+        rv.draw_text("Press SPACE to continue", {screen.x * 0.5, screen.y * 0.75, 0.1}, anchor = 0, scale = 2, col = rv.LIGHT_GRAY)
 
         if rv.key_pressed(.Space) {
             state.screen = .Menu
@@ -339,7 +339,7 @@ _update :: proc(hot_state: rawptr) -> rawptr {
 
         char_sprites := rv.draw_text("SNAKE PLANET",
             {screen.x * 0.5, screen.y * 0.5 + math.sin_f32(rv.get_time() * 2) * 4, 0},
-            anchor = 0.5,
+            anchor = 0,
             scale = 4,
             col = SNAKE_ORANGE,
         )
@@ -352,9 +352,9 @@ _update :: proc(hot_state: rawptr) -> rawptr {
             }
         }
 
-        rv.draw_text("Press SPACE to play", {screen.x * 0.5, screen.y * 0.35, 0.1}, anchor = 0.5, scale = 2, col = rv.LIGHT_GRAY)
-        rv.draw_text(ufmt.tprintf("HIGHSCORE %i", state.max_score), {screen.x * 0.5, screen.y * 0.25, 0.1}, anchor = 0.5, scale = 2)
-        rv.draw_text("Music by Nolram. Thank you!", {screen.x * 0.5, 32, 0.1}, anchor = 0.5, scale = 2, col = rv.hex_color(0x06e4c2))
+        rv.draw_text("Press SPACE to play", {screen.x * 0.5, screen.y * 0.75, 0.1}, anchor = 0, scale = 2, col = rv.LIGHT_GRAY)
+        rv.draw_text(ufmt.tprintf("HIGHSCORE %i", state.max_score), {screen.x * 0.5, screen.y * 0.65, 0.1}, anchor = 0, scale = 2)
+        rv.draw_text("Music by Nolram. Thank you!", {screen.x * 0.5, screen.y - 32, 0.1}, anchor = 0, scale = 2, col = rv.hex_color(0x06e4c2))
 
         if rv.key_pressed(.Space) {
             new_game()
@@ -362,8 +362,8 @@ _update :: proc(hot_state: rawptr) -> rawptr {
     }
 
 
-    rv.draw_counter(.CPU_Frame_Ns, {10, 10, 0.2}, scale = 2, unit = 1e-6, col = rv.DARK_GREEN)
-    rv.draw_counter(.CPU_Frame_Work_Ns, {10, 10, 0.1}, scale = 2, unit = 1e-6, col = rv.GREEN, show_text = false)
+    rv.draw_counter(.CPU_Frame_Ns, {10, 50, 0.2}, scale = 2, unit = 1e-6, col = rv.DARK_GREEN)
+    rv.draw_counter(.CPU_Frame_Work_Ns, {10, 50, 0.1}, scale = 2, unit = 1e-6, col = rv.GREEN, show_text = false)
 
     rv.upload_gpu_layers()
     rv.render_gpu_layer(0, rv.DEFAULT_RENDER_TEXTURE, rv.Vec3{0.05, 0.1, 0.2}, true)

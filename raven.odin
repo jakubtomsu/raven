@@ -446,6 +446,7 @@ Draw_Layer_Flag :: enum u8 {
     // Disable all sorting.
     // NOTE: this doesn't affect just transparent objects, it's how batching optimization is done.
     No_Reorder,
+    Y_Down,
 }
 
 // Shared across all layers and everything.
@@ -2059,7 +2060,7 @@ get_pixel_shader_by_hash :: proc(hash: Hash) -> (result: Pixel_Shader_Handle, ok
 
 
 @(require_results)
-get_internal_draw_layer :: proc(index: i32) -> (result: ^Draw_Layer, ok: bool) {
+get_internal_draw_layer :: proc(#any_int index: i32) -> (result: ^Draw_Layer, ok: bool) {
     if index < 0 || index >= MAX_DRAW_LAYERS {
         return nil, false
     }
@@ -3183,6 +3184,10 @@ set_layer_params :: proc(
 
     layer.flags = flags
     layer.camera = camera
+
+    if layer.camera.projection[1, 1] < 0 {
+        layer.flags += {.Y_Down}
+    }
 }
 
 
@@ -3219,6 +3224,12 @@ draw_sprite :: proc(
     size := Vec2{
         scale.x * 0.5,
         scale.y * 0.5,
+    }
+
+    layer := get_internal_draw_layer(_state.bind_state.draw_layer) or_else panic("Invalid layer")
+
+    if .Y_Down in layer.flags {
+        size.y *= -1
     }
 
     switch scaling {
@@ -3318,7 +3329,7 @@ draw_text :: proc(
     text:       string, // UTF-8
     pos:        [3]f32,
     scale:      Vec2 = 1,
-    anchor:     Vec2 = 0, // 0 = left aligned, 0.5 = centered, 1.0 = right aligned
+    anchor:     Vec2 = -1, // Anchor point in local space. -1 = left aligned, 0 = centered, 1.0 = right aligned
     spacing:    Vec2 = 0, // x = character spacing, y = line spacing
     col:        Vec4 = 1,
     rot:        Quat = 1,
@@ -3335,9 +3346,15 @@ draw_text :: proc(
         spacing = spacing,
     )
 
+    // TODO: check layer Flip_Y
+
     mat := linalg.matrix3_from_quaternion_f32(rot)
 
-    center := pos - (mat[0] * full_size.x * anchor.x + mat[1] * full_size.y * anchor.y)
+    center := pos +
+        mat[0] * f32(char_size.x) * scale.x * 0.5 +
+        mat[1] * f32(char_size.y) * scale.y * 0.5 +
+        mat[0] * full_size.x * -(anchor.x * 0.5 + 0.5) +
+        mat[1] * full_size.y * -(anchor.y * 0.5 + 0.5)
 
     offs: Vec2
 
@@ -4899,7 +4916,7 @@ draw_counter :: proc(kind: Counter_Kind, pos: Vec3, scale: f32 = 1, unit: f32 = 
         index := (int(counter.total_num) - i) %% COUNTER_HISTORY
         val := counter.vals[index]
 
-        height: f32 = scale * unit * f32(val)
+        height := -scale * unit * f32(val)
 
         draw_sprite(
             pos = pos + {COUNTER_HISTORY - f32(i), height * 0.5, 0},
@@ -4928,8 +4945,8 @@ draw_counter :: proc(kind: Counter_Kind, pos: Vec3, scale: f32 = 1, unit: f32 = 
         }
 
         // draw_text(, pos + {64 + 12, 0, 0}, col = col)
-        draw_text(text, pos + {64 + 16, 4, 0}, col = col, scale = math.ceil_f32(_state.dpi_scale))
-        draw_text(text, pos + {64 + 16 + 1, 4 - 1, 0.01}, col = BLACK, scale = math.ceil_f32(_state.dpi_scale))
+        draw_text(text, pos + {64 + 16, 0, 0}, col = col, scale = math.ceil_f32(_state.dpi_scale), anchor = {-1, 1})
+        draw_text(text, pos + {64 + 16 + 1, 1, 0.01}, col = BLACK, scale = math.ceil_f32(_state.dpi_scale), anchor = {-1, 1})
     }
 }
 

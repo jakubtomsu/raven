@@ -32,6 +32,8 @@ _update :: proc(_: rawptr) -> rawptr {
     // You can also call push_binds/pop_binds to save and restore the bind state.
     rv.bind_texture(rv.get_builtin_texture(.CGA8x8thick))
 
+    rv.draw_sprite({100, 100, 0}, rv.font_slot(0), scale = 1, col = rv.PURPLE)
+
     // Odin strings are UTF-8 encoded, but fonts are currently CP437 16x16 atlases.
     // Unicode fonts might get supported later.
     rv.draw_text("Hello World! ☺", {100, 100, 0}, scale = 4, spacing = 1)

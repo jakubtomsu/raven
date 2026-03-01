@@ -122,9 +122,9 @@ _update :: proc(hot_state: rawptr) -> rawptr {
     rv.bind_texture(rv.get_builtin_texture(.CGA8x8thick))
     rv.bind_depth_test(true)
     rv.bind_depth_write(true)
-    rv.draw_text("Use WASD and QE to move, mouse to look", {220, 18, 0.1}, scale = math.ceil(rv._state.dpi_scale)) // DPI HACK
+    rv.draw_text("Use WASD and QE to move, mouse to look", {20, 20, 0.1}, scale = math.ceil(rv._state.dpi_scale)) // DPI HACK
 
-    rv.draw_counter(.CPU_Frame_Ns, {15, 15, 0.1}, scale = 2, unit = 1e-6, col = rv.GREEN)
+    rv.draw_counter(.CPU_Frame_Ns, {20, 100, 0.1}, scale = 2, unit = 1e-6, col = rv.GREEN)
 
     rv.upload_gpu_layers()
     rv.render_gpu_layer(0, rv.DEFAULT_RENDER_TEXTURE, rv.Vec3{0, 0, 0.1}, true)
