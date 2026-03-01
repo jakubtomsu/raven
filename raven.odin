@@ -4527,7 +4527,7 @@ play_sound :: proc(
 ) -> (result: audio.Sound_Handle, ok: bool) #optional_ok {
     validate(resource != {})
 
-    base.log_info("Playing sound %v", resource)
+    // base.log_info("Playing sound %v", resource)
 
     result, ok = audio.create_sound(resource_handle = resource, group_handle = {}, async_decode = async_decode)
     if !ok {

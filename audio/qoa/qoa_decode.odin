@@ -2,7 +2,7 @@
 package qoa
 
 max_frame_size :: proc(desc: ^Desc) -> int {
-    return _frame_size(int(desc.channels), SLICES_PER_FRAME)
+    return _frame_size(int(desc.num_channels), SLICES_PER_FRAME)
 }
 
 decode :: proc(data: []byte, allocator := context.allocator) -> (desc: Desc, result: []i16, ok: bool) {
@@ -18,13 +18,13 @@ decode :: proc(data: []byte, allocator := context.allocator) -> (desc: Desc, res
     }
 
     // Calculate the required size of the sample buffer and allocate
-    result = make([]i16, desc.samples * desc.channels, allocator = allocator)
+    result = make([]i16, desc.samples * desc.num_channels, allocator = allocator)
 
     sample_index: u32 = 0
 
     // Decode all frames
     for {
-        samples := result[sample_index * desc.channels:]
+        samples := result[sample_index * desc.num_channels:]
         frame_len := decode_frame(&buf, &desc, sample_data = samples)
         sample_index += frame_len
 
@@ -60,13 +60,13 @@ decode_header :: proc(buf: ^Buffer) -> (desc: Desc, ok: bool) {
         return {}, false
     }
 
-    // Peek into the first frame header to get the number of channels and
-    // the samplerate.
+    // Peek into the first frame header to get the number of num_channels and
+    // the sample_rate.
     frame_header := read_u64(buf)
-    desc.channels   = u32(frame_header >> 56) & 0x0000ff
-    desc.samplerate = u32(frame_header >> 32) & 0xffffff
+    desc.num_channels   = u32(frame_header >> 56) & 0x0000ff
+    desc.sample_rate = u32(frame_header >> 32) & 0xffffff
 
-    if desc.channels == 0 || desc.samples == 0 || desc.samplerate == 0 {
+    if desc.num_channels == 0 || desc.samples == 0 || desc.sample_rate == 0 {
 		log(.Error, "QOA: Invalid header parameters")
         return {}, false
     }
@@ -78,34 +78,34 @@ decode_header :: proc(buf: ^Buffer) -> (desc: Desc, ok: bool) {
 
 decode_frame :: proc(buf: ^Buffer, desc: ^Desc, sample_data: []i16) -> u32 {
     size := len(buf.data[buf.offs:])
-    if u32(size) < 8 + LMS_LEN * 4 * desc.channels {
+    if u32(size) < 8 + LMS_LEN * 4 * desc.num_channels {
 		log(.Error, "QOA: Input buffer is too small to decode a frame")
         return 0
     }
 
     // Read and verify the frame header
     frame_header := read_u64(buf)
-    channels   := u32(frame_header >> 56) & 0x0000ff
-    samplerate := u32(frame_header >> 32) & 0xffffff
+    num_channels   := u32(frame_header >> 56) & 0x0000ff
+    sample_rate := u32(frame_header >> 32) & 0xffffff
     samples    := u32(frame_header >> 16) & 0x00ffff
     frame_size := u32(frame_header      ) & 0x00ffff
 
-    data_size: u32 = frame_size - 8 - LMS_LEN * 4 * channels
+    data_size: u32 = frame_size - 8 - LMS_LEN * 4 * num_channels
     num_slices: u32 = data_size / 8
     max_total_samples: u32 = num_slices * SLICE_LEN
 
     if
-        channels != desc.channels ||
-        samplerate != desc.samplerate ||
+        num_channels != desc.num_channels ||
+        sample_rate != desc.sample_rate ||
         int(frame_size) > size ||
-        samples * channels > max_total_samples
+        samples * num_channels > max_total_samples
     {
         log(.Error, "QOA: Invalid frame parameters")
         return 0
     }
 
     // Read the LMS state: 4 x 2 bytes history, 4 x 2 bytes weights per channel
-    for c in 0..<channels {
+    for c in 0..<num_channels {
         history := read_u64(buf)
         weights := read_u64(buf)
         for i in 0..<LMS_LEN {
@@ -116,18 +116,18 @@ decode_frame :: proc(buf: ^Buffer, desc: ^Desc, sample_data: []i16) -> u32 {
         }
     }
 
-    // Decode all slices for all channels in this frame
+    // Decode all slices for all num_channels in this frame
     for sample_index := 0; sample_index < int(samples); sample_index += SLICE_LEN {
-        for c in 0..<int(channels) {
+        for c in 0..<int(num_channels) {
             slice := read_u64(buf)
 
             scalefactor := i32((slice >> 60) & 0xf)
             slice <<= 4
 
-            slice_start := sample_index * int(channels) + c
-            slice_end := clamp(sample_index + SLICE_LEN, 0, int(samples)) * int(channels) + c
+            slice_start := sample_index * int(num_channels) + c
+            slice_end := clamp(sample_index + SLICE_LEN, 0, int(samples)) * int(num_channels) + c
 
-            for si := slice_start; si < slice_end; si += int(channels) {
+            for si := slice_start; si < slice_end; si += int(num_channels) {
                 predicted := lms_predict(desc.lms[c])
                 quantized := i32((slice >> 61) & 0x7)
                 dequantized := _dequant_tab[scalefactor][quantized]

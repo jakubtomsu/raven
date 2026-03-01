@@ -48,7 +48,7 @@ struct {
 	struct {
 		struct {
 			uint8_t  num_channels; // no. of channels
-			uint24_t samplerate;   // samplerate in hz
+			uint24_t sample_rate;   // sample_rate in hz
 			uint16_t fsamples;     // samples per channel in this frame
 			uint16_t fsize;        // frame size (includes this header)
 		} frame_header;
@@ -82,15 +82,15 @@ Channels are interleaved per slice. E.g. for 2 channel stereo:
 slice[0] = L, slice[1] = R, slice[2] = L, slice[3] = R ...
 
 A valid QOA file or stream must have at least one frame. Each frame must contain
-at least one channel and one sample with a samplerate between 1 .. 16777215
+at least one channel and one sample with a sample_rate between 1 .. 16777215
 (inclusive).
 
 If the total number of samples is not known by the encoder, the samples in the
 file header may be set to 0x00000000 to indicate that the encoder is
-"streaming". In a streaming context, the samplerate and number of channels may
+"streaming". In a streaming context, the sample_rate and number of channels may
 differ from frame to frame. For static files (those with samples set to a
 non-zero value), each frame must have the same number of channels and same
-samplerate.
+sample_rate.
 
 Note that this implementation of QOA only handles files with a known total
 number of samples.
@@ -135,11 +135,11 @@ LMS :: struct {
 }
 
 Desc :: struct {
-    channels:   u32,
-    samplerate: u32,
-    samples:    u32,
-    lms:        [MAX_CHANNELS]LMS,
-    error:      f64, // only used when RECORD_TOTAL_ERROR=true
+    num_channels:   u32,
+    sample_rate:    u32,
+    samples:        u32,
+    lms:            [MAX_CHANNELS]LMS,
+    error:          f64, // only used when RECORD_TOTAL_ERROR=true
 }
 
 

@@ -5,23 +5,23 @@ encode :: proc(desc: ^Desc, sample_data: []i16, allocator := context.allocator) 
     if
         desc.samples != 0 ||
         len(sample_data) == 0 ||
-        desc.channels == 0 || desc.channels > MAX_CHANNELS ||
-        u32(len(sample_data)) % desc.channels != 0 ||
-        desc.samplerate == 0 || desc.samplerate > 0xffffff
+        desc.num_channels == 0 || desc.num_channels > MAX_CHANNELS ||
+        u32(len(sample_data)) % desc.num_channels != 0 ||
+        desc.sample_rate == 0 || desc.sample_rate > 0xffffff
     {
         log(.Error, "Invalid input desc")
         return nil, false
     }
 
-    desc.samples = u32(len(sample_data)) / desc.channels
+    desc.samples = u32(len(sample_data)) / desc.num_channels
 
     // Calculate the encoded size and allocate
     num_frames := (desc.samples + FRAME_LEN-1) / FRAME_LEN
     num_slices := (desc.samples + SLICE_LEN-1) / SLICE_LEN
     encoded_size := 8 +                             // 8 byte file header
         num_frames * 8 +                            // 8 byte frame headers
-        num_frames * LMS_LEN * 4 * desc.channels +  // 4 * 4 bytes lms state per channel
-        num_slices * 8 * desc.channels              // 8 byte slices
+        num_frames * LMS_LEN * 4 * desc.num_channels +  // 4 * 4 bytes lms state per channel
+        num_slices * 8 * desc.num_channels              // 8 byte slices
 
     bytes := make([]byte, encoded_size, allocator)
 
@@ -30,7 +30,7 @@ encode :: proc(desc: ^Desc, sample_data: []i16, allocator := context.allocator) 
         offs = 0,
     }
 
-    for c in 0..<desc.channels {
+    for c in 0..<desc.num_channels {
         // Set the initial LMS weights to {0, 0, -1, 2}.
         // This helps with the prediction of the first few ms of a file.
         desc.lms[c].weights[0] = 0
@@ -51,7 +51,7 @@ encode :: proc(desc: ^Desc, sample_data: []i16, allocator := context.allocator) 
     frame_len := FRAME_LEN
     for sample_index := 0; sample_index < int(desc.samples); sample_index += frame_len {
         frame_len = clamp(FRAME_LEN, 0, int(desc.samples) - sample_index)
-        frame_samples := sample_data[sample_index * int(desc.channels):]
+        frame_samples := sample_data[sample_index * int(desc.num_channels):]
         encode_frame(&buf, desc, sample_data = frame_samples, frame_len = frame_len)
     }
 
@@ -63,21 +63,21 @@ encode_header :: proc(buf: ^Buffer, num_samples: u32) {
 }
 
 encode_frame :: proc(buf: ^Buffer, desc: ^Desc, sample_data: []i16, frame_len: int) {
-    channels := int(desc.channels)
+    num_channels := int(desc.num_channels)
 
     slices := (frame_len + SLICE_LEN - 1) / SLICE_LEN
-    frame_size := _frame_size(channels, slices)
+    frame_size := _frame_size(num_channels, slices)
     prev_scalefactor: [MAX_CHANNELS]i32
 
     // Write the frame header
     write_u64(buf,
-        u64(desc.channels)   << 56 |
-        u64(desc.samplerate) << 32 |
+        u64(desc.num_channels)   << 56 |
+        u64(desc.sample_rate) << 32 |
         u64(frame_len)       << 16 |
         u64(frame_size)
     )
 
-    for c in 0..<channels {
+    for c in 0..<num_channels {
         // Write the current LMS state
         weights: u64
         history: u64
@@ -89,13 +89,13 @@ encode_frame :: proc(buf: ^Buffer, desc: ^Desc, sample_data: []i16, frame_len: i
         write_u64(buf, weights)
     }
 
-    // We encode all samples with the channels interleaved on a slice level.
+    // We encode all samples with the num_channels interleaved on a slice level.
     // E.g. for stereo: (ch-0, slice 0), (ch 1, slice 0), (ch 0, slice 1), ...
     for sample_index := 0; sample_index < frame_len; sample_index += SLICE_LEN {
-        for c in 0..<channels {
+        for c in 0..<num_channels {
             slice_len := clamp(SLICE_LEN, 0, frame_len - sample_index)
-            slice_start := sample_index * channels + c
-            slice_end := (sample_index + slice_len) * channels + c
+            slice_start := sample_index * num_channels + c
+            slice_end := (sample_index + slice_len) * num_channels + c
 
             // Brute force search for the best scalefactor. Just go through all
             // 16 scalefactors, encode all samples for the current slice and
@@ -120,7 +120,7 @@ encode_frame :: proc(buf: ^Buffer, desc: ^Desc, sample_data: []i16, frame_len: i
                 current_rank: u64 = 0
                 current_error: u64 = 0
 
-                for si := slice_start; si < slice_end; si += channels {
+                for si := slice_start; si < slice_end; si += num_channels {
                     sample := sample_data[si]
                     predicted := lms_predict(lms)
                     residual := i32(sample) - predicted
