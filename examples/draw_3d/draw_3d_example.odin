@@ -89,13 +89,21 @@ _update :: proc(hot_state: rawptr) -> rawptr {
     rv.bind_depth_write(true)
 
     if rv.scope_binds() {
-        rv.bind_texture("default")
+        rv.bind_texture(rv.get_builtin_texture(.Default))
+        rv.bind_blend(.Alpha)
+        rv.bind_fill(.Front)
 
         rv.draw_mesh(rv.get_mesh("Disk"), {-3, 0, 0}, col = rv.YELLOW)
         rv.draw_mesh(rv.get_mesh("Plane"), {0, 0, 0}, col = rv.GREEN)
         rv.draw_mesh(rv.get_mesh("Cube"), {3, 0, 0}, rv.quat_angle_axis(rv.get_time(), {0, 1, 0}), col = rv.GRAY, add_col = rv.WHITE * rv.nsin(rv.get_time()))
-        rv.draw_mesh(rv.get_mesh("Icosphere"), {6, 0, 0}, col = rv.CYAN)
+
+        rv.bind_depth_write(false)
+        rv.draw_mesh(rv.get_mesh("Icosphere"), {6, 0, 0}, col = rv.CYAN * rv.fade(0.5))
+        rv.bind_depth_write(true)
+
         rv.draw_mesh(rv.get_mesh("Cylinder"), {9, 0, 0}, scale = {1, 0.1 + rv.nsin(rv.get_time() * 0.5), 1}, col = rv.GRAY)
+
+        rv.bind_fill(.All)
 
         rv.draw_triangle(
             pos = {
@@ -103,12 +111,21 @@ _update :: proc(hot_state: rawptr) -> rawptr {
                 rv.Vec3{ 0, 0.7, 0} + {-6, 0, 0},
                 rv.Vec3{ 0.5, 0, 0} + {-6, 0, 0},
             },
-            col = {
-                {1, 0, 0},
-                {0, 1, 0},
-                {0, 0, 1},
-            },
+            col = {rv.RED, rv.BLUE, rv.GREEN},
         )
+
+        rv.draw_triangle(
+            pos = {
+                rv.Vec3{-0.5, 0, 0} + {-6, 0, 0},
+                rv.Vec3{ 0, -0.7, 0} + {-6, 0, 0},
+                rv.Vec3{ 0.5, 0, 0} + {-6, 0, 0},
+            },
+            col = {rv.RED, rv.GREEN, rv.CYAN},
+        )
+
+        rv.draw_line({{0, 0, 0}, {10, 0, 0}}, rv.RED)
+        rv.draw_line({{0, 0, 0}, {0, 10, 0}}, rv.GREEN)
+        rv.draw_line({{0, 0, 0}, {0, 0, 10}}, rv.BLUE)
 
         rv.bind_pixel_shader(state.shader)
         rv.draw_mesh(rv.get_mesh("Cube"), {3, -5, 0}, rv.quat_angle_axis(rv.get_time(), {0, 1, 0}), col = rv.GRAY, add_col = rv.WHITE * rv.nsin(rv.get_time()))

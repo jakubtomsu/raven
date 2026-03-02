@@ -3713,9 +3713,9 @@ draw_line :: proc(
         norm = Vec3{0, 1, 0}
     }
 
-    verts: [3]Vertex
-    for i in 0..<3 {
-        verts[i] = pack_vertex(
+    verts: [2]Vertex
+    for &v, i in verts {
+        v = pack_vertex(
             pos = pos[i],
             uv = uvs[i],
             normal = norm[i],
@@ -4074,6 +4074,9 @@ upload_gpu_layers :: proc() {
             _state.mesh_inst_buf,
             gpu.slice_bytes(mesh_upload_buf[:mesh_upload_offs]),
         )
+
+
+        base.log_debug("%v", total_line_instances)
     }
 
     // Batch lists
@@ -4149,6 +4152,10 @@ upload_gpu_layers :: proc() {
         }
 
         for b in layer.triangle_batches {
+            validate_draw_sort_key(b.key)
+        }
+
+        for b in layer.line_batches {
             validate_draw_sort_key(b.key)
         }
     }
@@ -4394,8 +4401,8 @@ render_gpu_layer :: proc(
         _counter_add(.Num_Draw_Calls, 1)
 
         gpu.draw_non_indexed(
-            vertex_num = batch.num,
-            instance_num = 1,
+            vertex_num = batch.key.asset_index,
+            instance_num = batch.num,
             const_offsets = {
                 0 = max(u32),
                 1 = u32(index),
@@ -4409,6 +4416,7 @@ render_gpu_layer :: proc(
     // Lines
     //
 
+    pip_desc.topo = .Lines
     pip_desc.index = {
         resource = {},
         format = .U16,
@@ -4434,8 +4442,8 @@ render_gpu_layer :: proc(
         _counter_add(.Num_Draw_Calls, 1)
 
         gpu.draw_non_indexed(
-            vertex_num = batch.num,
-            instance_num = 1,
+            vertex_num = batch.key.asset_index,
+            instance_num = batch.num,
             const_offsets = {
                 0 = max(u32),
                 1 = u32(index),
