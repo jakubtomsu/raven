@@ -125,7 +125,9 @@ _update :: proc(hot_state: rawptr) -> rawptr {
 
         rv.draw_line({{0, 0, 0}, {10, 0, 0}}, rv.RED)
         rv.draw_line({{0, 0, 0}, {0, 10, 0}}, rv.GREEN)
-        rv.draw_line({{0, 0, 0}, {0, 0, 10}}, rv.BLUE)
+        rv.draw_line({{0, 0, 0}, {0, 0, 10}}, {rv.BLUE, 0})
+
+        rv.draw_line_box(0, 2, rv.PINK)
 
         rv.bind_pixel_shader(state.shader)
         rv.draw_mesh(rv.get_mesh("Cube"), {3, -5, 0}, rv.quat_angle_axis(rv.get_time(), {0, 1, 0}), col = rv.GRAY, add_col = rv.WHITE * rv.nsin(rv.get_time()))

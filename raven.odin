@@ -371,7 +371,7 @@ Vertex :: struct #align(16) {
     uv:     [2]f32,
     normal: [3]u8,
     p0:     u8, // NOTE: this padding could store user parameters..?
-    color:  [4]u8,
+    col:    [4]u8,
 }
 
 
@@ -1526,7 +1526,7 @@ load_scene_from_data :: proc(txt: string, bin: []byte, dst_group: Group_Handle) 
                 pos = v.pos,
                 uv = v.uv,
                 normal = v.normal,
-                color = {v.color.r, v.color.g, v.color.b, 255},
+                col = {v.color.r, v.color.g, v.color.b, 255},
             }
         }
 
@@ -3554,13 +3554,13 @@ draw_sprite_line :: proc(
 }
 
 draw_triangles :: proc(
-    pos:        Vec3,
+    verts:      ..Vertex,
+    pos:        Vec3 = 0,
     rot:        Quat = 1,
     scale:      Vec3 = 1,
     col:        Vec4 = WHITE,
     add_col:    Vec4 = 0,
     param:      u32 = 0,
-    verts:      ..Vertex,
 ) {
     validate_vec(pos)
     validate_quat(rot)
@@ -3609,13 +3609,13 @@ draw_triangles :: proc(
 }
 
 draw_lines :: proc(
-    pos:        Vec3,
+    verts:      ..Vertex,
+    pos:        Vec3 = 0,
     rot:        Quat = 1,
     scale:      Vec3 = 1,
     col:        Vec4 = WHITE,
     add_col:    Vec4 = 0,
     param:      u32 = 0,
-    verts:      ..Vertex,
 ) {
     validate(len(verts) % 2 == 0)
     validate_vec(pos)
@@ -3686,15 +3686,11 @@ draw_triangle :: proc(
             pos = pos[i],
             uv = uvs[i],
             normal = norm[i],
-            color = col[i],
+            col = col[i],
         )
     }
 
-    draw_triangles(
-        pos = 0,
-        rot = 1,
-        verts = verts[:],
-    )
+    draw_triangles(..verts[:])
 }
 
 // Prefer draw_lines if you need to efficiently draw many lines.
@@ -3719,15 +3715,11 @@ draw_line :: proc(
             pos = pos[i],
             uv = uvs[i],
             normal = norm[i],
-            color = col[i],
+            col = col[i],
         )
     }
 
-    draw_lines(
-        pos = 0,
-        rot = 1,
-        verts = verts[:],
-    )
+    draw_lines(..verts[:])
 }
 
 
@@ -3779,6 +3771,177 @@ _push_draw_dynamic_verts :: proc(#any_int layer_index: int, verts: []Vertex) -> 
     }
     assert(draw_layer.dynamic_verts.allocator == context.temp_allocator)
     return non_zero_append_elems(&draw_layer.dynamic_verts, ..verts) or_else 0
+}
+
+
+// MARK: Line shapes
+
+_BOX_CORNER_POSITIONS :: [8]Vec3 {
+    0 = Vec3{-1, -1, -1},
+    1 = Vec3{-1, -1, +1},
+    2 = Vec3{-1, +1, -1},
+    3 = Vec3{-1, +1, +1},
+    4 = Vec3{+1, -1, -1},
+    5 = Vec3{+1, -1, +1},
+    6 = Vec3{+1, +1, -1},
+    7 = Vec3{+1, +1, +1},
+}
+
+draw_line_triangle :: proc(verts: [3]Vec3, col := WHITE) {
+    if col.a < 0.01 do return
+    draw_lines(
+        pack_vertex(verts[0], col = col), pack_vertex(verts[1], col = col),
+        pack_vertex(verts[1], col = col), pack_vertex(verts[2], col = col),
+        pack_vertex(verts[2], col = col), pack_vertex(verts[0], col = col),
+    )
+}
+
+draw_line_point :: proc(pos: Vec3, rad: Vec3 = 1, col := WHITE) {
+    if col.a < 0.01 do return
+    draw_lines(
+        pack_vertex(pos + {-rad.x, 0, 0}, col = col), pack_vertex(pos + {rad.x, 0, 0}, col = col),
+        pack_vertex(pos + {0, -rad.y, 0}, col = col), pack_vertex(pos + {0, rad.y, 0}, col = col),
+        pack_vertex(pos + {0, 0, -rad.z}, col = col), pack_vertex(pos + {0, 0, rad.z}, col = col),
+    )
+}
+
+draw_line_box :: proc(pos: Vec3, mat: Mat3 = 1, col := WHITE) {
+    if col.a < 0.01 do return
+    corners := _BOX_CORNER_POSITIONS
+    for &c in corners {
+        c = pos + mat * c
+    }
+    _draw_line_box_corners(corners, col)
+}
+
+draw_line_aabb :: proc(min: Vec3, max: Vec3, col := WHITE) {
+    if col.a < 0.01 do return
+    corners := [8]Vec3 {
+        0 = Vec3{min.x, min.y, min.z},
+        1 = Vec3{min.x, min.y, max.z},
+        2 = Vec3{min.x, max.y, min.z},
+        3 = Vec3{min.x, max.y, max.z},
+        4 = Vec3{max.x, min.y, min.z},
+        5 = Vec3{max.x, min.y, max.z},
+        6 = Vec3{max.x, max.y, min.z},
+        7 = Vec3{max.x, max.y, max.z},
+    }
+    _draw_line_box_corners(corners, col)
+}
+
+draw_line_circle :: proc(
+    pos:        Vec3,
+    rad:        Vec2 = 1,
+    axis:       Vec3 = {0, 1, 0},
+    col         := WHITE,
+    segments    := 12,
+) {
+    if col.a < 0.01 do return
+
+    circle := _calc_circle_points(segments)
+
+    u := rad.x * linalg.normalize0(linalg.cross(axis, abs(axis.y) > 0.9 ? Vec3{1, 0, 0} : Vec3{0, 1, 0}))
+    v := rad.y * linalg.normalize0(linalg.cross(u, axis))
+
+    verts := make([]Vertex, segments * 2, context.temp_allocator)
+    p0 := circle[len(circle) - 1]
+    for p1, i in circle {
+        verts[i * 2 + 0] = pack_vertex(u * p0.x + v * p0.y, col = col)
+        verts[i * 2 + 1] = pack_vertex(u * p1.x + v * p0.y, col = col)
+        p0 = p1
+    }
+
+    draw_lines(..verts)
+}
+
+draw_line_cylinder :: proc(pos: [2]Vec3, rad: f32 = 1.0, col := WHITE, segments := 12) {
+    if col.a < 0.01 do return
+
+    axis := linalg.normalize0(pos[1] - pos[0])
+
+    u := rad * linalg.normalize0(linalg.cross(axis, abs(axis.y) > 0.9 ? Vec3{1, 0, 0} : Vec3{0, 1, 0}))
+    v := rad * linalg.normalize0(linalg.cross(u, axis))
+
+    circle := _calc_circle_points(segments)
+
+    verts := make([]Vertex, 4 * 2 + segments * 2 * 2, context.temp_allocator)
+    verts[0] = pack_vertex(pos[0] + u, col = col); verts[1] = pack_vertex(pos[1] + u, col = col)
+    verts[2] = pack_vertex(pos[0] - u, col = col); verts[3] = pack_vertex(pos[1] - u, col = col)
+    verts[4] = pack_vertex(pos[0] + v, col = col); verts[5] = pack_vertex(pos[1] + v, col = col)
+    verts[6] = pack_vertex(pos[0] - v, col = col); verts[7] = pack_vertex(pos[1] - v, col = col)
+
+    offs := 8
+    p0 := circle[len(circle) - 1]
+    for p1 in circle {
+        verts[offs + 0] = pack_vertex(pos[0] + u * p0.x + v * p0.y, col = col)
+        verts[offs + 1] = pack_vertex(pos[0] + u * p1.x + v * p0.y, col = col)
+        verts[offs + 2] = pack_vertex(pos[1] + u * p0.x + v * p0.y, col = col)
+        verts[offs + 3] = pack_vertex(pos[1] + u * p1.x + v * p0.y, col = col)
+        p0 = p1
+        offs += 4
+    }
+
+    draw_lines(..verts)
+}
+
+_draw_line_box_corners :: proc(corners: [8]Vec3, col: Vec4) {
+    if col.a <= 0.01 do return
+    draw_lines(
+        pack_vertex(corners[0], col = col), pack_vertex(corners[1], col = col),
+        pack_vertex(corners[0], col = col), pack_vertex(corners[2], col = col),
+        pack_vertex(corners[3], col = col), pack_vertex(corners[1], col = col),
+        pack_vertex(corners[3], col = col), pack_vertex(corners[2], col = col),
+
+        pack_vertex(corners[4], col = col), pack_vertex(corners[5], col = col),
+        pack_vertex(corners[4], col = col), pack_vertex(corners[6], col = col),
+        pack_vertex(corners[7], col = col), pack_vertex(corners[5], col = col),
+        pack_vertex(corners[7], col = col), pack_vertex(corners[6], col = col),
+
+        pack_vertex(corners[4], col = col), pack_vertex(corners[0], col = col),
+        pack_vertex(corners[5], col = col), pack_vertex(corners[1], col = col),
+        pack_vertex(corners[6], col = col), pack_vertex(corners[2], col = col),
+        pack_vertex(corners[7], col = col), pack_vertex(corners[3], col = col),
+    )
+}
+
+_calc_circle_points :: proc(segments: int) -> []Vec2 {
+    /* Can be approximated with:
+    import "core:math"
+    import "core:fmt"
+    main :: proc() {
+        for i in 0..<12 {
+            a := f32(i) * math.TAU / 12
+            fmt.println(math.sin_f32(a), math.cos_f32(a))
+        }
+    }
+    */
+    @(rodata, static)
+    _circle_points := [12]Vec2{
+        {0, 1},
+        {0.5, 0.86602539},
+        {0.86602545, 0.5},
+        {1, 0},
+        {0.86602539, -0.5},
+        {0.5, -0.8660255},
+        {0, -1},
+        {-0.5, -0.86602527},
+        {-0.86602545, -0.5},
+        {-1, 0},
+        {-0.8660252, 0.5},
+        {-0.5, 0.86602557},
+    }
+
+    // Fast default path
+    if segments == len(_circle_points) {
+        return _circle_points[:]
+    }
+
+    buf := make([]Vec2, segments, context.temp_allocator)
+    for &p, i in buf {
+        t := f32(i) * math.TAU / f32(segments)
+        p = {math.cos_f32(t), math.sin_f32(t)}
+    }
+    return buf
 }
 
 
@@ -4074,9 +4237,6 @@ upload_gpu_layers :: proc() {
             _state.mesh_inst_buf,
             gpu.slice_bytes(mesh_upload_buf[:mesh_upload_offs]),
         )
-
-
-        base.log_debug("%v", total_line_instances)
     }
 
     // Batch lists
@@ -5064,15 +5224,15 @@ pack_mesh_inst :: proc(
 @(require_results)
 pack_vertex :: proc(
     pos:    Vec3,
-    uv:     Vec2,
-    normal: Vec3,
-    color:  Vec4 = 255,
+    uv:     Vec2 = 0,
+    normal: Vec3 = {0, 1, 0},
+    col:    Vec4 = 1,
 ) -> Vertex {
     return {
         pos = pos,
         uv = uv,
         normal = pack_unorm8(normal.xyzz * 0.5 + 0.5).xyz,
-        color = pack_unorm8(color),
+        col = pack_unorm8(col),
     }
 }
 
