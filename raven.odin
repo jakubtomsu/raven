@@ -3814,6 +3814,14 @@ draw_line_box :: proc(pos: Vec3, mat: Mat3 = 1, col := WHITE) {
     _draw_line_box_corners(corners, col)
 }
 
+draw_line_mat3 :: proc(pos: Vec3, mat: Mat3 = 1) {
+    draw_lines(
+        pack_vertex(pos, col = WHITE),    pack_vertex(pos + mat[0], col = RED),
+        pack_vertex(pos, col = WHITE),  pack_vertex(pos + mat[1], col = GREEN),
+        pack_vertex(pos, col = WHITE),   pack_vertex(pos + mat[2], col = BLUE),
+    )
+}
+
 draw_line_aabb :: proc(min: Vec3, max: Vec3, col := WHITE) {
     if col.a < 0.01 do return
     corners := [8]Vec3 {
@@ -3847,7 +3855,7 @@ draw_line_circle :: proc(
     p0 := circle[len(circle) - 1]
     for p1, i in circle {
         verts[i * 2 + 0] = pack_vertex(u * p0.x + v * p0.y, col = col)
-        verts[i * 2 + 1] = pack_vertex(u * p1.x + v * p0.y, col = col)
+        verts[i * 2 + 1] = pack_vertex(u * p1.x + v * p1.y, col = col)
         p0 = p1
     }
 
@@ -3874,9 +3882,9 @@ draw_line_cylinder :: proc(pos: [2]Vec3, rad: f32 = 1.0, col := WHITE, segments 
     p0 := circle[len(circle) - 1]
     for p1 in circle {
         verts[offs + 0] = pack_vertex(pos[0] + u * p0.x + v * p0.y, col = col)
-        verts[offs + 1] = pack_vertex(pos[0] + u * p1.x + v * p0.y, col = col)
+        verts[offs + 1] = pack_vertex(pos[0] + u * p1.x + v * p1.y, col = col)
         verts[offs + 2] = pack_vertex(pos[1] + u * p0.x + v * p0.y, col = col)
-        verts[offs + 3] = pack_vertex(pos[1] + u * p1.x + v * p0.y, col = col)
+        verts[offs + 3] = pack_vertex(pos[1] + u * p1.x + v * p1.y, col = col)
         p0 = p1
         offs += 4
     }

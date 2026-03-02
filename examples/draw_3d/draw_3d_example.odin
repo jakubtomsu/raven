@@ -93,6 +93,8 @@ _update :: proc(hot_state: rawptr) -> rawptr {
         rv.bind_blend(.Alpha)
         rv.bind_fill(.Front)
 
+        // Meshes
+
         rv.draw_mesh(rv.get_mesh("Disk"), {-3, 0, 0}, col = rv.YELLOW)
         rv.draw_mesh(rv.get_mesh("Plane"), {0, 0, 0}, col = rv.GREEN)
         rv.draw_mesh(rv.get_mesh("Cube"), {3, 0, 0}, rv.quat_angle_axis(rv.get_time(), {0, 1, 0}), col = rv.GRAY, add_col = rv.WHITE * rv.nsin(rv.get_time()))
@@ -104,6 +106,8 @@ _update :: proc(hot_state: rawptr) -> rawptr {
         rv.draw_mesh(rv.get_mesh("Cylinder"), {9, 0, 0}, scale = {1, 0.1 + rv.nsin(rv.get_time() * 0.5), 1}, col = rv.GRAY)
 
         rv.bind_fill(.All)
+
+        // Custom triangles
 
         rv.draw_triangle(
             pos = {
@@ -123,11 +127,13 @@ _update :: proc(hot_state: rawptr) -> rawptr {
             col = {rv.RED, rv.GREEN, rv.CYAN},
         )
 
-        rv.draw_line({{0, 0, 0}, {10, 0, 0}}, rv.RED)
-        rv.draw_line({{0, 0, 0}, {0, 10, 0}}, rv.GREEN)
-        rv.draw_line({{0, 0, 0}, {0, 0, 10}}, {rv.BLUE, 0})
+        // Line shapes
 
-        rv.draw_line_box(0, 2, rv.PINK)
+        rv.draw_line({{-3, 0, 5}, {-3, 1, 5}}, col = rv.YELLOW)
+        rv.draw_line_mat3({-2, 0, 5})
+        rv.draw_line_box({1, 0, 5}, 1, rv.GRAY)
+        rv.draw_line_circle({3, 0, 5}, 1, col = rv.ORANGE)
+        rv.draw_line_cylinder({{6, -1, 5}, {6, 1, 5}}, rad = 0.5)
 
         rv.bind_pixel_shader(state.shader)
         rv.draw_mesh(rv.get_mesh("Cube"), {3, -5, 0}, rv.quat_angle_axis(rv.get_time(), {0, 1, 0}), col = rv.GRAY, add_col = rv.WHITE * rv.nsin(rv.get_time()))
