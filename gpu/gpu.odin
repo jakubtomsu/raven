@@ -95,7 +95,10 @@ State :: struct #align(64) {
     curr_pipeline:          Pipeline_Handle,
     curr_pipeline_desc:     Pipeline_Desc,
     curr_num_pip_consts:    i32,
-    pipeline_builder:       Pipeline_Desc,
+
+    curr_compute_pass:              bool,
+    curr_compute_pipeline:          Compute_Pipeline_Handle,
+    curr_compute_pipeline_desc:     Compute_Pipeline_Desc,
 }
 
 Handle_Gen :: distinct u8
@@ -490,9 +493,11 @@ begin_frame :: proc() -> (ok: bool) {
     assert(is_init_done())
 
     _state.curr_pass_desc = {}
-    _state.pipeline_builder = {}
     _state.curr_pipeline = {}
     _state.curr_pipeline_desc = {}
+    _state.curr_compute_pass = {}
+    _state.curr_compute_pipeline = {}
+    _state.curr_compute_pipeline_desc = {}
     _state.in_frame = true
 
     return _begin_frame()
@@ -503,6 +508,8 @@ begin_frame :: proc() -> (ok: bool) {
 end_frame :: proc(sync: bool = true) {
     validate(_state != nil)
     validate(_state.in_frame)
+    validate(_state.curr_pass_desc == {})
+    validate(_state.curr_compute_pass == {})
     _end_frame(sync)
     _state.in_frame = false
 }
@@ -513,6 +520,7 @@ end_frame :: proc(sync: bool = true) {
 // MARK: Create
 //
 
+@(require_results)
 pipeline_desc :: proc(
     ps:                 Shader_Handle,
     vs:                 Shader_Handle,
@@ -537,7 +545,6 @@ pipeline_desc :: proc(
     depth_write:        bool = false,
     depth_bias:         i32 = 0,
 ) -> (result: Pipeline_Desc) {
-
     validate(len(result.color_format) >= len(out_colors))
     validate(len(result.blends) >= len(blends))
     validate(len(result.resources) >= len(resources))
@@ -633,6 +640,32 @@ hash_compute_pipeline_desc :: proc(desc: Compute_Pipeline_Desc) -> Hash {
 
 
 @(require_results)
+compute_pipeline_desc :: proc(
+    cs:                 Shader_Handle,
+    samplers:           []Sampler_Desc = {},
+    consts:             []Resource_Handle = {},
+    resources:          []Resource_Handle = {},
+    rw_resources:       []Resource_Handle = {},
+) -> (result: Compute_Pipeline_Desc) {
+
+    validate(len(result.resources) >= len(resources))
+    validate(len(result.constants) >= len(consts))
+    validate(len(result.samplers) >= len(samplers))
+    validate(len(result.rw_resources) >= len(rw_resources))
+
+    result = {
+        cs = cs,
+    }
+
+    copy(result.resources[:], resources)
+    copy(result.rw_resources[:], rw_resources)
+    copy(result.constants[:], consts)
+    copy(result.samplers[:], samplers)
+
+    return result
+}
+
+@(require_results)
 create_compute_pipeline :: proc(
     name:   string,
     desc:   Compute_Pipeline_Desc,
@@ -706,7 +739,7 @@ create_constants :: proc(name: string, item_size: i32, item_num: i32 = 1) -> (re
 @(require_results)
 create_shader :: proc(
     name: string,
-    data: []u8,
+    data: []byte,
     kind: Shader_Kind,
 ) -> (result: Shader_Handle, ok: bool) {
     validate(kind != .Invalid)
@@ -966,12 +999,28 @@ destroy_resource :: proc(handle: Resource_Handle) {
 // MARK: Actions
 //
 
-begin_pass :: proc(desc: Pass_Desc) {
+@(deferred_none = end_pass)
+scope_pass :: proc(name: string, desc: Pass_Desc) -> bool {
+    begin_pass(name, desc)
+    return true
+}
+
+begin_pass :: proc(name: string, desc: Pass_Desc) {
+    validate(_state.curr_pass_desc == {}, "begin_pass/end_pass mismatch")
+    validate(desc != {}, "Empty pass is not valid")
     validate_pass_desc(desc)
-    _begin_pass(desc)
+    _begin_pass(name, desc)
     _state.curr_pipeline = {}
     _state.curr_pipeline_desc = {}
     _state.curr_pass_desc = desc
+}
+
+end_pass :: proc() {
+    validate(_state.curr_pass_desc != {})
+    _end_pass()
+    _state.curr_pipeline = {}
+    _state.curr_pipeline_desc = {}
+    _state.curr_pass_desc = {}
 }
 
 begin_pipeline :: proc(handle: Pipeline_Handle) {
@@ -1007,6 +1056,48 @@ begin_pipeline :: proc(handle: Pipeline_Handle) {
     _state.curr_num_pip_consts = num_consts
 
     _begin_pipeline(
+        curr_pip = pip^,
+        curr = pip_desc,
+        prev = prev_desc,
+    )
+}
+
+@(deferred_none = end_compute_pass)
+scope_compute_pass :: proc(name: string) -> bool {
+    begin_compute_pass(name)
+    return true
+}
+
+begin_compute_pass :: proc(name: string) {
+    validate(_state.curr_compute_pass == {}, "begin_compute_pass/end_compute_pass mismatch")
+    _begin_compute_pass(name)
+    _state.curr_compute_pass = true
+}
+
+end_compute_pass :: proc() {
+    validate(_state.curr_compute_pass != {})
+    _end_compute_pass()
+    _state.curr_compute_pass = {}
+}
+
+begin_compute_pipeline :: proc(handle: Compute_Pipeline_Handle) {
+    pip, pip_ok := get_internal_compute_pipeline(handle)
+
+    if !pip_ok {
+        base.log_err("GPU: trying to begin invalid compute pipeline:", handle)
+        return
+    }
+
+    pip_desc := _state.compute_pipeline_desc[handle.index]
+
+    validate_compute_pipeline_desc(pip_desc)
+
+    prev_desc := _state.curr_compute_pipeline_desc
+
+    _state.curr_compute_pipeline = handle
+    _state.curr_compute_pipeline_desc = _state.compute_pipeline_desc[handle.index]
+
+    _begin_compute_pipeline(
         curr_pip = pip^,
         curr = pip_desc,
         prev = prev_desc,
@@ -1318,6 +1409,28 @@ validate_compute_pipeline_desc :: proc(desc: Compute_Pipeline_Desc, loc := #call
             validate(false)
         }
     }
+
+    for handle in desc.rw_resources {
+        if handle == {} {
+            continue
+        }
+        res, res_ok := get_internal_resource(handle)
+        validate(res_ok)
+        #partial switch res.kind {
+        case .Buffer, .Texture2D, .Texture3D:
+        case:
+            validate(false)
+        }
+    }
+
+    for handle in desc.resources {
+        if handle == {} {
+            continue
+        }
+        for rw_handle in desc.rw_resources {
+            validate(handle != rw_handle, "A resource cannot be bounds as read-only and read-write at the same time")
+        }
+    }
 }
 
 
@@ -1329,6 +1442,11 @@ validate_compute_pipeline_desc :: proc(desc: Compute_Pipeline_Desc, loc := #call
 @(require_results)
 get_internal_pipeline :: proc(handle: Pipeline_Handle) -> (^Pipeline_State, bool) {
     return _table_get(&_state.pipeline_data, _state.pipeline_gen, handle)
+}
+
+@(require_results)
+get_internal_compute_pipeline :: proc(handle: Compute_Pipeline_Handle) -> (^Compute_Pipeline_State, bool) {
+    return _table_get(&_state.compute_pipeline_data, _state.compute_pipeline_gen, handle)
 }
 
 @(require_results)

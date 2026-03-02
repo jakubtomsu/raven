@@ -958,11 +958,8 @@ when BACKEND == BACKEND_WGPU {
     // MARK: Actions
     //
 
-    _begin_pass :: proc(desc: Pass_Desc) {
-        if _state.render_pass_encoder != nil {
-            wgpu.RenderPassEncoderEnd(_state.render_pass_encoder)
-            _state.render_pass_encoder = nil
-        }
+    _begin_pass :: proc(name: string, desc: Pass_Desc) {
+        assert(_state.render_pass_encoder == nil)
 
         // TODO
         num_color_atts := 0
@@ -1022,12 +1019,18 @@ when BACKEND == BACKEND_WGPU {
         _state.render_pass_encoder = wgpu.CommandEncoderBeginRenderPass(
             _state.command_encoder,
             &wgpu.RenderPassDescriptor{
-                label = "<PASS>",
+                label = name,
                 colorAttachmentCount = uint(num_color_atts),
                 colorAttachments = &color_atts[0],
                 depthStencilAttachment = depth_stencil,
             },
         )
+    }
+
+    _end_pass :: proc() {
+        assert(_state.render_pass_encoder != nil)
+        wgpu.RenderPassEncoderEnd(_state.render_pass_encoder)
+        _state.render_pass_encoder = nil
     }
 
     _begin_pipeline :: proc(
@@ -1049,11 +1052,28 @@ when BACKEND == BACKEND_WGPU {
         wgpu.RenderPassEncoderSetPipeline(_state.render_pass_encoder, curr_pip.pip)
     }
 
+    _begin_compute_pass :: proc(name: string) {
+        assert(_state.compute_pass_encoder == nil)
+        _state.compute_pass_encoder = wgpu.CommandEncoderBeginComputePass(
+            _state.command_encoder,
+            &wgpu.ComputePassDescriptor{
+                label = name,
+            },
+        )
+    }
+
+    _end_compute_pass :: proc() {
+        assert(_state.compute_pass_encoder != nil)
+        wgpu.ComputePassEncoderEnd(_state.compute_pass_encoder)
+        _state.compute_pass_encoder = nil
+    }
+
     _begin_compute_pipeline :: proc(
         curr_pip:   Compute_Pipeline_State,
         curr:       Compute_Pipeline_Desc,
         prev:       Compute_Pipeline_Desc,
     ) {
+        assert(_state.compute_pass_encoder != nil)
         wgpu.ComputePassEncoderSetPipeline(_state.compute_pass_encoder, curr_pip.pip)
     }
 

@@ -159,6 +159,11 @@ when BACKEND == BACKEND_D3D11 {
 
     _begin_frame :: proc() -> bool {
         _d3d11_messages()
+        _unbind_cs_rw_resources()
+        _unbind_index_buffer()
+        _unbind_resources({.Vertex, .Pixel, .Compute})
+        _unbind_constants({.Vertex, .Pixel, .Compute})
+        _unbind_samplers({.Vertex, .Pixel, .Compute})
         return true
     }
 
@@ -758,23 +763,6 @@ when BACKEND == BACKEND_D3D11 {
     }
 
     _set_resources :: proc(shaders: bit_set[Shader_Kind], srvs: []^d3d.IShaderResourceView, start_slot: i32) {
-        // // Unbind
-        // if len(resources) == 0 {
-        //     if .Vertex in shaders {
-        //         _state.device_context->VSSetShaderResources(0, len(srvs), &srvs[0])
-        //     }
-
-        //     if .Pixel in shaders {
-        //         _state.device_context->PSSetShaderResources(0, len(srvs), &srvs[0])
-        //     }
-
-        //     if .Compute in shaders {
-        //         _state.device_context->CSSetShaderResources(0, len(srvs), &srvs[0])
-        //     }
-
-        //     return
-        // }
-
         if .Vertex in shaders {
             _state.device_context->VSSetShaderResources(
                 StartSlot = u32(start_slot),
@@ -803,12 +791,6 @@ when BACKEND == BACKEND_D3D11 {
     }
 
     _set_cs_rw_resources :: proc(uavs: []^d3d.IUnorderedAccessView, start_slot: i32) {
-        // // Unbind
-        // if len(resources) == 0 {
-        //     _state.device_context->CSSetUnorderedAccessViews(0, len(uavs), &uavs[0], nil)
-        //     return
-        // }
-
         _state.device_context->CSSetUnorderedAccessViews(
             StartSlot = u32(start_slot),
             NumUAVs = u32(len(uavs)),
@@ -819,23 +801,6 @@ when BACKEND == BACKEND_D3D11 {
 
 
     _set_constants :: proc(shaders: bit_set[Shader_Kind], cbufs: []^d3d.IBuffer, index_offset: i32) {
-        // // Unbind
-        // if len(constants) == 0 {
-        //     if .Vertex in shaders {
-        //         _state.device_context->VSSetConstantBuffers(0, len(cbufs), &cbufs[0])
-        //     }
-
-        //     if .Pixel in shaders {
-        //         _state.device_context->PSSetConstantBuffers(0, len(cbufs), &cbufs[0])
-        //     }
-
-        //     if .Compute in shaders {
-        //         _state.device_context->CSSetConstantBuffers(0, len(cbufs), &cbufs[0])
-        //     }
-
-        //     return
-        // }
-
         if .Vertex in shaders {
             _state.device_context->VSSetConstantBuffers(
                 StartSlot = u32(index_offset),
@@ -862,23 +827,6 @@ when BACKEND == BACKEND_D3D11 {
     }
 
     _set_samplers :: proc(shaders: bit_set[Shader_Kind], smps: []^d3d.ISamplerState, index_offset: i32) {
-        // // Unbind
-        // if len(samplers) == 0 {
-        //     if .Vertex in shaders {
-        //         _state.device_context->VSSetSamplers(0, len(smps), &smps[0])
-        //     }
-
-        //     if .Pixel in shaders {
-        //         _state.device_context->PSSetSamplers(0, len(smps), &smps[0])
-        //     }
-
-        //     if .Compute in shaders {
-        //         _state.device_context->CSSetSamplers(0, len(smps), &smps[0])
-        //     }
-
-        //     return
-        // }
-
         if .Vertex in shaders {
             _state.device_context->VSSetSamplers(
                 StartSlot = u32(index_offset),
@@ -905,12 +853,6 @@ when BACKEND == BACKEND_D3D11 {
     }
 
     _set_index_buffer :: proc(res: _Resource, format: Index_Format, offset: i32) {
-        // // Unbind
-        // if res.kind == .Invalid {
-        //     _state.device_context->IASetIndexBuffer(nil, .R32_UINT, 0)
-        //     return
-        // }
-
         _state.device_context->IASetIndexBuffer(
             pIndexBuffer = res.buf,
             Format = _d3d11_index_format(format),
@@ -920,13 +862,42 @@ when BACKEND == BACKEND_D3D11 {
         _d3d11_messages()
     }
 
+    _unbind_cs_rw_resources :: proc() {
+        uavs: [RW_RESOURCE_BIND_SLOTS]^d3d.IUnorderedAccessView
+        _state.device_context->CSSetUnorderedAccessViews(0, len(uavs), &uavs[0], nil)
+    }
+
+    _unbind_index_buffer :: proc() {
+        _state.device_context->IASetIndexBuffer(nil, .R32_UINT, 0)
+    }
+
+    _unbind_resources :: proc(shaders: bit_set[Shader_Kind]) {
+        srvs: [RESOURCE_BIND_SLOTS]^d3d.IShaderResourceView
+        if .Vertex in shaders do _state.device_context->VSSetShaderResources(0, len(srvs), &srvs[0])
+        if .Pixel in shaders do _state.device_context->PSSetShaderResources(0, len(srvs), &srvs[0])
+        if .Compute in shaders do _state.device_context->CSSetShaderResources(0, len(srvs), &srvs[0])
+    }
+
+    _unbind_constants :: proc(shaders: bit_set[Shader_Kind]) {
+        cbufs: [CONSTANTS_BIND_SLOTS]^d3d.IBuffer
+        if .Vertex in shaders do _state.device_context->VSSetConstantBuffers(0, len(cbufs), &cbufs[0])
+        if .Pixel in shaders do _state.device_context->PSSetConstantBuffers(0, len(cbufs), &cbufs[0])
+        if .Compute in shaders do _state.device_context->CSSetConstantBuffers(0, len(cbufs), &cbufs[0])
+    }
+
+    _unbind_samplers :: proc(shaders: bit_set[Shader_Kind]) {
+        smps: [SAMPLER_BIND_SLOTS]^d3d.ISamplerState
+        if .Vertex in shaders do _state.device_context->VSSetSamplers(0, len(smps), &smps[0])
+        if .Pixel in shaders do _state.device_context->PSSetSamplers(0, len(smps), &smps[0])
+        if .Compute in shaders do _state.device_context->CSSetSamplers(0, len(smps), &smps[0])
+    }
 
 
     /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
     // MARK: Actions
     //
 
-    _begin_pass :: proc(desc: Pass_Desc) {
+    _begin_pass :: proc(name: string, desc: Pass_Desc) {
         rtvs: [d3d.SIMULTANEOUS_RENDER_TARGET_COUNT]^d3d.IRenderTargetView
         dsv: ^d3d.IDepthStencilView
 
@@ -986,6 +957,10 @@ when BACKEND == BACKEND_D3D11 {
         }
 
         _state.device_context->RSSetViewports(1, &viewport)
+    }
+
+    _end_pass :: proc() {
+        // no-op
     }
 
     // This is really ugly...
@@ -1057,7 +1032,7 @@ when BACKEND == BACKEND_D3D11 {
         }
 
         if curr.constants != prev.constants {
-            cbufs: [SAMPLER_BIND_SLOTS]^d3d.IBuffer
+            cbufs: [CONSTANTS_BIND_SLOTS]^d3d.IBuffer
             for handle, i in curr.constants {
                 const := get_internal_resource(handle) or_continue
                 cbufs[i] = const.buf
@@ -1073,6 +1048,68 @@ when BACKEND == BACKEND_D3D11 {
                 smps[i] = sampler.smp
             }
             _set_samplers({.Vertex, .Pixel}, smps[:], 0)
+        }
+
+        _d3d11_messages()
+    }
+
+    _begin_compute_pass :: proc(name: string) {
+        // no-op
+    }
+
+    _end_compute_pass :: proc() {
+        _unbind_cs_rw_resources()
+    }
+
+    _begin_compute_pipeline :: proc(
+        curr_pip:   Compute_Pipeline_State,
+        curr:       Compute_Pipeline_Desc,
+        prev:       Compute_Pipeline_Desc,
+    ) {
+        if curr.cs != prev.cs {
+            if shader, shader_ok := get_internal_shader(curr.cs); shader_ok {
+                assert(shader.kind == .Compute)
+                _set_shader(shader^)
+            }
+        }
+
+        if curr.resources != prev.resources {
+            srvs: [RESOURCE_BIND_SLOTS]^d3d.IShaderResourceView
+            for res, i in curr.resources {
+                res := get_internal_resource(res) or_continue
+                assert(res.srv != nil)
+                srvs[i] = res.srv
+            }
+            _set_resources({.Compute}, srvs[:], 0)
+        }
+
+        if curr.rw_resources != prev.rw_resources {
+            uavs: [RW_RESOURCE_BIND_SLOTS]^d3d.IUnorderedAccessView
+            for res, i in curr.rw_resources {
+                res := get_internal_resource(res) or_continue
+                assert(res.uav != nil)
+                uavs[i] = res.uav
+            }
+            _set_cs_rw_resources(uavs[:], 0)
+        }
+
+        if curr.constants != prev.constants {
+            cbufs: [SAMPLER_BIND_SLOTS]^d3d.IBuffer
+            for handle, i in curr.constants {
+                const := get_internal_resource(handle) or_continue
+                cbufs[i] = const.buf
+            }
+            _set_constants({.Compute}, cbufs[:], 0)
+        }
+
+        if curr.samplers != prev.samplers {
+            smps: [SAMPLER_BIND_SLOTS]^d3d.ISamplerState
+            for smp, i in curr.samplers {
+                bucket := &_state.sampler_cache[smp.filter][smp.bounds.x]
+                sampler := bucket_find_or_create(bucket, smp, _create_sampler)
+                smps[i] = sampler.smp
+            }
+            _set_samplers({.Compute}, smps[:], 0)
         }
 
         _d3d11_messages()
@@ -1372,7 +1409,7 @@ when BACKEND == BACKEND_D3D11 {
                 case .MESSAGE: level = .Debug
                 }
 
-                base.log(level, "GPU D3D11 %s: %s", msg.Category, msg.pDescription, loc = loc)
+                base.log(level, "GPU D3D11 %v: %v", msg.Category, msg.pDescription, loc = loc)
 
                 if msg.Severity == .CORRUPTION || msg.Severity == .ERROR {
                     panic("GPU D3D11: Error")

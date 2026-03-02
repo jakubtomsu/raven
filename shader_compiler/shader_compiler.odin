@@ -36,6 +36,9 @@ compile :: proc(
     source:         string,
     opts:           Options,
 ) -> (result: []byte, ok: bool) {
+    assert(opts.target != .Invalid, "You must specify the target output format")
+    assert(opts.stage != .Invalid, "You must specify the shader stage")
+
     switch opts.target {
     case .Invalid:
         assert(false)

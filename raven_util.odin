@@ -345,17 +345,17 @@ make_3d_perspective_camera :: proc(pos: Vec3, rot: Quat, fov: f32 = math.PI * 0.
 }
 
 @(require_results)
-make_3d_orthographic_camera :: proc(pos: Vec3, rot: Quat, size: f32 = 10) -> Camera {
+make_3d_orthographic_camera :: proc(pos: Vec3, rot: Quat, fov: f32 = 10) -> Camera {
     screen := get_screen_size()
     aspect := screen.x / screen.y
     return {
         pos = pos,
         rot = rot,
         projection = orthographic_projection(
-            top = size,
-            bottom = -size,
-            left = -size * aspect,
-            right = size * aspect,
+            top = fov,
+            bottom = -fov,
+            left = -fov * aspect,
+            right = fov * aspect,
             near = 1000.0, // Reverse Z!
             far = 0.01,
         ),

@@ -384,7 +384,7 @@ Texture_Pool :: struct {
 
 Texture :: struct {
     size:       [2]u16,
-    pool_index: u8,
+    pool_index: u8, // set to max(u8) for non-pooled
     slice:      u8,
     resource:   gpu.Resource_Handle,
 }
@@ -1214,12 +1214,11 @@ begin_frame :: proc() -> (keep_running: bool) {
         pixel_shader = int_cast(u8, _state.builtin_pixel_shader[.Default].index),
         vertex_shader = int_cast(u8, _state.builtin_vertex_shader[.Default].index),
         blend = .Opaque,
-        texture = u8(_state.builtin_texture[.Default].index),
     }
 
     bind_pixel_shader_by_handle({})
     bind_vertex_shader_by_handle({})
-    bind_texture_by_handle({})
+    _bind_texture(_state.builtin_texture[.Default])
 
     if _state.shutdown_requested {
         keep_running = false
@@ -2474,7 +2473,7 @@ create_texture_pool :: proc(size: IVec2, slices: i32) -> (ok: bool) {
     return true
 }
 
-get_internal_texture :: proc(handle: Texture_Handle) -> (result: ^Texture, ok: bool) {
+get_internal_texture :: proc(handle: Texture_Handle) -> (result: ^Texture, ok: bool) #optional_ok {
     return _table_get(&_state.textures, _state.textures_gen, handle)
 }
 
@@ -2566,8 +2565,6 @@ create_texture_from_data :: proc(name: string, data: Texture_Data) -> (result: T
             texture^ = {}
         }
 
-
-
         res, res_ok := gpu.create_texture_2d(strings_join("rv-tex-", name, allocator = context.temp_allocator),
             format = .RGBA_U8_Norm,
             size = data.size,
@@ -2583,6 +2580,34 @@ create_texture_from_data :: proc(name: string, data: Texture_Data) -> (result: T
             slice = 0,
             resource = res,
         }
+    }
+
+    result = {
+        index = Handle_Index(index),
+        gen = _state.textures_gen[index],
+    }
+
+    return result, true
+}
+
+create_texture_from_resource :: proc(name: string, handle: gpu.Resource_Handle) -> (result: Texture_Handle, ok: bool) {
+    res := gpu.get_internal_resource(handle) or_return
+
+    if res.kind != .Texture2D {
+        return {}, false
+    }
+
+    hash := hash_name(name)
+
+    index, prev := _table_insert_hash(&_state.textures_hash, hash) or_return
+    assert(prev == 0, "Collision")
+
+    texture := &_state.textures[index]
+    texture^ = {
+        size = {u16(res.size.x), u16(res.size.y)},
+        pool_index = max(u8),
+        slice = 0,
+        resource = handle,
     }
 
     result = {
@@ -3345,7 +3370,7 @@ draw_text :: proc(
     pos:        [3]f32,
     scale:      Vec2 = 1,
     anchor:     Vec2 = -1, // Anchor point in local space. -1 = left aligned, 0 = centered, 1.0 = right aligned
-    spacing:    Vec2 = 0, // x = character spacing, y = line spacing
+    spacing:    Vec2 = {0, 8}, // x = character spacing, y = line spacing
     col:        Vec4 = 1,
     rot:        Quat = 1,
 ) -> []Sprite_Inst {
@@ -3431,7 +3456,7 @@ text_glyph_apply :: proc(offs: Vec2, r: rune, scale: Vec2, char_size: IVec2 = 8,
     switch r {
     case '\n':
         offs.x = 0
-        offs.y -= scale.y * (f32(char_size.y) + spacing.y)
+        offs.y += scale.y * (f32(char_size.y) + spacing.y)
         return offs
 
     case '\t':
@@ -4398,7 +4423,7 @@ upload_gpu_layers :: proc() {
 @(optimization_mode="favor_size")
 render_gpu_layer :: proc(
     #any_int index: i32,
-    ren_tex_handle: Render_Texture_Handle,
+    ren_tex_handle: Render_Texture_Handle = DEFAULT_RENDER_TEXTURE,
     clear_color:    Maybe(Vec3),
     clear_depth:    bool,
 ) {
@@ -4430,7 +4455,7 @@ render_gpu_layer :: proc(
         },
     }
 
-    gpu.begin_pass(pass_desc)
+    gpu.scope_pass("raven-layer", pass_desc)
 
     // BIG WARNING:
     // On certain GPU backends, the pipeline state has to be baked and a new pipeline has to be created,
@@ -4696,7 +4721,7 @@ Frustum :: struct {
     bounds_max: Vec3,
 }
 
-orthographic_projection :: proc(left, right, top, bottom, near, far: f32) -> (result: Mat4) {
+orthographic_projection :: proc(left, right, top, bottom: f32, near: f32 = 0.01, far: f32 = 1000.0) -> (result: Mat4) {
     // D3D11, LH 0..1 NDC
     // https://learn.microsoft.com/en-us/windows/win32/direct3d9/d3dxmatrixorthooffcenterlh
 
