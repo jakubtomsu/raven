@@ -135,7 +135,7 @@ _update :: proc(hot_state: rawptr) -> rawptr {
     if rv.key_down(.W) do move.y += 1
     if rv.key_down(.S) do move.y -= 1
 
-    state.angle.xy += rv.mouse_delta().yx * {-1, 1} * 0.002
+    state.angle.xy += rv.mouse_delta().yx * 0.002
     state.angle.x = clamp(state.angle.x, -math.PI * 0.49, math.PI * 0.49)
     state.angle.z = rv.lexp(state.angle.z, 0, delta * 5)
     state.angle.z += move.x * delta * -0.2

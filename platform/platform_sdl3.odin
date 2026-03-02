@@ -1,3 +1,4 @@
+#+build !js
 package raven_platform
 
 import "base:runtime"
@@ -345,7 +346,7 @@ when BACKEND == BACKEND_SDL3 {
     }
 
     @(require_results)
-    _read_file_by_path_async :: proc(path: string, allocator := context.allocator) -> (file: Async_File, ok: bool) {
+    _read_file_by_path_async :: proc(file: ^Async_File, path: string, allocator := context.allocator) -> bool {
 
     }
 

@@ -12,7 +12,7 @@ Bit_Pool :: struct($N: int) where N % 64 == 0 {
 @(require_results)
 bit_pool_alloc :: proc "contextless" (bp: ^Bit_Pool($N)) -> (result: int, ok: bool) {
     result = bit_pool_find_0(bp^) or_return
-    bit_pool_set_1(bp, index)
+    bit_pool_set_1(bp, result)
     return result, true
 }
 

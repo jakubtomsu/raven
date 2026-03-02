@@ -1034,6 +1034,10 @@ update_constants :: proc(handle: Resource_Handle, data: []byte) {
 update_buffer :: proc(handle: Resource_Handle, data: []byte, offset: int = 0) {
     validate(_state.curr_pass_desc == {}, "You must do all buffer updates before rendering")
 
+    if len(data) == 0 {
+        return
+    }
+
     res, res_ok := get_internal_resource(handle)
     if !res_ok {
         return

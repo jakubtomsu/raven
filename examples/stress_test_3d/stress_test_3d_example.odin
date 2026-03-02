@@ -62,7 +62,7 @@ _update :: proc(hot_state: rawptr) -> rawptr {
     if rv.key_down(.E) do move.y += 1
     if rv.key_down(.Q) do move.y -= 1
 
-    state.cam_ang.xy += rv.mouse_delta().yx * {-1, 1} * 0.005
+    state.cam_ang.xy += rv.mouse_delta().yx * 0.005
     state.cam_ang.x = clamp(state.cam_ang.x, -math.PI * 0.49, math.PI * 0.49)
 
     cam_rot := rv.euler_rot(state.cam_ang)
@@ -127,7 +127,7 @@ _update :: proc(hot_state: rawptr) -> rawptr {
                     // stress_draw(rv.get_mesh("Circle"), offs)
                     // offs += {5, 0, 0}
 
-                    stress_draw(rv.get_mesh("Cube"), offs)
+                    stress_draw(rv.get_builtin_mesh(.Cylinder), offs)
                     offs += {5, 0, 0}
 
                     // stress_draw(rv.get_mesh("Icosphere"), offs)
@@ -155,7 +155,7 @@ _update :: proc(hot_state: rawptr) -> rawptr {
     return state
 }
 
-stress_draw :: proc(handle: rv.Mesh_Handle, pos: rv.Vec3, num: int = 64, col: rv.Vec4 = {1, 1, 1, 0.25}) {
+stress_draw :: proc(handle: rv.Mesh_Handle, pos: rv.Vec3, num: int = 256, col: rv.Vec4 = {1, 1, 1, 0.25}) {
     for i in 0..<num {
         rv.draw_mesh(handle,
             pos = pos + {0, 0, f32(i) * 3},

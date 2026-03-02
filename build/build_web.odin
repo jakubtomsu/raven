@@ -46,25 +46,20 @@ export_web :: proc(dst_dir: string, pkg_name: string, pkg_path: string) {
         transmute([]byte)html,
     )
 
-    clone_file(
+    platform.write_file_by_path(
         ufmt.tprintf("%s/odin.js", dst_dir),
-        ufmt.tprintf("%score/sys/wasm/js/odin.js", ODIN_ROOT),
+        #load(ODIN_ROOT + "core/sys/wasm/js/odin.js"),
     )
 
-    clone_file(
+    platform.write_file_by_path(
         ufmt.tprintf("%s/wgpu.js", dst_dir),
-        ufmt.tprintf("%svendor/wgpu/wgpu.js", ODIN_ROOT),
+        #load(ODIN_ROOT + "vendor/wgpu/wgpu.js"),
     )
 
-    clone_file(
+    platform.write_file_by_path(
         ufmt.tprintf("%s/raven_platform.js", dst_dir),
-        ufmt.tprintf("platform/raven_platform.js"), // TODO: raven root path
+        #load("../platform/raven_platform.js"),
     )
-}
-
-clone_file :: proc(dst, src: string) {
-    fmt.printfln("Copying %s -> %s", src, dst)
-    platform.clone_file(dst, src)
 }
 
 compile_web :: proc(dst_dir: string, pkg_name: string, pkg_path: string, initial_mem_pages: int, max_mem_pages: int) -> bool {

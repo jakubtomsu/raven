@@ -43,6 +43,8 @@ _init :: proc() {
             base.log_err("Failed to add '%v' event listener when initializing", kind)
         }
     }
+
+    _init_js(_CANVAS_ID)
 }
 
 _shutdown :: proc() {
@@ -96,13 +98,42 @@ _clipboard_get :: proc(format: Clipboard_Format = .Text, allocator := context.te
 
 @(require_results)
 _get_gamepad_state :: proc(#any_int index: int) -> (result: Gamepad_State, ok: bool) {
-    _js_unsupported()
+    state: js.Gamepad_State
+    if !js.get_gamepad_state(index, &state) {
+        return {}, false
+    }
+
+    // https://w3c.github.io/gamepad/#remapping
+
+    if state.buttons[12].pressed do result.buttons += {.DPad_Up}
+    if state.buttons[13].pressed do result.buttons += {.DPad_Down}
+    if state.buttons[14].pressed do result.buttons += {.DPad_Left}
+    if state.buttons[15].pressed do result.buttons += {.DPad_Right}
+    if state.buttons[9].pressed do result.buttons += {.Start}
+    if state.buttons[8].pressed do result.buttons += {.Back}
+    if state.buttons[10].pressed do result.buttons += {.Left_Thumb}
+    if state.buttons[11].pressed do result.buttons += {.Right_Thumb}
+    if state.buttons[4].pressed do result.buttons += {.Left_Shoulder}
+    if state.buttons[4].pressed do result.buttons += {.Right_Shoulder}
+    if state.buttons[0].pressed do result.buttons += {.A}
+    if state.buttons[1].pressed do result.buttons += {.B}
+    if state.buttons[2].pressed do result.buttons += {.X}
+    if state.buttons[3].pressed do result.buttons += {.Y}
+
+    result.axes = {
+        .Left_Trigger = f32(state.buttons[6].value),
+        .Right_Trigger = f32(state.buttons[7].value),
+        .Left_Thumb_X = f32(state.axes[0]),
+        .Left_Thumb_Y = -f32(state.axes[1]),
+        .Right_Thumb_X = f32(state.axes[2]),
+        .Right_Thumb_Y = -f32(state.axes[3]),
+    }
+
     return {}, false
 }
 
 @(require_results)
 _set_gamepad_feedback :: proc(#any_int index: int, output: Gamepad_Feedback) -> bool {
-    _js_unsupported()
     return false
 }
 
@@ -114,15 +145,12 @@ _get_user_data_dir :: proc(allocator := context.allocator) -> string {
 }
 
 _set_mouse_relative :: proc(window: Window, relative: bool) {
-    _js_unsupported()
 }
 
 _set_mouse_visible :: proc(visible: bool) {
-    _js_unsupported()
 }
 
 _set_dpi_aware :: proc() {
-    _js_unsupported()
 }
 
 @(require_results)
@@ -353,9 +381,9 @@ _clone_file :: proc(path: string, new_path: string, fail_if_exists := true) -> b
 }
 
 @(require_results)
-_read_file_by_path_async :: proc(path: string, allocator := context.allocator) -> (file: Async_File, ok: bool) {
+_read_file_by_path_async :: proc(file: ^Async_File, path: string, allocator := context.allocator) -> bool {
     _js_unsupported()
-    return {}, false
+    return false
 }
 
 @(require_results)
@@ -538,7 +566,7 @@ _js_event_callbacks := [js.Event_Kind]_JS_Event_Callback {
         }
 
         _event_queue_push(Event_Mouse{
-            pos = {i32(e.mouse.screen.x), i32(e.mouse.screen.y)},
+            pos = {i32(e.mouse.client.x), i32(e.mouse.client.y)},
             move = {i32(e.mouse.movement.x), i32(e.mouse.movement.y)},
         })
     },
@@ -667,8 +695,11 @@ foreign odin_env {
 @(export)
 foreign import raven_platform "raven_platform"
 
-@(link_prefix="wgpu", default_calling_convention="c")
+@(default_calling_convention="c")
 foreign raven_platform {
+    @(link_name="init")
+    _init_js :: proc "contextless" (canvas: string) ---
+
     // lock=true Only works when called from user gesture.
     @(link_name="set_pointer_lock")
     _set_pointer_lock :: proc "contextless" (canvas: string, lock: b32) ---
