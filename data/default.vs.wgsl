@@ -21,8 +21,8 @@ fn vs_main(
     o.world_pos = world_pos;
     o.normal    = unpack_unorm8(vert.normal).xyz;
     o.uv        = vert.uv;
-    o.add_col = unpack_signed_color_unorm8(inst.add_col);
-    o.col        = vec4<f32>(inst_color.rgb * vert_color.rgb, inst_color.a);
+    o.add_col   = unpack_signed_color_unorm8(inst.add_col);
+    o.col       = inst_color * vert_color;
     o.tex_slice = inst.tex_slice_vert_offs & 0xff;
 
     return o;

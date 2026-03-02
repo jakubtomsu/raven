@@ -1,6 +1,5 @@
 package raven_simple_3d_example
 
-import "core:log"
 import "core:math/linalg"
 import "core:math"
 import rv "../.."
@@ -24,10 +23,6 @@ State :: struct {
 main :: proc() {
     rv.run_main_loop(_module_desc)
 }
-
-SHADER :: `
-
-`
 
 _init :: proc() {
     state = new(State)

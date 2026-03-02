@@ -370,8 +370,7 @@ Mesh_Vertex :: struct #align(16) {
     uv:     [2]f32,
     normal: [3]u8 `gpu:"normalized"`,
     p0:     u8, // NOTE: this padding could store user parameters..?
-    color:  [3]u8 `gpu:"normalized"`,
-    p1:     u8,
+    color:  [4]u8 `gpu:"normalized"`,
 }
 
 
@@ -446,7 +445,7 @@ Draw_Layer_Flag :: enum u8 {
     // Disable all sorting.
     // NOTE: this doesn't affect just transparent objects, it's how batching optimization is done.
     No_Reorder,
-    Y_Down,
+    Flip_Y,
 }
 
 // Shared across all layers and everything.
@@ -1517,7 +1516,7 @@ load_scene_from_data :: proc(txt: string, bin: []byte, dst_group: Group_Handle) 
                 pos = v.pos,
                 uv = v.uv,
                 normal = v.normal,
-                color = v.color,
+                color = {v.color.r, v.color.g, v.color.b, 255},
             }
         }
 
@@ -3185,8 +3184,14 @@ set_layer_params :: proc(
     layer.flags = flags
     layer.camera = camera
 
+    // Inverts the flip flag based on matrix Y scaling
     if layer.camera.projection[1, 1] < 0 {
-        layer.flags += {.Y_Down}
+        flipped := .Flip_Y in layer.flags
+        if flipped {
+            layer.flags -= {.Flip_Y}
+        } else {
+            layer.flags += {.Flip_Y}
+        }
     }
 }
 
@@ -3228,7 +3233,7 @@ draw_sprite :: proc(
 
     layer := get_internal_draw_layer(_state.bind_state.draw_layer) or_else panic("Invalid layer")
 
-    if .Y_Down in layer.flags {
+    if .Flip_Y in layer.flags {
         size.y *= -1
     }
 
@@ -3581,8 +3586,8 @@ draw_triangle :: proc(
                 u8(clamp(col[i].r * 255, 0, 255)),
                 u8(clamp(col[i].g * 255, 0, 255)),
                 u8(clamp(col[i].b * 255, 0, 255)),
+                255,
             },
-            p1      = 0,
         }
     }
 
