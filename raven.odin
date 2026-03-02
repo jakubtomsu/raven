@@ -3854,8 +3854,8 @@ draw_line_circle :: proc(
     verts := make([]Vertex, segments * 2, context.temp_allocator)
     p0 := circle[len(circle) - 1]
     for p1, i in circle {
-        verts[i * 2 + 0] = pack_vertex(u * p0.x + v * p0.y, col = col)
-        verts[i * 2 + 1] = pack_vertex(u * p1.x + v * p1.y, col = col)
+        verts[i * 2 + 0] = pack_vertex(pos + u * p0.x + v * p0.y, col = col)
+        verts[i * 2 + 1] = pack_vertex(pos + u * p1.x + v * p1.y, col = col)
         p0 = p1
     }
 
