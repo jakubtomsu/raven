@@ -69,10 +69,10 @@ _update :: proc(hot_state: rawptr) -> rawptr {
 
     cam_pos := rv.Vec3{-1, 1, -1} * 10
     mouse := rv.mouse_pos() / rv.get_screen_size() - 0.5
-    cam_pos += rv.Vec3{1, 0, -1} * mouse.x * 2
-    cam_pos += rv.Vec3{-1, 0, -1} * mouse.y * 2
+    cam_pos += rv.Vec3{1, 0, -1} * mouse.x * 10
+    cam_pos += rv.Vec3{-1, 0, -1} * mouse.y * 10
 
-    state.cam_pos = rv.lexp(state.cam_pos, cam_pos, delta * 5)
+    state.cam_pos = rv.lexp(state.cam_pos, cam_pos, delta * 4)
 
     cam := rv.make_3d_orthographic_camera(
         pos = state.cam_pos,
@@ -110,7 +110,7 @@ _update :: proc(hot_state: rawptr) -> rawptr {
 
         pip := gpu.create_compute_pipeline("life", desc) or_else panic("cs pipeline")
 
-        gpu.begin_compute_pipeline(pip)
+        gpu.bind_compute_pipeline(pip)
 
         gpu.dispatch_compute({SIZE / 8, SIZE / 8, 1})
 
@@ -134,13 +134,13 @@ _update :: proc(hot_state: rawptr) -> rawptr {
         t := f32(i) / f32(len(state.tex))
 
         // brute force thickness
-        THICK :: 8
+        THICK :: 6
         for j in 0..<i32(THICK) {
             rv.draw_sprite(
                 {0, -f32(i * THICK + j) * 0.01, 0},
                 rot = linalg.quaternion_angle_axis_f32(math.PI * 0.5, {1, 0, 0}),
                 scale = 16,
-                col = i + j == 0 ? rv.WHITE : rv.oklerp(rv.LIGHT_CYAN, rv.DARK_GREEN, t),
+                col = i + j == 0 ? rv.WHITE : rv.oklerp(rv.LIGHT_CYAN, rv.DARK_GREEN * 0.5, t),
                 scaling = .Absolute,
             )
         }
@@ -153,7 +153,7 @@ _update :: proc(hot_state: rawptr) -> rawptr {
     rv.draw_text(ufmt.tprintf("press space to restart\ntex: %v\nfill: %v", state.tex_index, state.fill), {10, 10, 0})
 
     rv.upload_gpu_layers()
-    rv.render_gpu_layer(0, clear_color = rv.DARK_GREEN.rgb, clear_depth = true)
+    rv.render_gpu_layer(0, clear_color = rv.DARK_GREEN.rgb * 0.5, clear_depth = true)
     rv.render_gpu_layer(1, clear_color = nil, clear_depth = false)
 
     return state

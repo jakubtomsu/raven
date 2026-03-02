@@ -4503,7 +4503,7 @@ render_gpu_layer :: proc(
             continue
         }
 
-        gpu.begin_pipeline(pipeline)
+        gpu.bind_pipeline(pipeline)
 
         _counter_add(.Num_Draw_Calls, 1)
 
@@ -4546,7 +4546,7 @@ render_gpu_layer :: proc(
             continue
         }
 
-        gpu.begin_pipeline(pipeline)
+        gpu.bind_pipeline(pipeline)
 
         _counter_add(.Num_Draw_Calls, 1)
 
@@ -4589,7 +4589,7 @@ render_gpu_layer :: proc(
             continue
         }
 
-        gpu.begin_pipeline(pipeline)
+        gpu.bind_pipeline(pipeline)
 
         _counter_add(.Num_Draw_Calls, 1)
 
@@ -4630,7 +4630,7 @@ render_gpu_layer :: proc(
             continue
         }
 
-        gpu.begin_pipeline(pipeline)
+        gpu.bind_pipeline(pipeline)
 
         _counter_add(.Num_Draw_Calls, 1)
 

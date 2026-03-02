@@ -964,7 +964,7 @@ when BACKEND == BACKEND_D3D11 {
     }
 
     // This is really ugly...
-    _begin_pipeline :: proc(
+    _bind_pipeline :: proc(
         curr_pip: Pipeline_State,
         curr: Pipeline_Desc,
         prev: Pipeline_Desc,
@@ -1061,7 +1061,7 @@ when BACKEND == BACKEND_D3D11 {
         _unbind_cs_rw_resources()
     }
 
-    _begin_compute_pipeline :: proc(
+    _bind_compute_pipeline :: proc(
         curr_pip:   Compute_Pipeline_State,
         curr:       Compute_Pipeline_Desc,
         prev:       Compute_Pipeline_Desc,
@@ -1240,7 +1240,7 @@ when BACKEND == BACKEND_D3D11 {
     }
 
     _update_draw_constants :: proc(const_offsets: []u32) {
-        // TODO: some of this should be cached on begin_pipeline
+        // TODO: some of this should be cached on bind_pipeline
         for offset, i in const_offsets {
             if offset == max(u32) {
                 continue

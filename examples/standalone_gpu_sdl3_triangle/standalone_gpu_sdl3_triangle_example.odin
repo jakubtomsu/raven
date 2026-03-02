@@ -72,7 +72,7 @@ main :: proc() {
             },
         })
 
-        gpu.begin_pipeline(pip)
+        gpu.bind_pipeline(pip)
         gpu.draw_non_indexed(3)
 
         gpu.end_frame(sync = true)

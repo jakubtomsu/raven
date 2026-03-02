@@ -1023,7 +1023,7 @@ end_pass :: proc() {
     _state.curr_pass_desc = {}
 }
 
-begin_pipeline :: proc(handle: Pipeline_Handle) {
+bind_pipeline :: proc(handle: Pipeline_Handle) {
     if _state.curr_pipeline == handle {
         return
     }
@@ -1055,7 +1055,7 @@ begin_pipeline :: proc(handle: Pipeline_Handle) {
     }
     _state.curr_num_pip_consts = num_consts
 
-    _begin_pipeline(
+    _bind_pipeline(
         curr_pip = pip^,
         curr = pip_desc,
         prev = prev_desc,
@@ -1080,7 +1080,7 @@ end_compute_pass :: proc() {
     _state.curr_compute_pass = {}
 }
 
-begin_compute_pipeline :: proc(handle: Compute_Pipeline_Handle) {
+bind_compute_pipeline :: proc(handle: Compute_Pipeline_Handle) {
     pip, pip_ok := get_internal_compute_pipeline(handle)
 
     if !pip_ok {
@@ -1097,7 +1097,7 @@ begin_compute_pipeline :: proc(handle: Compute_Pipeline_Handle) {
     _state.curr_compute_pipeline = handle
     _state.curr_compute_pipeline_desc = _state.compute_pipeline_desc[handle.index]
 
-    _begin_compute_pipeline(
+    _bind_compute_pipeline(
         curr_pip = pip^,
         curr = pip_desc,
         prev = prev_desc,
