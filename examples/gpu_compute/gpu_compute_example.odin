@@ -35,6 +35,8 @@ main :: proc() {
 _init :: proc() {
     state = new(State)
 
+    life_hlsl := #load("gpu_compute_life.hlsl", string)
+
     cs_bin := shader_compiler.compile("life.hlsl", life_hlsl, {target = .D3D11, stage = .Compute}) or_else panic("Shader compile")
     state.cs = gpu.create_shader("life", cs_bin, .Compute) or_else panic("Shader")
 
@@ -93,7 +95,7 @@ _update :: proc(hot_state: rawptr) -> rawptr {
         gpu.update_texture_2d(rv.get_internal_texture(state.tex[0]).resource, gpu.slice_bytes(pixels))
     }
 
-    if rv.get_frame_index() % 2 == 0  {
+    {
         gpu.scope_compute_pass("life")
 
         next := (state.tex_index + 1) %% len(state.tex)
@@ -137,10 +139,10 @@ _update :: proc(hot_state: rawptr) -> rawptr {
         THICK :: 6
         for j in 0..<i32(THICK) {
             rv.draw_sprite(
-                {0, -f32(i * THICK + j) * 0.01, 0},
+                {0, -f32(i * THICK + j) * 0.005, 0},
                 rot = linalg.quaternion_angle_axis_f32(math.PI * 0.5, {1, 0, 0}),
                 scale = 16,
-                col = i + j == 0 ? rv.WHITE : rv.oklerp(rv.LIGHT_CYAN, rv.DARK_GREEN * 0.5, t),
+                col = i + j == 0 ? rv.LIGHT_PINK + 0.2 : rv.oklerp(rv.LIGHT_PINK, rv.DARK_BLUE * 0.5, t),
                 scaling = .Absolute,
             )
         }
@@ -152,41 +154,11 @@ _update :: proc(hot_state: rawptr) -> rawptr {
     rv.bind_layer(1)
     rv.draw_text(ufmt.tprintf("press space to restart\ntex: %v\nfill: %v", state.tex_index, state.fill), {10, 10, 0})
 
+    rv.draw_counter(.CPU_Frame_Ns, {20, 200, 0.1}, scale = 2, unit = 1e-6, col = rv.GREEN)
+
     rv.upload_gpu_layers()
-    rv.render_gpu_layer(0, clear_color = rv.DARK_GREEN.rgb * 0.5, clear_depth = true)
-    rv.render_gpu_layer(1, clear_color = nil, clear_depth = false)
+    rv.render_gpu_layer(0, clear_color = rv.DARK_BLUE.rgb * 0.5, clear_depth = true)
+    rv.render_gpu_layer(1, clear_color = nil, clear_depth = true)
 
     return state
 }
-
-@(rodata)
-life_hlsl := `
-Texture2D<float4> src : register(t0);
-RWTexture2D<float4> dst : register(u0);
-
-[numthreads(8, 8, 1)]
-void cs_main(int3 did : SV_DispatchThreadID) {
-    float curr = src[did.xy].r;
-    int neighbors = 0;
-    neighbors += src[did.xy + int2(-1, -1)].r > 0 ? 1 : 0;
-    neighbors += src[did.xy + int2( 0, -1)].r > 0 ? 1 : 0;
-    neighbors += src[did.xy + int2( 1, -1)].r > 0 ? 1 : 0;
-    neighbors += src[did.xy + int2(-1,  0)].r > 0 ? 1 : 0;
-    neighbors += src[did.xy + int2( 1,  0)].r > 0 ? 1 : 0;
-    neighbors += src[did.xy + int2(-1,  1)].r > 0 ? 1 : 0;
-    neighbors += src[did.xy + int2( 0,  1)].r > 0 ? 1 : 0;
-    neighbors += src[did.xy + int2( 1,  1)].r > 0 ? 1 : 0;
-
-    if (curr > 0.5) {
-        if (neighbors < 2 || neighbors > 3) {
-            curr = 0.0f;
-        }
-    } else {
-        if (neighbors == 3) {
-            curr = 1.0f;
-        }
-    }
-
-    dst[did.xy] = curr.xxxx;
-}
-`
