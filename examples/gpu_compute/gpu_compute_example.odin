@@ -5,6 +5,7 @@ import "core:math/rand"
 import "core:math/linalg"
 import rv "../.."
 import "../../gpu"
+import "../../base"
 import "../../base/ufmt"
 import "../../shader_compiler"
 

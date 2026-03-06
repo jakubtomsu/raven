@@ -68,7 +68,7 @@ _init :: proc() {
 
     NUM_QUADS :: TERRAIN_SIZE * TERRAIN_SIZE
 
-    verts := make([]rv.Mesh_Vertex, NUM_QUADS * 6 , context.temp_allocator)
+    verts := make([]rv.Vertex, NUM_QUADS * 6 , context.temp_allocator)
     inds  := make([]rv.Vertex_Index, NUM_QUADS * 6, context.temp_allocator)
 
     for &ind, i in inds {
@@ -83,12 +83,12 @@ _init :: proc() {
             _tri(verts[index * 6 + 0:], {{x + 0, y + 0}, {x + 1, y + 0}, {x + 0, y + 1}})
             _tri(verts[index * 6 + 3:], {{x + 1, y + 1}, {x + 0, y + 1}, {x + 1, y + 0}})
 
-            _tri :: proc(verts: []rv.Mesh_Vertex, coords: [3][2]i32) {
+            _tri :: proc(verts: []rv.Vertex, coords: [3][2]i32) {
                 for coord, i in coords {
                     height := f32(state.terrain[coord.x][coord.y])
-                    verts[i] = rv.Mesh_Vertex{
+                    verts[i] = rv.Vertex{
                         pos = {f32(coord.x), height, f32(coord.y)},
-                        color = u8(rv.remap_clamped(height, 0, 10, 0, 200)),
+                        col = u8(rv.remap_clamped(height, 0, 10, 0, 200)),
                         uv = rv.Vec2{f32(coord.x), f32(coord.y)} / 16.0,
                     }
                     verts[i].pos.xz -= TERRAIN_SIZE * 0.5
