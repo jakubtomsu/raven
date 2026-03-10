@@ -2,6 +2,8 @@
 package raven_audio
 
 import "../base"
+import "qoa"
+
 import "base:intrinsics"
 
 // TODO: sound fading
@@ -44,6 +46,7 @@ _state: ^State
 
 State :: struct #align(64) {
     using native:       _State,
+    running:            bool,
 
     groups_used:        bit_set[0..<64],
     groups:             [MAX_GROUPS]Group,
@@ -123,6 +126,8 @@ init :: proc(state: ^State) -> bool {
     _state.groups_used += {0}
     base.bit_pool_set_1(&_state.resources_used, 0)
     base.bit_pool_set_1(&_state.sounds_used, 0)
+
+    _state.running = true
 
     if !_init() {
         return false
@@ -466,4 +471,13 @@ set_group_delay_dry :: proc(handle: Group_Handle, dry: f32) {
     if group, ok := get_internal_group(handle); ok && .Delay in group.filters {
         _set_group_delay_dry(group, dry)
     }
+}
+
+
+// MARK: Internal
+
+Mixer_Proc :: #type proc(buf: []f32, num_channels: int)
+
+_default_mixer_proc :: proc(buf: []f32, num_channels: int) {
+
 }
