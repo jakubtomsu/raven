@@ -252,6 +252,7 @@ State :: struct #align(64) {
     platform_state:             platform.State,
     gpu_state:                  gpu.State,
     audio_state:                audio.State,
+    shader_compiler_state:      shader_compiler.State,
 }
 
 Context_State :: struct {
@@ -276,11 +277,8 @@ Watched_Dir :: struct {
     watcher:    platform.File_Watcher,
 }
 
-Pixel_Shader :: distinct Shader
-Vertex_Shader :: distinct Shader
-Shader :: struct {
-    shader: gpu.Shader_Handle,
-}
+Pixel_Shader :: distinct gpu.Shader_Handle
+Vertex_Shader :: distinct gpu.Shader_Handle
 
 
 // Data Scope
@@ -829,6 +827,8 @@ init_state :: proc(allocator := context.allocator) {
         panic("Failed to initialize GPU")
     }
 
+    shader_compiler.init(&_state.shader_compiler_state)
+
     if ODIN_OS != .JS {
         assert(gpu.is_init_done())
         _post_gpu_init()
@@ -1328,26 +1328,24 @@ _load_builtin_assets :: proc() {
     default_vs: []byte
     default_ps: []byte
 
-    switch gpu.BACKEND {
-    case gpu.BACKEND_D3D11:
+    // switch gpu.BACKEND {
+    // case gpu.BACKEND_D3D11:
 
-        INCL :: #load("data/raven.hlsli", string)
+    default_sprite_vs = #load("data/default_sprite.vs.hlsl")
+    default_vs = #load("data/default.vs.hlsl")
+    default_ps = #load("data/default.ps.hlsl")
 
-        default_sprite_vs = transmute([]byte)(INCL + #load("data/default_sprite.vs.hlsl", string))
-        default_vs = transmute([]byte)(INCL + #load("data/default.vs.hlsl", string))
-        default_ps = transmute([]byte)(INCL + #load("data/default.ps.hlsl", string))
+    // case gpu.BACKEND_WGPU:
 
-    case gpu.BACKEND_WGPU:
+    //     INCL :: #load("data/raven.wgsl", string)
 
-        INCL :: #load("data/raven.wgsl", string)
+    //     default_sprite_vs = transmute([]byte)(INCL + #load("data/default_sprite.vs.wgsl", string))
+    //     default_vs = transmute([]byte)(INCL + #load("data/default.vs.wgsl", string))
+    //     default_ps = transmute([]byte)(INCL + #load("data/default.ps.wgsl", string))
 
-        default_sprite_vs = transmute([]byte)(INCL + #load("data/default_sprite.vs.wgsl", string))
-        default_vs = transmute([]byte)(INCL + #load("data/default.vs.wgsl", string))
-        default_ps = transmute([]byte)(INCL + #load("data/default.ps.wgsl", string))
-
-    case:
-        panic("GPU backend not supported or unknown")
-    }
+    // case:
+    //     panic("GPU backend not supported or unknown")
+    // }
 
     _state.builtin_vertex_shader = {
         .Default = create_vertex_shader("default", default_vs) or_else panic("Failed to load default vertex shader"),
@@ -2713,17 +2711,15 @@ _shader_include_proc :: proc(path: string, user: rawptr) -> (result: string, ok:
 }
 
 when gpu.BACKEND == gpu.BACKEND_D3D11 {
-    SHADER_COMPILER_TARGET :: shader_compiler.Target.D3D11
+    SHADER_COMPILER_TARGET :: shader_compiler.Target.DXIL
 } else when gpu.BACKEND == gpu.BACKEND_WGPU {
-    SHADER_COMPILER_TARGET :: shader_compiler.Target.WGPU
+    SHADER_COMPILER_TARGET :: shader_compiler.Target.WGSL
 } else {
     SHADER_COMPILER_TARGET :: shader_compiler.Target.Invalid
 }
 
 @(require_results)
 create_vertex_shader :: proc(name: string, data: []byte) -> (result: Vertex_Shader_Handle, ok: bool) {
-    shader: Vertex_Shader
-
     compiled := data
     when !RELEASE {
         compiled, ok = shader_compiler.compile(
@@ -2742,23 +2738,22 @@ create_vertex_shader :: proc(name: string, data: []byte) -> (result: Vertex_Shad
         }
     }
 
-    shader.shader, ok = gpu.create_shader(name, compiled, .Vertex)
+    shader: gpu.Shader_Handle
+    shader, ok = gpu.create_shader(name, compiled, .Vertex)
 
     if !ok {
-        base.log_err("RV: Failed to create vertex shader")
+        base.log_err("Failed to create vertex shader")
         return
     }
 
     // TODO: if this fails the shader gets leaked.
     // TODO: fix for ALL table inserts, including rscn loading and custom mesh creation etc.
-    return insert_vertex_shader_by_name(name, shader)
+    return insert_vertex_shader_by_name(name, Vertex_Shader(shader))
 }
 
 
 @(require_results)
 create_pixel_shader :: proc(name: string, data: []byte) -> (result: Pixel_Shader_Handle, ok: bool) {
-    shader: Pixel_Shader
-
     compiled := data
     when !RELEASE {
         compiled, ok = shader_compiler.compile(
@@ -2777,14 +2772,15 @@ create_pixel_shader :: proc(name: string, data: []byte) -> (result: Pixel_Shader
         }
     }
 
-    shader.shader, ok = gpu.create_shader(name, compiled, .Pixel)
+    shader: gpu.Shader_Handle
+    shader, ok = gpu.create_shader(name, compiled, .Pixel)
 
     if !ok {
-        base.log_err("RV: Failed to create pixel shader")
+        base.log_err("Failed to create pixel shader")
         return
     }
 
-    return insert_pixel_shader_by_name(name, shader)
+    return insert_pixel_shader_by_name(name, Pixel_Shader(shader))
 }
 
 
@@ -4655,8 +4651,8 @@ _gpu_pipeline_desc_apply_draw_key :: proc(pip_desc: ^gpu.Pipeline_Desc, key: Dra
     pip_desc.cull, pip_desc.fill = _gpu_fill_mode(key.fill)
     pip_desc.depth_comparison = key.depth_test ? .Greater_Equal : .Always
     pip_desc.depth_write = key.depth_write
-    pip_desc.ps = _state.pixel_shaders[key.ps].shader
-    pip_desc.vs = _state.vertex_shaders[key.vs].shader
+    pip_desc.ps = gpu.Shader_Handle(_state.pixel_shaders[key.ps])
+    pip_desc.vs = gpu.Shader_Handle(_state.vertex_shaders[key.vs])
 
     tex_res: gpu.Resource_Handle
     switch key.texture_mode {

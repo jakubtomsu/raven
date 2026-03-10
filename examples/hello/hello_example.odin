@@ -45,7 +45,7 @@ _update :: proc(_: rawptr) -> rawptr {
     // To actually display it on the screen you must first upload it to the GPU, and then
     // explicily render each layer into a particular render texture.
     rv.upload_gpu_layers()
-    rv.render_gpu_layer(0, rv.DEFAULT_RENDER_TEXTURE, clear_color = rv.DARK_BLUE.rgb, clear_depth = true)
+    rv.render_gpu_layer(0, clear_color = rv.DARK_BLUE.rgb, clear_depth = true)
 
     return nil
 }

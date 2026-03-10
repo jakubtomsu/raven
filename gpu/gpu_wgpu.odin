@@ -368,16 +368,14 @@ when BACKEND == BACKEND_WGPU {
         layout_entries: [SAMPLER_BIND_SLOTS + CONSTANTS_BIND_SLOTS + RESOURCE_BIND_SLOTS]wgpu.BindGroupLayoutEntry
         group_entries:  [SAMPLER_BIND_SLOTS + CONSTANTS_BIND_SLOTS + RESOURCE_BIND_SLOTS]wgpu.BindGroupEntry
 
-        bind_base := 0
-
         for smp, i in desc.samplers {
             sampler := _get_or_create_sampler(smp)
 
-            binding := u32(bind_base + i)
+            binding := u32(SAMPLER_SLOT_SHIFT + i)
 
             layout_entries[num_entries] = wgpu.BindGroupLayoutEntry{
                 binding = binding,
-                visibility = wgpu.ShaderStageFlags{.Vertex, .Fragment},
+                visibility = wgpu.ShaderStageFlags{.Vertex, .Fragment, .Compute},
                 sampler = wgpu.SamplerBindingLayout{
                     // NOTE: must use loads, not samples for non-filterable textures.
                     type = .Filtering,
@@ -392,18 +390,16 @@ when BACKEND == BACKEND_WGPU {
             num_entries += 1
         }
 
-        bind_base += len(desc.samplers)
-
         for handle, i in desc.constants {
             res := get_internal_resource(handle) or_continue
 
             assert(res.kind == .Constants)
 
-            binding := u32(bind_base + i)
+            binding := u32(CONSTANTS_SLOT_SHIFT + i)
 
             layout_entries[num_entries] = wgpu.BindGroupLayoutEntry{
                 binding = binding,
-                visibility = wgpu.ShaderStageFlags{.Vertex, .Fragment},
+                visibility = wgpu.ShaderStageFlags{.Vertex, .Fragment, .Compute},
                 buffer = wgpu.BufferBindingLayout{
                     type = wgpu.BufferBindingType.Uniform,
                     hasDynamicOffset = res.size.y > 1,
@@ -421,16 +417,14 @@ when BACKEND == BACKEND_WGPU {
             num_entries += 1
         }
 
-        bind_base += len(desc.constants)
-
         for handle, i in desc.resources {
             res := get_internal_resource(handle) or_continue
 
-            binding := u32(bind_base + i)
+            binding := u32(RESOURCE_SLOT_SHIFT + i)
 
             layout_entries[num_entries] = wgpu.BindGroupLayoutEntry{
                 binding = binding,
-                visibility = wgpu.ShaderStageFlags{.Vertex, .Fragment},
+                visibility = wgpu.ShaderStageFlags{.Vertex, .Fragment, .Compute},
             }
 
             group_entries[num_entries] = wgpu.BindGroupEntry{
@@ -469,6 +463,59 @@ when BACKEND == BACKEND_WGPU {
                     sampleType = wgpu.TextureSampleType.Float,
                     viewDimension = dim,
                     multisampled = false,
+                }
+
+                group_entries[num_entries].textureView = res.tex_view
+            }
+
+            num_entries += 1
+        }
+
+        for handle, i in desc.rw_resources {
+            res := get_internal_resource(handle) or_continue
+
+            binding := u32(RW_RESOURCE_SLOT_SHIFT + i)
+
+            layout_entries[num_entries] = wgpu.BindGroupLayoutEntry{
+                binding = binding,
+                visibility = wgpu.ShaderStageFlags{.Compute}, // NOTE: Compute only RW resources for now
+            }
+
+            group_entries[num_entries] = wgpu.BindGroupEntry{
+                binding = binding,
+            }
+
+            switch res.kind {
+            case .Invalid, .Constants, .Index_Buffer, .Swapchain:
+                assert(false)
+
+            case .Buffer:
+                layout_entries[num_entries].buffer = wgpu.BufferBindingLayout{
+                    type = .Storage,
+                    hasDynamicOffset = false,
+                    minBindingSize = 0,
+                }
+
+                assert(res.size.x % 4 == 0)
+
+                group_entries[num_entries].size = u64(res.size.x)
+                group_entries[num_entries].buffer = res.buf
+
+            case .Texture2D, .Texture3D:
+                dim: wgpu.TextureViewDimension
+
+                if res.kind == .Texture3D {
+                    dim = ._3D
+                } else if res.size.z > 1 {
+                    dim = ._2DArray
+                } else {
+                    dim = ._2DArray
+                }
+
+                layout_entries[num_entries].storageTexture = wgpu.StorageTextureBindingLayout{
+                    access = .ReadWrite,
+                    format = _wgpu_texture_format(res.format),
+                    viewDimension = dim,
                 }
 
                 group_entries[num_entries].textureView = res.tex_view

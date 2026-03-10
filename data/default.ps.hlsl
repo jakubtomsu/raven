@@ -1,3 +1,5 @@
+#include "raven.hlsli"
+
 Texture2DArray tex : register(t2);
 SamplerState smp : register(s0);
 
