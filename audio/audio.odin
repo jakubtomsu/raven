@@ -2,17 +2,14 @@
 package raven_audio
 
 import "../base"
-import "qoa"
-
 import "base:intrinsics"
+import "base:runtime"
+// import "qoa"
 
 // TODO: sound fading
 // TODO: sound trim range for dynamically chopping big sounds
 
 BACKEND :: #config(AUDIO_BACKEND, BACKEND_DEFAULT)
-
-BACKEND_NONE :: "None"
-BACKEND_MINIAUDIO :: "miniaudio"
 
 when ODIN_OS == .JS {
     // TODO: js audio
@@ -47,6 +44,7 @@ _state: ^State
 State :: struct #align(64) {
     using native:       _State,
     running:            bool,
+    init_context:       runtime.Context,
 
     groups_used:        bit_set[0..<64],
     groups:             [MAX_GROUPS]Group,
@@ -127,6 +125,7 @@ init :: proc(state: ^State) -> bool {
     base.bit_pool_set_1(&_state.resources_used, 0)
     base.bit_pool_set_1(&_state.sounds_used, 0)
 
+    _state.init_context = context
     _state.running = true
 
     if !_init() {

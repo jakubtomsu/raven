@@ -3,6 +3,8 @@
 // All procedures must be a no-op.
 package raven_audio
 
+BACKEND_NONE :: "None"
+
 when BACKEND == BACKEND_NONE {
     _State :: struct {}
     _Sound :: struct {}

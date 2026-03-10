@@ -1,0 +1,18 @@
+rscn
+ver 0 1
+img 0
+msh 1 5 828 1055 228
+spl 0 4865 0
+obj 1
+
+# Blender 5.0.0
+
+@imgs
+
+@mshs
+Cube 2088 552 0 0
+
+@spls
+
+@objs
+msh 0 Cube -1 -1 [0 0 0] [1 0 0 0 1 0 0 0 1]

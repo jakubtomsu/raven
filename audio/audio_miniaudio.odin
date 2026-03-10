@@ -9,6 +9,8 @@ import ma "vendor:miniaudio"
 _ :: ma
 _ :: base
 
+BACKEND_MINIAUDIO :: "miniaudio"
+
 when BACKEND == BACKEND_MINIAUDIO {
 
     _State :: struct {

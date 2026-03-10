@@ -40,27 +40,27 @@ encodes 20 samples of audio data.
 All values, including the slices, are big endian. The file layout is as follows:
 
 struct {
-	struct {
-		char     magic[4];         // magic bytes "qoaf"
-		uint32_t samples;          // samples per channel in this file
-	} file_header;
+    struct {
+        char     magic[4];         // magic bytes "qoaf"
+        uint32_t samples;          // samples per channel in this file
+    } file_header;
 
-	struct {
-		struct {
-			uint8_t  num_channels; // no. of channels
-			uint24_t sample_rate;   // sample_rate in hz
-			uint16_t fsamples;     // samples per channel in this frame
-			uint16_t fsize;        // frame size (includes this header)
-		} frame_header;
+    struct {
+        struct {
+            uint8_t  num_channels; // no. of channels
+            uint24_t sample_rate;   // sample_rate in hz
+            uint16_t fsamples;     // samples per channel in this frame
+            uint16_t fsize;        // frame size (includes this header)
+        } frame_header;
 
-		struct {
-			int16_t history[4];    // most recent last
-			int16_t weights[4];    // most recent last
-		} lms_state[num_channels];
+        struct {
+            int16_t history[4];    // most recent last
+            int16_t weights[4];    // most recent last
+        } lms_state[num_channels];
 
-		qoa_slice_t slices[256][num_channels];
+        qoa_slice_t slices[256][num_channels];
 
-	} frames[ceil(samples / (256 * 20))];
+    } frames[ceil(samples / (256 * 20))];
 } qoa_file_t;
 
 Each `qoa_slice_t` contains a quantized scalefactor `sf_quant` and 20 quantized
@@ -98,14 +98,14 @@ number of samples.
 A decoder should support at least 8 channels. The channel layout for channel
 counts 1 .. 8 is:
 
-	1. Mono
-	2. L, R
-	3. L, R, C
-	4. FL, FR, B/SL, B/SR
-	5. FL, FR, C, B/SL, B/SR
-	6. FL, FR, C, LFE, B/SL, B/SR
-	7. FL, FR, C, LFE, B, SL, SR
-	8. FL, FR, C, LFE, BL, BR, SL, SR
+    1. Mono
+    2. L, R
+    3. L, R, C
+    4. FL, FR, B/SL, B/SR
+    5. FL, FR, C, B/SL, B/SR
+    6. FL, FR, C, LFE, B/SL, B/SR
+    7. FL, FR, C, LFE, B, SL, SR
+    8. FL, FR, C, LFE, BL, BR, SL, SR
 
 QOA predicts each audio sample based on the previously decoded ones using a
 "Sign-Sign Least Mean Squares Filter" (LMS). This prediction plus the

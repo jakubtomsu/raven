@@ -296,10 +296,14 @@ def export_rscn(context):
             elems.append(f"msh {mesh_index} ")
         elif obj.type == 'CURVE':
             elems.append(f"spl ")
+        else:
+            continue
 
         parent_index = -1
         if obj.parent != None:
-            parent_index = obj_table[norm_name(obj.parent.name)]
+            parent_name = norm_name(obj.parent.name)
+            if parent_name in obj_table:
+                parent_index = obj_table[parent_name]
 
         tex = -1
         if obj.active_material:

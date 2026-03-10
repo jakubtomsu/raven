@@ -13,7 +13,7 @@ decode :: proc(data: []byte, allocator := context.allocator) -> (desc: Desc, res
 
     desc, ok = decode_header(&buf)
     if !ok {
-		log(.Error, "QOA: Failed to decode header")
+        log(.Error, "QOA: Failed to decode header")
         return {}, nil, false
     }
 
@@ -41,7 +41,7 @@ decode :: proc(data: []byte, allocator := context.allocator) -> (desc: Desc, res
 
 decode_header :: proc(buf: ^Buffer) -> (desc: Desc, ok: bool) {
     if len(buf.data[buf.offs:]) < MIN_FILESIZE {
-		log(.Error, "QOA: Input buffer is too small to decode a header")
+        log(.Error, "QOA: Input buffer is too small to decode a header")
         return {}, false
     }
 
@@ -50,13 +50,13 @@ decode_header :: proc(buf: ^Buffer) -> (desc: Desc, ok: bool) {
     file_header := read_u64(buf)
 
     if u32(file_header >> 32) != MAGIC {
-		log(.Error, "QOA: Header magic mismatch")
+        log(.Error, "QOA: Header magic mismatch")
         return {}, false
     }
 
     desc.samples = u32(file_header & 0xffffffff)
     if desc.samples == 0 {
-		log(.Error, "QOA: Streaming not supported")
+        log(.Error, "QOA: Streaming not supported")
         return {}, false
     }
 
@@ -67,7 +67,7 @@ decode_header :: proc(buf: ^Buffer) -> (desc: Desc, ok: bool) {
     desc.sample_rate = u32(frame_header >> 32) & 0xffffff
 
     if desc.num_channels == 0 || desc.samples == 0 || desc.sample_rate == 0 {
-		log(.Error, "QOA: Invalid header parameters")
+        log(.Error, "QOA: Invalid header parameters")
         return {}, false
     }
 
@@ -79,7 +79,7 @@ decode_header :: proc(buf: ^Buffer) -> (desc: Desc, ok: bool) {
 decode_frame :: proc(buf: ^Buffer, desc: ^Desc, sample_data: []i16) -> u32 {
     size := len(buf.data[buf.offs:])
     if u32(size) < 8 + LMS_LEN * 4 * desc.num_channels {
-		log(.Error, "QOA: Input buffer is too small to decode a frame")
+        log(.Error, "QOA: Input buffer is too small to decode a frame")
         return 0
     }
 
