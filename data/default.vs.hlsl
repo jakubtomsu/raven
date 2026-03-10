@@ -1,3 +1,5 @@
+#include "raven.hlsli"
+
 StructuredBuffer<Mesh_Inst> instances : register(t0);
 StructuredBuffer<Vertex> verts : register(t1);
 

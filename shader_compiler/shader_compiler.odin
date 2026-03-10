@@ -5,11 +5,10 @@ import "../base"
 
 import "base:runtime"
 
-
 Target :: enum u8 {
     Invalid = 0,
-    D3D11,
-    WGPU,
+    DXIL,
+    WGSL,
 }
 
 Stage :: enum u8 {
@@ -31,11 +30,23 @@ Options :: struct {
 
 Include_Proc :: #type proc (path: string, user: rawptr) -> (string, bool)
 
+_state: ^State
+
+State :: struct {
+    using _slang: _Slang_State,
+}
+
+init :: proc(state: ^State) {
+    _state = state
+    _slang_init()
+}
+
 compile :: proc(
     name:           string,
     source:         string,
     opts:           Options,
 ) -> (result: []byte, ok: bool) {
+    assert(_state != nil, "You must first call init()")
     assert(opts.target != .Invalid, "You must specify the target output format")
     assert(opts.stage != .Invalid, "You must specify the shader stage")
 
@@ -43,7 +54,7 @@ compile :: proc(
     case .Invalid:
         assert(false)
 
-    case .D3D11:
+    case .DXIL:
         when ODIN_OS == .Windows {
             result, ok = _compile_dxil(name, source, opts)
         } else {
@@ -51,11 +62,13 @@ compile :: proc(
             assert(false)
         }
 
-    case .WGPU:
+    case .WGSL:
         // TODO: Call slang/naga/dawn here...
-        base.log_err("WGSL transpilation is not supported yet.")
+        // base.log_err("WGSL transpilation is not supported yet.")
         // HACK: for now passthrough, assume WGPU input
-        return transmute([]byte)source, true
+        // return transmute([]byte)source, true
+
+        result, ok = _compile_slang_wgsl(name, source, opts)
     }
 
     return result, ok

@@ -25,6 +25,10 @@ log_debug :: proc(format: string, args: ..any, loc := #caller_location) {
     log(.Debug, format = format, args = args, loc = loc)
 }
 
+log_dump :: proc(arg: any, expr := #caller_expression(arg), loc := #caller_location) {
+    log(.Debug, format = "%s = %v", args = {expr, arg}, loc = loc)
+}
+
 
 log :: proc(level: Log_Level, format: string, args: ..any, loc := #caller_location) {
     logger := context.logger

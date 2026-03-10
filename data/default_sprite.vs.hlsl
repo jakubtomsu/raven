@@ -1,3 +1,5 @@
+#include "raven.hlsli"
+
 StructuredBuffer<Sprite_Inst> instances : register(t0);
 
 VS_Out vs_main(uint vid : SV_VertexID, uint inst_id : SV_InstanceID) {

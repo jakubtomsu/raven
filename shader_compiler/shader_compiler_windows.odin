@@ -126,7 +126,6 @@ _d3dcompiler_include_open ::  proc "system" (
         return transmute(d3d_compiler.HRESULT)u32(windows.E_FAIL)
     }
 
-
     result, ok := this.opts.include_proc(
         path = string(pFileName),
         user = this.opts.user,

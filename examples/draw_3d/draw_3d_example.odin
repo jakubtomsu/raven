@@ -55,7 +55,7 @@ _update :: proc(hot_state: rawptr) -> rawptr {
 
     delta := rv.get_delta_time()
 
-    // TODO: abstract basic flycam controls into a simple util?
+    // Flycam controls
 
     move: rv.Vec3
     if rv.key_down(.D) do move.x += 1

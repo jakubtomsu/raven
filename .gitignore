@@ -21,5 +21,10 @@
 !data/default.rscn
 !data/default.rscn.bin
 
+!shader_compiler/slang/slang.lib
+!shader_compiler/slang/slang-compiler.lib
+!slang.dll
+!slang-compiler.dll
+
 ols.json
 odinfmt.json

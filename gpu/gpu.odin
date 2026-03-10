@@ -46,9 +46,16 @@ MAX_DISPATCH_SIZE           :: 1024 * 16 // per dimension
 
 CONSTANTS_BIND_SLOTS :: 8
 SAMPLER_BIND_SLOTS :: 8
-RENDER_TEXTURE_BIND_SLOTS :: 4
 RESOURCE_BIND_SLOTS :: 32
 RW_RESOURCE_BIND_SLOTS :: 32
+
+// Used in APIs which don't have per-resource-type spaces like D3D11.
+SAMPLER_SLOT_SHIFT :: 0
+CONSTANTS_SLOT_SHIFT :: SAMPLER_SLOT_SHIFT + SAMPLER_BIND_SLOTS
+RESOURCE_SLOT_SHIFT :: CONSTANTS_SLOT_SHIFT + CONSTANTS_BIND_SLOTS
+RW_RESOURCE_SLOT_SHIFT :: RESOURCE_SLOT_SHIFT + RESOURCE_BIND_SLOTS
+
+RENDER_TEXTURE_BIND_SLOTS :: 4
 
 // If you ever hit the pipeline limit it's probably a good idea to investigate
 // *why* you have so many pipelines in the first place, before raising it.
