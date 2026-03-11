@@ -1,9 +1,10 @@
-#+vet explicit-allocators shadowing unused
+#+vet explicit-allocators shadowing
 package raven_audio
 
 import "../base"
 import "base:intrinsics"
 import "base:runtime"
+import "wav"
 // import "qoa"
 
 // TODO: sound fading
@@ -11,20 +12,14 @@ import "base:runtime"
 
 BACKEND :: #config(AUDIO_BACKEND, BACKEND_DEFAULT)
 
-when ODIN_OS == .JS {
-    // TODO: js audio
-    BACKEND_DEFAULT :: BACKEND_NONE
+when ODIN_OS == .Windows {
+    BACKEND_DEFAULT :: BACKEND_WASAPI
 } else {
-    BACKEND_DEFAULT :: BACKEND_MINIAUDIO
+    BACKEND_DEFAULT :: BACKEND_NONE
 }
 
-MAX_GROUPS :: #config(AUDIO_MAX_GROUPS, 16)
 MAX_SOUNDS :: #config(AUDIO_MAX_SOUNDS, 1024)
 MAX_RESOURCES :: #config(AUDIO_MAX_RESOURCE, 512)
-
-// TODO: custom generators
-
-#assert(MAX_GROUPS < 64)
 
 Handle_Index :: u16
 Handle_Gen :: u8
@@ -37,7 +32,6 @@ Handle :: struct {
 
 Resource_Handle :: distinct Handle
 Sound_Handle :: distinct Handle
-Group_Handle :: distinct Handle
 
 _state: ^State
 
@@ -45,9 +39,9 @@ State :: struct #align(64) {
     using native:       _State,
     running:            bool,
     init_context:       runtime.Context,
+    sample_rate:        u32,
 
-    groups_used:        bit_set[0..<64],
-    groups:             [MAX_GROUPS]Group,
+    mixer_proc:         Generator_Proc,
 
     resources_used:     base.Bit_Pool(MAX_RESOURCES),
     resources_gen:      [MAX_RESOURCES]Handle_Gen,
@@ -56,53 +50,66 @@ State :: struct #align(64) {
     sounds_used:        base.Bit_Pool(MAX_SOUNDS),
     sounds_gen:         [MAX_SOUNDS]Handle_Gen,
     sounds:             [MAX_SOUNDS]Sound,
-    sound_recycle:      i32,
 }
 
+Generator_Proc :: #type proc(buf: []f32, sample_rate: int)
 
 // Represents the sample data.
 Resource :: struct {
-    using native:   _Resource,
+    data:           []byte,
+    samples:        []byte,
+    data_format:    Resource_Format,
+    sample_format:  Resource_Format,
+    flags:          bit_set[Resource_Flag],
+    sample_rate:    u32, // hz
+}
+
+Resource_Flag :: enum u8 {
+    Mono,
+}
+
+Resource_Format :: enum u8 {
+    Invalid = 0,
+    Raw_F32,
+    Raw_I16,
+    Raw_U8,
+    WAV,
 }
 
 Sound :: struct {
-    using native:   _Sound,
+    time:           f64,
+    data_offset:    u32,
     resource:       Resource_Handle,
+    flags:          bit_set[Sound_Flag],
+    params:         [Sound_Param]Param_Data,
 }
 
-Group :: struct {
-    using native:   _Group,
-    gen:            u8,
-    filters:        bit_set[Filter_Kind],
-    delay:          Delay_Filter,
+Sound_Flag :: enum u8 {
+    Loop,
 }
 
-Filter_Kind :: enum u8 {
-    Delay,
+Sound_Param :: enum u8 {
+    Volume,
+    Pitch,
 }
 
-Delay_Filter :: struct {
-    using native:   _Delay_Filter,
+Param_Data :: struct {
+    val:    f32,
+    target: f32,
+    smooth: f32,
 }
 
-Pan_Mode :: enum u8 {
-    Balance = 0, // Does not blend one side with the other. Technically just a balance.
-    Pan, // A true pan. The sound from one side will "move" to the other side and blend with it.
+Listener :: struct {
+    param_val:      [Listener_Param]#simd[4]f32,
+    param_target:   [Listener_Param]#simd[4]f32,
+    param_smooth:   [Listener_Param]#simd[4]f32,
 }
 
-Sample_Format :: enum u8 {
-    F32,
-    I32,
-    I16,
-    U8,
+Listener_Param :: enum u8 {
+    Pos,
+    Vel,
+    Ear,
 }
-
-Units :: enum u8 {
-    Seconds,
-    Percentage,
-    Samples,
-}
-
 
 // MARK: Core
 
@@ -121,12 +128,13 @@ init :: proc(state: ^State) -> bool {
 
     _state = state
 
-    _state.groups_used += {0}
     base.bit_pool_set_1(&_state.resources_used, 0)
     base.bit_pool_set_1(&_state.sounds_used, 0)
 
     _state.init_context = context
     _state.running = true
+
+    set_mixer(default_mixer_generator_proc)
 
     if !_init() {
         return false
@@ -145,66 +153,26 @@ shutdown :: proc() {
     _state = nil
 }
 
-// Sample audio-thread time in nanoseconds
-get_global_time :: proc() -> u64 {
-    return _get_global_time()
-}
-
-get_output_sample_rate :: proc() -> u32 {
-    return _get_output_sample_rate()
-}
-
 // Call every frame from the main thread.
 // Low overhead, audio is in another thread.
 update :: proc() {
-    recycle_old_sounds()
 }
 
-// Called every update.
-recycle_old_sounds :: proc() {
-    recycle_set := transmute(bit_set[0..<64])_state.sounds_used.l1[_state.sound_recycle]
-
-    for i in 0..<64 {
-        if i not_in recycle_set {
-            continue
-        }
-
-        index := _state.sound_recycle * 64 + i32(i)
-        if index == 0 {
-            continue
-        }
-
-        sound := &_state.sounds[index]
-
-        handle := Sound_Handle{
-            Handle_Index(index),
-            _state.sounds_gen[index],
-        }
-
-        if _is_sound_finished(sound) {
-            // base.log(.Info, "Recycling sound %v", handle)
-            destr_ok := destroy_sound(handle)
-            assert(destr_ok)
-        }
-    }
-
-    _state.sound_recycle = (_state.sound_recycle + 1) %% len(_state.sounds_used.l1)
+set_mixer :: proc(mixer: Generator_Proc) {
+    intrinsics.atomic_store(&_state.mixer_proc, mixer)
 }
-
-find_unused_group_index :: proc() -> (bit: int, ok: bool) {
-    set := transmute(u64)_state.groups_used
-    first_unused := intrinsics.count_trailing_zeros(~set)
-    if first_unused == 64 {
-        return 0, false
-    }
-    return int(first_unused), true
-}
-
 
 
 // MARK: Sounds
 
-create_resource_encoded :: proc(data: []byte) -> (result: Resource_Handle, ok: bool) {
+create_resource :: proc(
+    format:         Resource_Format,
+    data:           []byte,
+    flags:          bit_set[Resource_Flag] = {},
+    sample_rate:    u32 = 0,
+) -> (result: Resource_Handle, ok: bool) {
+    assert(format != .Invalid)
+
     index := base.bit_pool_find_0(_state.resources_used) or_return
 
     result = {
@@ -213,27 +181,49 @@ create_resource_encoded :: proc(data: []byte) -> (result: Resource_Handle, ok: b
     }
 
     resource := &_state.resources[index]
-    resource^ = {}
-
-    _init_resource_encoded(resource, result, data) or_return
-
-    base.bit_pool_set_1(&_state.resources_used, index)
-
-    return result, true
-}
-
-create_resource_decoded :: proc(data: []byte, format: Sample_Format, stereo: bool, sample_rate: u32) -> (result: Resource_Handle, ok: bool) {
-    index := base.bit_pool_find_0(_state.resources_used) or_return
-
-    result = {
-        index = Handle_Index(index),
-        gen = _state.resources_gen[index],
+    resource^ = {
+        data = data,
+        data_format = format,
+        sample_rate = sample_rate,
+        flags = flags,
     }
 
-    resource := &_state.resources[index]
-    resource^ = {}
+    switch format {
+    case .Invalid:
+        assert(false)
+        return
 
-    _init_resource_decoded(resource, result, data = data, format = format, stereo = stereo, sample_rate = sample_rate) or_return
+    case .Raw_F32, .Raw_I16, .Raw_U8:
+        assert(sample_rate != 0)
+
+        resource.sample_format = format
+        resource.samples = data
+
+    case .WAV:
+        header, samples, header_ok := wav.decode(data, context.allocator)
+        if !header_ok {
+            return {}, false
+        }
+
+        resource.sample_format = .Raw_F32
+        resource.samples = to_bytes(samples)
+        resource.sample_rate = header.format.sample_rate
+
+        base.log_dump(header)
+
+        switch header.format.num_channels {
+        case 1: resource.flags += {.Mono}
+        case 2: resource.flags -= {.Mono}
+        case:
+            assert(false, "WAV files which don't have 1 or 2 channels aren't supported.")
+            return {}, false
+        }
+    }
+
+    base.log_dump(resource)
+
+    assert(resource.sample_rate != 0)
+    assert(resource.data_format != .Invalid)
 
     base.bit_pool_set_1(&_state.resources_used, index)
 
@@ -241,18 +231,21 @@ create_resource_decoded :: proc(data: []byte, format: Sample_Format, stereo: boo
 }
 
 // NOTE: created sound is stopped by default
-create_sound :: proc(resource_handle: Resource_Handle, group_handle: Group_Handle = {}, async_decode := false) -> (result: Sound_Handle, ok: bool) {
+create_sound :: proc(
+    resource_handle:    Resource_Handle,
+    flags:              bit_set[Sound_Flag] = {},
+) -> (result: Sound_Handle, ok: bool) {
     index := base.bit_pool_find_0(_state.sounds_used) or_return
 
     _, res_ok := get_internal_resource(resource_handle)
     assert(res_ok)
 
     sound := &_state.sounds[index]
-    sound^ = {}
-
-    _init_sound(sound, resource_handle, group_handle = group_handle, async_decode = async_decode) or_return
-
-    sound.resource = resource_handle
+    sound^ = {
+        resource = resource_handle,
+        data_offset = 0,
+        flags = flags,
+    }
 
     result = {
         index = Handle_Index(index),
@@ -265,95 +258,10 @@ create_sound :: proc(resource_handle: Resource_Handle, group_handle: Group_Handl
 }
 
 destroy_sound :: proc(handle: Sound_Handle) -> bool {
-    sound := get_internal_sound(handle) or_return
     assert(base.bit_pool_check_1(_state.sounds_used, handle.index))
-    _destroy_sound(sound)
     base.bit_pool_set_0(&_state.sounds_used, handle.index)
     _state.sounds_gen[handle.index] += 1
     return true
-}
-
-is_sound_playing :: proc(handle: Sound_Handle) -> bool {
-    if sound, ok := get_internal_sound(handle); ok {
-        return _is_sound_playing(sound)
-    }
-    return false
-}
-
-is_sound_finished :: proc(handle: Sound_Handle) -> bool {
-    if sound, ok := get_internal_sound(handle); ok {
-        return _is_sound_finished(sound)
-    }
-    return false
-}
-
-get_sound_time :: proc(handle: Sound_Handle, units: Units = .Seconds) -> f32 {
-    if sound, ok := get_internal_sound(handle); ok {
-        return _get_sound_time(sound, units)
-    }
-    return 0
-}
-
-set_sound_playing :: proc(handle: Sound_Handle, val: bool) {
-    if sound, ok := get_internal_sound(handle); ok {
-        _set_sound_playing(sound, val)
-    } else {
-        assert(false)
-    }
-}
-
-set_sound_looping :: proc(handle: Sound_Handle, val: bool) {
-    if sound, ok := get_internal_sound(handle); ok {
-        _set_sound_looping(sound, val)
-    }
-}
-
-set_sound_start_delay :: proc(handle: Sound_Handle, val: f32, units: Units = .Seconds) {
-    if sound, ok := get_internal_sound(handle); ok {
-        _set_sound_start_delay(sound, val, units)
-    }
-}
-
-set_sound_volume :: proc(handle: Sound_Handle, factor: f32) {
-    if sound, ok := get_internal_sound(handle); ok {
-        _set_sound_volume(sound, factor)
-    }
-}
-
-set_sound_pan :: proc(handle: Sound_Handle, pan: f32, mode: Pan_Mode = .Balance) {
-    if sound, ok := get_internal_sound(handle); ok {
-        _set_sound_pan(sound, pan, mode)
-    }
-}
-
-set_sound_pitch :: proc(handle: Sound_Handle, pitch: f32) {
-    if sound, ok := get_internal_sound(handle); ok {
-        _set_sound_pitch(sound, pitch)
-    }
-}
-
-set_sound_spatialization :: proc(handle: Sound_Handle, enabled: bool) {
-    if sound, ok := get_internal_sound(handle); ok {
-        _set_sound_spatialization(sound, enabled)
-    }
-}
-
-set_sound_position :: proc(handle: Sound_Handle, pos: [3]f32) {
-    if sound, ok := get_internal_sound(handle); ok {
-        _set_sound_position(sound, pos)
-    }
-}
-
-set_sound_direction :: proc(handle: Sound_Handle, dir: [3]f32) {
-    if sound, ok := get_internal_sound(handle); ok {
-        _set_sound_direction(sound, dir)
-    }
-}
-
-set_sound_velocity :: proc(handle: Sound_Handle, vel: [3]f32) {
-    if sound, ok := get_internal_sound(handle); ok {
-        _set_sound_velocity(sound, vel)
-    }
 }
 
 
@@ -383,100 +291,95 @@ get_internal_sound :: proc(handle: Sound_Handle) -> (^Sound, bool) {
     return sound, true
 }
 
-get_internal_group :: proc(handle: Group_Handle) -> (result: ^Group, ok: bool) {
-    if handle.index <= 0 || handle.index >= MAX_GROUPS {
-        return nil, false
-    }
-
-    group := &_state.groups[handle.index]
-    if group.gen != handle.gen {
-        return nil, false
-    }
-
-    return group, true
-}
-
-
-
-// MARK: Group
-
-create_group :: proc(parent_handle: Group_Handle = {}, delay: f32 = 0) -> Group_Handle {
-    index, ok := find_unused_group_index()
-    if !ok {
-        return {}
-    }
-
-    group := &_state.groups[index]
-    gen := group.gen
-    group^ = {}
-    group.gen = gen
-
-    _init_group(group, parent_handle, delay)
-    _state.groups_used += {index}
-
-    return {
-        index = Handle_Index(index),
-        gen = gen,
-    }
-}
-
-destroy_group :: proc(handle: Group_Handle) {
-    if group, ok := get_internal_group(handle); ok {
-        _destroy_group(group)
-        group.gen += 1
-        _state.groups_used -= {int(handle.index)}
-    }
-}
-
-set_group_volume :: proc(handle: Group_Handle, factor: f32) {
-    if group, ok := get_internal_group(handle); ok {
-        _set_group_volume(group, factor)
-    }
-}
-
-set_group_pan :: proc(handle: Group_Handle, pan: f32, mode: Pan_Mode = .Pan) {
-    if group, ok := get_internal_group(handle); ok {
-        _set_group_pan(group, pan, mode)
-    }
-}
-
-set_group_pitch :: proc(handle: Group_Handle, pitch: f32) {
-    if group, ok := get_internal_group(handle); ok {
-        _set_group_pitch(group, pitch)
-    }
-}
-
-set_group_spatialization :: proc(handle: Group_Handle, enabled: bool) {
-    if group, ok := get_internal_group(handle); ok {
-        _set_group_spatialization(group, enabled)
-    }
-}
-
-set_group_delay_decay :: proc(handle: Group_Handle, decay: f32) {
-    if group, ok := get_internal_group(handle); ok && .Delay in group.filters {
-        _set_group_delay_decay(group, decay)
-    }
-}
-
-// wet = the prorcessed signal
-set_group_delay_wet :: proc(handle: Group_Handle, wet: f32) {
-    if group, ok := get_internal_group(handle); ok && .Delay in group.filters {
-        _set_group_delay_wet(group, wet)
-    }
-}
-
-// dry = no postprocess on the signal
-set_group_delay_dry :: proc(handle: Group_Handle, dry: f32) {
-    if group, ok := get_internal_group(handle); ok && .Delay in group.filters {
-        _set_group_delay_dry(group, dry)
-    }
-}
-
 
 // MARK: Internal
 
-Mixer_Proc :: #type proc(buf: []f32, num_channels: int)
+default_mixer_generator_proc :: proc(buf: []f32, sample_rate: int) {
+    assert(len(buf) % 2 == 0)
 
-_default_mixer_proc :: proc(buf: []f32, num_channels: int) {
+    for sound_index in 1..<MAX_SOUNDS {
+        if !base.bit_pool_check_1(_state.sounds_used, sound_index) {
+            continue
+        }
 
+        sound := &_state.sounds[sound_index]
+
+        resource, resource_ok := get_internal_resource(sound.resource)
+        assert(resource_ok)
+
+        num_channels := .Mono in resource.flags ? 1 : 2
+
+        time := sound.time
+        delta := f64(resource.sample_rate) / f64(sample_rate)
+
+        num_frames := len(buf)
+
+        switch resource.sample_format {
+        case .Invalid, .WAV:
+            assert(false)
+
+        case .Raw_F32:
+            data := reinterpret_bytes(f32, resource.samples)
+
+            num_frames = min(len(buf), len(data) - (int(time) + len(buf) * (int(delta) + 1)))
+
+            if u32(sample_rate) > resource.sample_rate {
+                // Upsample - Interpolate.
+                // TODO: sinc interpolation
+
+                assert(delta < 1)
+
+                for i in 0..<num_frames {
+                    t := time + delta * f64(i)
+                    frame := int(time)
+                    fract := f32(time - f64(frame))
+                    val0 := data[(frame + 0)]
+                    val1 := data[(frame + 1)]
+                    val := val0 * (1 - fract) + val1 * fract
+                    buf[i / 2 + 0] += val
+                    buf[i / 2 + 1] += val
+                    time += delta
+                }
+
+            } else if u32(sample_rate) < resource.sample_rate {
+                // Downsample
+                // Dumb impl has aliasing issues.
+                // TODO: lowpass?
+
+                assert(delta > 1)
+
+                for i in 0..<num_frames {
+                    frame := int(time + delta * f64(i))
+                    buf[i] += data[frame]
+                }
+
+            } else {
+                // Fast direct path
+
+                for i in 0..<num_frames {
+                    buf[i] += data[i]
+                }
+                time += delta * f64(len(buf))
+            }
+
+        case .Raw_I16:
+
+        case .Raw_U8:
+        }
+
+        sound.time = time
+    }
+}
+
+
+@(require_results)
+reinterpret_bytes :: proc "contextless" ($T: typeid, bytes: []byte) -> []T {
+    n := len(bytes) / size_of(T)
+    assert_contextless(n * size_of(T) == len(bytes))
+    return ([^]T)(raw_data(bytes))[:n]
+}
+
+@(require_results)
+to_bytes :: proc "contextless" (data: []$T) -> []byte {
+    return (cast([^]byte)raw_data(data))[:size_of(T) * len(data)]
 }

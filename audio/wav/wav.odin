@@ -46,6 +46,20 @@ Format :: enum u16 {
     IEEE_754_Float = 3,
 }
 
+@(require_results)
+decode :: proc(data: []byte, allocator := context.allocator) -> (header: Header, samples: []f32, ok: bool) {
+    sample_bytes: []byte
+    header, sample_bytes, ok = decode_header(data)
+    if !ok {
+        log(.Error, "WAV: Failed to decode header")
+    }
+
+    samples = decode_samples(header.format, sample_bytes, allocator = allocator)
+
+    return header, samples, true
+}
+
+@(require_results)
 decode_header :: proc(data: []byte) -> (result: Header, result_data: []byte, ok: bool) {
     if len(data) < size_of(Header) {
         log(.Error, "WAV: Data is too small")
@@ -94,6 +108,7 @@ decode_header :: proc(data: []byte) -> (result: Header, result_data: []byte, ok:
     return result, result_data, ok
 }
 
+@(require_results)
 decode_samples :: proc(format: Format_Chunk, data: []byte, allocator := context.allocator) -> (result: []f32) {
     switch format.format {
     case .Invalid: fallthrough
@@ -153,6 +168,7 @@ decode_samples :: proc(format: Format_Chunk, data: []byte, allocator := context.
 @(require_results)
 reinterpret_bytes :: proc "contextless" ($T: typeid, bytes: []byte) -> []T {
     n := len(bytes) / size_of(T)
+    assert_contextless(n * size_of(T) == len(bytes))
     return ([^]T)(raw_data(bytes))[:n]
 }
 

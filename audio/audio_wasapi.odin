@@ -1,6 +1,7 @@
 #+build windows
 package raven_audio
 
+import "base:intrinsics"
 import "../base"
 
 import "wasapi"
@@ -21,51 +22,8 @@ when BACKEND == BACKEND_WASAPI {
 
     _Sound :: struct {}
     _Resource :: struct {}
-    _Group :: struct {}
-    _Delay_Filter :: struct {}
 
     _shutdown :: proc() {}
-
-    @(require_results) _get_global_time :: proc() -> u64 { return 0 }
-    @(require_results) _get_output_sample_rate :: proc() -> u32 { return 0 }
-    _set_listener_transform :: proc(pos: [3]f32, forw: [3]f32, vel: [3]f32) {}
-
-    /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-    // MARK: Sound
-    //
-
-    @(require_results) _init_resource_decoded :: proc(resource: ^Resource, handle: Resource_Handle, data: []byte, format: Sample_Format, stereo: bool, sample_rate: u32) -> bool { return true }
-    @(require_results) _init_resource_encoded :: proc(resource: ^Resource, handle: Resource_Handle,  data: []byte) -> bool { return true }
-    @(require_results) _init_sound :: proc(sound: ^Sound, resource_handle: Resource_Handle, async_decode: bool, group_handle: Group_Handle) -> bool { return true }
-    @(require_results) _is_sound_playing :: proc(sound: ^Sound) -> bool { return true }
-    @(require_results) _is_sound_finished :: proc(sound: ^Sound) -> bool { return true }
-    @(require_results) _get_sound_time :: proc(sound: ^Sound, units: Units) -> f32 { return 10000.0 }
-    _destroy_sound :: proc(sound: ^Sound) {}
-    _set_sound_volume :: proc(sound: ^Sound, factor: f32) {}
-    _set_sound_pan :: proc(sound: ^Sound, pan: f32, mode: Pan_Mode) {}
-    _set_sound_pitch :: proc(sound: ^Sound, pitch: f32) {}
-    _set_sound_spatialization :: proc(sound: ^Sound, enabled: bool) {}
-    _set_sound_position :: proc(sound: ^Sound, pos: [3]f32) {}
-    _set_sound_direction :: proc(sound: ^Sound, dir: [3]f32) {}
-    _set_sound_velocity :: proc(sound: ^Sound, vel: [3]f32) {}
-    _set_sound_playing :: proc(sound: ^Sound, play: bool) {}
-    _set_sound_looping :: proc(sound: ^Sound, val: bool) {}
-    _set_sound_start_delay :: proc(sound: ^Sound, val: f32, units: Units) {}
-
-
-    /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-    // MARK: Group
-    //
-
-    _init_group :: proc(group: ^Group, parent_handle: Group_Handle, delay: f32) {}
-    _destroy_group :: proc(group: ^Group) {}
-    _set_group_volume :: proc(group: ^Group, factor: f32) {}
-    _set_group_pan :: proc(group: ^Group, pan: f32, mode: Pan_Mode) {}
-    _set_group_pitch :: proc(group: ^Group, pitch: f32) {}
-    _set_group_spatialization :: proc(group: ^Group, enabled: bool) {}
-    _set_group_delay_decay :: proc(group: ^Group, decay: f32) {}
-    _set_group_delay_wet :: proc(group: ^Group, wet: f32) {}
-    _set_group_delay_dry :: proc(group: ^Group, dry: f32) {}
 
     @(require_results)
     _init :: proc() -> bool {
@@ -99,6 +57,8 @@ when BACKEND == BACKEND_WASAPI {
         format.dwChannelMask = {.FRONT_LEFT, .FRONT_RIGHT}
         format.SubFormat = wasapi.KSDATAFORMAT_SUBTYPE_IEEE_FLOAT
 
+        _state.sample_rate = u32(format.Format.nSamplesPerSec)
+
         buffer_duration: wasapi.REFERENCE_TIME = 1000000 / 10 // 100ms
         _wasapi_check(_state.audio_client->Initialize(
             .SHARED,
@@ -126,18 +86,19 @@ when BACKEND == BACKEND_WASAPI {
             lpThreadId            = nil,
         )
 
+
         if _state.thread == nil {
             base.log_err("Failed to create thread.")
             return false
         }
+
+        windows.SetThreadDescription(_state.thread, "Audio Thread")
 
         return true
     }
 
     _wasapi_thread_routine :: proc "system" (_: rawptr) -> windows.DWORD {
         context = _state.init_context
-
-        base.log_info("Audio Thread")
 
         phase: f32
 
@@ -157,15 +118,10 @@ when BACKEND == BACKEND_WASAPI {
             data_ptr: [^]byte
             _wasapi_check(_state.render_client->GetBuffer(frames_available, &data_ptr))
 
-            samples := cast([^]f32)data_ptr
+            sample_buf := (cast([^]f32)data_ptr)[:frames_available]
+            mixer_proc := intrinsics.atomic_load(&_state.mixer_proc)
 
-            for i in 0..<frames_available {
-                sample := f32(math.sin(phase))
-                samples[i * 2 + 0] = sample
-                samples[i * 2 + 1] = sample
-                phase += 2.0 * 3.1415 * 440.0 / 48000.0
-                if phase > 2.0 * 3.1415 do phase -= 2.0 * 3.1415
-            }
+            mixer_proc(sample_buf, sample_rate = int(_state.sample_rate))
 
             _wasapi_check(_state.render_client->ReleaseBuffer(frames_available, 0))
         }
