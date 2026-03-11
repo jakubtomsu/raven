@@ -26,8 +26,9 @@ main :: proc() {
         // audio.set_sound_playing(sound, true)
         // audio.set_sound_pitch(sound, 0.5 + f32(i) * 0.2)
 
-        // for audio.get_sound_time(sound, .Percentage) < 0.5 {
-            time.sleep(time.Millisecond * 1000)
-        // }
+        for _ in 0..<100 {
+            audio.update()
+            time.sleep(time.Millisecond * 10)
+        }
     }
 }

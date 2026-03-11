@@ -1,6 +1,7 @@
 #+vet explicit-allocators shadowing
 package raven_audio
 
+import "core:math"
 import "../base"
 import "base:intrinsics"
 import "base:runtime"
@@ -52,7 +53,7 @@ State :: struct #align(64) {
     sounds:             [MAX_SOUNDS]Sound,
 }
 
-Generator_Proc :: #type proc(buf: []f32, sample_rate: int)
+Generator_Proc :: #type proc(buf: [][2]f32, sample_rate: int)
 
 // Represents the sample data.
 Resource :: struct {
@@ -61,6 +62,7 @@ Resource :: struct {
     data_format:    Resource_Format,
     sample_format:  Resource_Format,
     flags:          bit_set[Resource_Flag],
+    sample_num:     u32,
     sample_rate:    u32, // hz
 }
 
@@ -77,7 +79,7 @@ Resource_Format :: enum u8 {
 }
 
 Sound :: struct {
-    time:           f64,
+    sample:         f64,
     data_offset:    u32,
     resource:       Resource_Handle,
     flags:          bit_set[Sound_Flag],
@@ -156,6 +158,23 @@ shutdown :: proc() {
 // Call every frame from the main thread.
 // Low overhead, audio is in another thread.
 update :: proc() {
+    for sound_index in 1..<MAX_SOUNDS {
+        if !base.bit_pool_check_1(_state.sounds_used, sound_index) {
+            continue
+        }
+
+        sound := &_state.sounds[sound_index]
+
+        resource, resource_ok := get_internal_resource(sound.resource)
+        assert(resource_ok)
+
+        // base.log_dump(sound.sample)
+        // base.log_dump(resource.sample_num)
+
+        if u32(sound.sample) >= resource.sample_num {
+            base.bit_pool_set_0(&_state.sounds_used, sound_index)
+        }
+    }
 }
 
 set_mixer :: proc(mixer: Generator_Proc) {
@@ -193,11 +212,26 @@ create_resource :: proc(
         assert(false)
         return
 
-    case .Raw_F32, .Raw_I16, .Raw_U8:
+    case .Raw_F32:
         assert(sample_rate != 0)
-
+        assert(len(data) % size_of(f32) == 0)
         resource.sample_format = format
         resource.samples = data
+        resource.sample_num = u32(len(data) / size_of(f32))
+
+    case .Raw_I16:
+        assert(sample_rate != 0)
+        assert(len(data) % size_of(f32) == 0)
+        resource.sample_format = format
+        resource.samples = data
+        resource.sample_num = u32(len(data) / size_of(i16))
+
+    case .Raw_U8:
+        assert(sample_rate != 0)
+        assert(len(data) % size_of(f32) == 0)
+        resource.sample_format = format
+        resource.samples = data
+        resource.sample_num = u32(len(data) / size_of(u8))
 
     case .WAV:
         header, samples, header_ok := wav.decode(data, context.allocator)
@@ -208,6 +242,7 @@ create_resource :: proc(
         resource.sample_format = .Raw_F32
         resource.samples = to_bytes(samples)
         resource.sample_rate = header.format.sample_rate
+        resource.sample_num = u32(len(samples)) / u32(header.format.num_channels)
 
         base.log_dump(header)
 
@@ -294,8 +329,10 @@ get_internal_sound :: proc(handle: Sound_Handle) -> (^Sound, bool) {
 
 // MARK: Internal
 
-default_mixer_generator_proc :: proc(buf: []f32, sample_rate: int) {
+default_mixer_generator_proc :: proc(buf: [][2]f32, sample_rate: int) {
     assert(len(buf) % 2 == 0)
+
+    base.log_info("Mix %i frames", len(buf))
 
     for sound_index in 1..<MAX_SOUNDS {
         if !base.bit_pool_check_1(_state.sounds_used, sound_index) {
@@ -309,10 +346,10 @@ default_mixer_generator_proc :: proc(buf: []f32, sample_rate: int) {
 
         num_channels := .Mono in resource.flags ? 1 : 2
 
-        time := sound.time
+        time := sound.sample
         delta := f64(resource.sample_rate) / f64(sample_rate)
 
-        num_frames := len(buf)
+        num_buf_frames := len(buf) / 2
 
         switch resource.sample_format {
         case .Invalid, .WAV:
@@ -321,53 +358,64 @@ default_mixer_generator_proc :: proc(buf: []f32, sample_rate: int) {
         case .Raw_F32:
             data := reinterpret_bytes(f32, resource.samples)
 
-            num_frames = min(len(buf), len(data) - (int(time) + len(buf) * (int(delta) + 1)))
+            num_data_frames := len(data) / num_channels
+            num_frames := min(num_buf_frames, num_data_frames - int(sound.sample))
 
-            if u32(sample_rate) > resource.sample_rate {
-                // Upsample - Interpolate.
-                // TODO: sinc interpolation
+            // base.log_dump(sound.sample)
 
-                assert(delta < 1)
+            // if u32(sample_rate) > resource.sample_rate {
+            //     // Upsample - Interpolate.
+            //     // TODO: sinc interpolation
+
+            //     assert(delta < 1)
+
+            //     for i in 0..<num_frames {
+            //         t := time + delta * f64(i)
+            //         frame := int(time)
+            //         // fract := f32(time - f64(frame))
+            //         // val0 := data[(frame + 0)]
+            //         // val1 := data[(frame + 1)]
+            //         // val := val0 * (1 - fract) + val1 * fract
+            //         val := data[frame * 2]
+            //         buf[i / 2 + 0] += val
+            //         buf[i / 2 + 1] += val
+            //         time += delta
+            //     }
+
+            // } else if u32(sample_rate) < resource.sample_rate {
+            //     // Downsample
+            //     // Dumb impl has aliasing issues.
+            //     // TODO: lowpass?
+
+            //     assert(delta > 1)
+
+            //     for i in 0..<num_frames {
+            //         frame := int(time + delta * f64(i))
+            //         buf[i] += data[frame]
+            //     }
+
+            // } else {
+            //     // Fast direct path
+                // assert(abs(delta - 1) < 1e-10)
 
                 for i in 0..<num_frames {
-                    t := time + delta * f64(i)
-                    frame := int(time)
-                    fract := f32(time - f64(frame))
-                    val0 := data[(frame + 0)]
-                    val1 := data[(frame + 1)]
-                    val := val0 * (1 - fract) + val1 * fract
-                    buf[i / 2 + 0] += val
-                    buf[i / 2 + 1] += val
-                    time += delta
+                    frame := int(time) + int(i)
+                    val := data[frame / 2]
+                    // val := math.sin_f32(math.PI * 2 * (f32(time) + f32(i)) * 0.05)
+                    // val := f32(i) / f32(num_frames)
+                    buf[i * 2 + 0] += val
+                    buf[i * 2 + 1] += val
                 }
+                time += f64(num_frames)
 
-            } else if u32(sample_rate) < resource.sample_rate {
-                // Downsample
-                // Dumb impl has aliasing issues.
-                // TODO: lowpass?
-
-                assert(delta > 1)
-
-                for i in 0..<num_frames {
-                    frame := int(time + delta * f64(i))
-                    buf[i] += data[frame]
-                }
-
-            } else {
-                // Fast direct path
-
-                for i in 0..<num_frames {
-                    buf[i] += data[i]
-                }
-                time += delta * f64(len(buf))
-            }
+            // }
 
         case .Raw_I16:
 
         case .Raw_U8:
         }
 
-        sound.time = time
+        sound.sample = time
     }
 }
 

@@ -46,6 +46,8 @@ when BACKEND == BACKEND_WASAPI {
         device_format: ^wasapi.WAVEFORMATEX
         _wasapi_check(_state.audio_client->GetMixFormat(&device_format))
 
+        base.log_dump(device_format^)
+
         // windows.CoTaskMemFree(device_format)
         SAMPLE_RATE :: 44100
 
@@ -59,7 +61,7 @@ when BACKEND == BACKEND_WASAPI {
 
         _state.sample_rate = u32(format.Format.nSamplesPerSec)
 
-        buffer_duration: wasapi.REFERENCE_TIME = 1000000 / 10 // 100ms
+        buffer_duration: wasapi.REFERENCE_TIME = 100000 / 10
         _wasapi_check(_state.audio_client->Initialize(
             .SHARED,
             u32(wasapi.AUDCLNT_FLAG.STREAM_EVENTCALLBACK),
@@ -118,8 +120,10 @@ when BACKEND == BACKEND_WASAPI {
             data_ptr: [^]byte
             _wasapi_check(_state.render_client->GetBuffer(frames_available, &data_ptr))
 
-            sample_buf := (cast([^]f32)data_ptr)[:frames_available]
+            sample_buf := (cast([^][2]f32)data_ptr)[:frames_available]
             mixer_proc := intrinsics.atomic_load(&_state.mixer_proc)
+
+            intrinsics.mem_zero(raw_data(sample_buf), len(sample_buf) * size_of([2]f32))
 
             mixer_proc(sample_buf, sample_rate = int(_state.sample_rate))
 
