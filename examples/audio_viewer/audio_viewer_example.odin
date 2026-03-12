@@ -1,5 +1,6 @@
 package raven_audio_viewer_example
 
+import "core:math/rand"
 import "core:math"
 import rv "../.."
 import "../../base"
@@ -11,6 +12,7 @@ import "../../audio/qoa"
 state: ^State
 
 file_data := #load("../data/snake_death_sound.wav")
+// file_data := #load("../data/162493__tasmanianpower__vinyl-rewind.wav")
 
 State :: struct {
     offset: f32,
@@ -38,11 +40,10 @@ _init :: proc() {
 
     header, wav_data, ok := wav.decode_header(file_data)
     assert(ok)
-    assert(header.format.bits_per_sample == 8)
     state.samples = wav.decode_samples(header.format, wav_data)
     assert(len(state.samples) > 0)
 
-    state.sound_res = rv.create_sound_resource_encoded("emerald", file_data) or_else panic("foo")
+    state.sound_res = rv.create_sound_resource_encoded("wave", file_data) or_else panic("foo")
     state.header = header
 }
 
@@ -106,10 +107,10 @@ _update :: proc(_: rawptr) -> rawptr {
     }
 
     if rv.key_pressed(.Space) {
-        state.sound = rv.play_sound(state.sound_res)
+        state.sound = rv.play_sound(state.sound_res, pitch = rand.float32_range(0.01, 2))
     }
 
-    smp := audio.get_sound_time(state.sound, .Samples)
+    smp := audio.get_sound_time(state.sound)
 
     rv.draw_sprite(
         {sample_to_pixel(smp), rv.get_screen_size().y * 0.5, 0.7},

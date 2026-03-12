@@ -154,7 +154,6 @@ decode_samples :: proc(format: Format_Chunk, data: []byte, allocator := context.
     case .IEEE_754_Float:
         switch format.bits_per_sample {
         case 32:
-            assert(len(data) % size_of(f32) == 0)
             return reinterpret_bytes(f32, data)
 
         case:

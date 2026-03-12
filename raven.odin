@@ -4907,7 +4907,7 @@ load_sound_resource :: proc(path: string) -> (result: Sound_Resource_Handle, ok:
 create_sound_resource_encoded :: proc(name: string, data: []byte) -> (result: Sound_Resource_Handle, ok: bool) #optional_ok {
     base.log_info("Creating sound resource '%s' with size %i bytes", name, len(data))
 
-    res := audio.create_resource_encoded(data) or_return
+    res := audio.create_resource(.WAV, data) or_return
 
     if !insert_sound_resource_by_hash(name, res) {
         // NOTE: currently this can continue running somewhat correctly, the result is valid.
@@ -4940,48 +4940,43 @@ play_sound :: proc(
     volume:         f32 = 1,
     pitch:          f32 = 1,
     pos:            Maybe([3]f32) = nil,
-    async_decode    := false,
 ) -> (result: audio.Sound_Handle, ok: bool) #optional_ok {
     validate(resource != {})
 
     // base.log_info("Playing sound %v", resource)
 
-    result, ok = audio.create_sound(resource_handle = resource, group_handle = {}, async_decode = async_decode)
+    result, ok = audio.create_sound(resource_handle = resource, pitch = pitch)
     if !ok {
         base.log_err("Failed to play sound", resource)
         return {}, false
     }
 
-    if delay > 0 {
-        audio.set_sound_start_delay(result, delay, .Seconds)
-    }
+    // if delay > 0 {
+    //     audio.set_sound_start_delay(result, delay, .Seconds)
+    // }
 
-    if start {
-        audio.set_sound_playing(result, start)
-    }
+    // if start {
+    //     audio.set_sound_playing(result, start)
+    // }
 
-    if loop {
-        audio.set_sound_looping(result, loop)
-    }
+    // if loop {
+    //     audio.set_sound_looping(result, loop)
+    // }
 
-    if volume != 1 {
-        audio.set_sound_volume(result, volume)
-    }
+    // if volume != 1 {
+    //     audio.set_sound_volume(result, volume)
+    // }
 
-    if pitch != 1 {
-        audio.set_sound_pitch(result, pitch)
-    }
+    // if pitch != 1 {
+    //     audio.set_sound_pitch(result, pitch)
+    // }
 
-    if p, p_ok := pos.?; p_ok {
-        audio.set_sound_spatialization(result, true)
-        audio.set_sound_position(result, p)
-    }
+    // if p, p_ok := pos.?; p_ok {
+    //     audio.set_sound_spatialization(result, true)
+    //     audio.set_sound_position(result, p)
+    // }
 
     return result, true
-}
-
-destroy_sound :: proc(handle: Sound_Handle) {
-    audio.destroy_sound(handle)
 }
 
 

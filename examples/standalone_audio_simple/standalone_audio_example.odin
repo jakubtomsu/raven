@@ -14,13 +14,15 @@ main :: proc() {
     assert(audio_ok)
     defer audio.shutdown()
 
-    res, res_ok := audio.create_resource(.WAV, #load("../data/snake_death_sound.wav"))
-    assert(res_ok)
+    res0, res0_ok := audio.create_resource(.WAV, #load("../data/snake_death_sound.wav"))
+    res1, res1_ok := audio.create_resource(.WAV, #load("../data/snake_powerup_sound.wav"))
+    assert(res0_ok)
+    assert(res1_ok)
 
     for i in 0..<10 {
         audio.update()
 
-        sound, sound_ok := audio.create_sound(res)
+        sound, sound_ok := audio.create_sound(i % 2 == 0 ? res0 : res1)
         assert(sound_ok)
         ufmt.eprintfln("Iter %i : %v", i, sound)
         // audio.set_sound_playing(sound, true)
