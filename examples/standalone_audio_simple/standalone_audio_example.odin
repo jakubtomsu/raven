@@ -19,6 +19,12 @@ main :: proc() {
     assert(res0_ok)
     assert(res1_ok)
 
+    audio.set_listener(
+        pos = 0,
+        forw = {0, 0, 1},
+        right = {1, 0, 0},
+    )
+
     for i in 0..<10 {
         audio.update()
 

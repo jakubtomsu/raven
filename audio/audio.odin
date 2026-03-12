@@ -1,6 +1,8 @@
 #+vet explicit-allocators shadowing
 package raven_audio
 
+// TODO: this package could be completely self contained, no base dependency.
+
 import "core:math"
 import "../base"
 import "base:intrinsics"
@@ -99,11 +101,11 @@ Sound :: struct {
     resource:       Resource_Handle,
     flags:          bit_set[Sound_Flag],
     playing:        bool,
-    pitch:          f32,
-    params:         [Sound_Param]Param_Data,
-    pos:            [3]f32,
-    pos_curr:       [3]f32,
-    pos_prev:       [3]f32,
+
+    volume:         Param(f32),
+    pan:            Param(f32),
+    pitch:          Param(f32),
+    pos:            Param([3]f32),
 }
 
 Sound_Flag :: enum u8 {
@@ -111,14 +113,10 @@ Sound_Flag :: enum u8 {
     Spatial,
 }
 
-Sound_Param :: enum u8 {
-    Volume,
-}
-
-Param_Data :: struct {
-    curr:   f32, // Written to only by the audio thread
-    target: f32,
-    delta: f32,
+Param :: struct($T: typeid) {
+    target: T, // Game thread
+    curr:   T, // Audio thread
+    delta:  f32, // Game thread
 }
 
 Listener :: struct {
@@ -188,6 +186,23 @@ set_master_mixer :: proc(mixer: Generator_Proc) {
     intrinsics.atomic_store(&_state.master_mixer_proc, mixer)
 }
 
+set_listener :: proc(
+    pos:   [3]f32,
+    forw:  [3]f32 = {0, 0, 1},
+    right: [3]f32 = {1, 0, 0},
+) {
+    // This write isn't atomic as a whole, which could possibly result in small glitches
+    // during very fast movement.
+    intrinsics.atomic_store_explicit(&_state.listener_curr.pos.x, pos.x, .Release)
+    intrinsics.atomic_store_explicit(&_state.listener_curr.pos.y, pos.y, .Release)
+    intrinsics.atomic_store_explicit(&_state.listener_curr.pos.z, pos.z, .Release)
+    intrinsics.atomic_store_explicit(&_state.listener_curr.forw.x, forw.x, .Release)
+    intrinsics.atomic_store_explicit(&_state.listener_curr.forw.y, forw.y, .Release)
+    intrinsics.atomic_store_explicit(&_state.listener_curr.forw.z, forw.z, .Release)
+    intrinsics.atomic_store_explicit(&_state.listener_curr.right.x, right.x, .Release)
+    intrinsics.atomic_store_explicit(&_state.listener_curr.right.y, right.y, .Release)
+    intrinsics.atomic_store_explicit(&_state.listener_curr.right.z, right.z, .Release)
+}
 
 
 // MARK: Sounds
@@ -286,6 +301,8 @@ create_sound :: proc(
     resource_handle:    Resource_Handle,
     flags:              bit_set[Sound_Flag] = {},
     pitch:              f32 = 1.0,
+    pan:                f32 = 0,
+    volume:             f32 = 1,
 ) -> (result: Sound_Handle, ok: bool) {
     index, index_ok := spsc_pop(&_state.sounds_free)
     if !index_ok {
@@ -307,14 +324,10 @@ create_sound :: proc(
     sound^ = {
         resource = resource_handle,
         flags = flags,
-        pitch = pitch,
+        pitch = {target = pitch, curr = pitch, delta = 1},
         end_frame = res.frame_num,
-        params = {
-            .Volume = {
-                curr = 1,
-                delta = -1,
-            },
-        }
+        volume = {target = volume, curr = volume, delta = 1},
+        pan = {target = pan, curr = pan, delta = 1},
     }
 
     intrinsics.atomic_store(&_state.sounds_state[index], .Used)
@@ -421,17 +434,17 @@ default_master_mixer :: proc(frame_buf: [][2]f32, frame_rate: int) {
         intrinsics.atomic_load_explicit(&_state.listener_curr.pos.z, .Acquire),
     }
 
-    listener_forw := normalize([3]f32{
+    listener_forw := [3]f32{
         intrinsics.atomic_load_explicit(&_state.listener_curr.forw.x, .Acquire),
         intrinsics.atomic_load_explicit(&_state.listener_curr.forw.y, .Acquire),
         intrinsics.atomic_load_explicit(&_state.listener_curr.forw.z, .Acquire),
-    })
+    }
 
-    listener_right := normalize([3]f32{
+    listener_right := [3]f32{
         intrinsics.atomic_load_explicit(&_state.listener_curr.right.x, .Acquire),
         intrinsics.atomic_load_explicit(&_state.listener_curr.right.y, .Acquire),
         intrinsics.atomic_load_explicit(&_state.listener_curr.right.z, .Acquire),
-    })
+    }
 
     _state.listener_prev = {
         pos = listener_pos,
@@ -476,7 +489,11 @@ default_master_mixer :: proc(frame_buf: [][2]f32, frame_rate: int) {
         // volume_delta := smooth_delta * intrinsics.atomic_load(&sound.params[.Volume].delta)
         // intrinsics.atomic_store(&sound.params[.Volume].curr, volume)
 
-        delta := sound.pitch * f32(resource.frame_rate) / f32(frame_rate)
+        delta_seconds := f32(resource.frame_rate) / f32(frame_rate)
+
+        pitch_range := update_param(&sound.pitch, delta_seconds)
+        volume_range := update_param(&sound.volume, delta_seconds)
+        pan_range := update_param(&sound.pan, delta_seconds)
 
         end_time := sample_base_signal(
             frame_buf = scratch,
@@ -484,8 +501,7 @@ default_master_mixer :: proc(frame_buf: [][2]f32, frame_rate: int) {
             sample_format = resource.sample_format,
             mono = .Mono in resource.flags,
             time = sound.frame,
-            delta_range = delta,
-            volume_range = 1,
+            delta_range = pitch_range * delta_seconds,
             loop = .Loop in sound.flags,
         )
 
@@ -495,8 +511,31 @@ default_master_mixer :: proc(frame_buf: [][2]f32, frame_rate: int) {
             destroy = true
         }
 
-        for s, i in scratch {
-            frame_buf[i] += s
+        inv_frames := 1.0 / f32(len(frame_buf))
+
+        for frame, i in scratch {
+            block_t := f32(i) * inv_frames
+            volume := lerp(volume_range[0], volume_range[1], block_t)
+            pan := lerp(pan_range[0], pan_range[1], block_t)
+
+            val := frame
+
+            val *= volume
+
+            // Pan/Balance:
+            // -1 = hard left, L=1, R=0
+            // 0 = center, L^2 + R^2 = ~1
+            // 1 = hard right, L=0, R=1
+            //
+            // Polynomial approximation
+            // https://www.desmos.com/calculator/rrnaswgquf
+
+            pan_half := pan * 0.5
+            val.x *= 1.0 - (pan_half + 0.5) * (pan_half + 0.5)
+            val.y *= 1.0 - (pan_half - 0.5) * (pan_half - 0.5)
+            val *= 1.0 / 1.06066017178 // sqrt(1.125)
+
+            frame_buf[i] += val
         }
 
         if destroy {
@@ -520,7 +559,6 @@ sample_base_signal :: proc(
     mono:           bool,
     time:           f64,
     delta_range:    [2]f32,
-    volume_range:   [2]f32,
     loop:           bool,
 ) -> f64 {
     time := time
@@ -534,25 +572,25 @@ sample_base_signal :: proc(
     case .Raw_F32:
         samples := reinterpret_bytes(f32, sample_bytes)
         if mono {
-            time = _sample_signal(f32, Mono = true, samples = samples, frame_buf = frame_buf, time = time, delta_range = delta_range, volume_range = volume_range, loop = loop)
+            time = _sample_signal(f32, Mono = true, samples = samples, frame_buf = frame_buf, time = time, delta_range = delta_range, loop = loop)
         } else {
-            time = _sample_signal(f32, Mono = false, samples = samples, frame_buf = frame_buf, time = time, delta_range = delta_range, volume_range = volume_range, loop = loop)
+            time = _sample_signal(f32, Mono = false, samples = samples, frame_buf = frame_buf, time = time, delta_range = delta_range, loop = loop)
         }
 
     case .Raw_I16:
         samples := reinterpret_bytes(i16, sample_bytes)
         if mono {
-            time = _sample_signal(i16, Mono = true, samples = samples, frame_buf = frame_buf, time = time, delta_range = delta_range, volume_range = volume_range, loop = loop)
+            time = _sample_signal(i16, Mono = true, samples = samples, frame_buf = frame_buf, time = time, delta_range = delta_range, loop = loop)
         } else {
-            time = _sample_signal(i16, Mono = false, samples = samples, frame_buf = frame_buf, time = time, delta_range = delta_range, volume_range = volume_range, loop = loop)
+            time = _sample_signal(i16, Mono = false, samples = samples, frame_buf = frame_buf, time = time, delta_range = delta_range, loop = loop)
         }
 
     case .Raw_U8:
         samples := reinterpret_bytes(u8, sample_bytes)
         if mono {
-            time = _sample_signal(u8, Mono = true, samples = samples, frame_buf = frame_buf, time = time, delta_range = delta_range, volume_range = volume_range, loop = loop)
+            time = _sample_signal(u8, Mono = true, samples = samples, frame_buf = frame_buf, time = time, delta_range = delta_range, loop = loop)
         } else {
-            time = _sample_signal(u8, Mono = false, samples = samples, frame_buf = frame_buf, time = time, delta_range = delta_range, volume_range = volume_range, loop = loop)
+            time = _sample_signal(u8, Mono = false, samples = samples, frame_buf = frame_buf, time = time, delta_range = delta_range, loop = loop)
         }
     }
 
@@ -566,7 +604,6 @@ sample_base_signal :: proc(
         frame_buf:      [][2]f32,
         time:           f64,
         delta_range:    [2]f32,
-        volume_range:   [2]f32,
         loop:           bool,
     ) -> f64 {
         time := time
@@ -600,16 +637,28 @@ sample_base_signal :: proc(
             }
 
             val := lerp(stereo[0], stereo[1], frame_t)
-
-            volume := lerp(volume_range[0], volume_range[1], block_t)
             delta := lerp(delta_range[0], delta_range[1], block_t)
 
-            frame_buf[i] += val * volume
+            frame_buf[i] += val
             time += f64(delta)
         }
 
         return time
     }
+}
+
+update_param :: proc(param: ^Param($T), delta: f32) -> (result: [2]T) {
+    target := intrinsics.atomic_load_explicit(&param.target, .Acquire)
+    param_delta := intrinsics.atomic_load_explicit(&param.delta, .Acquire)
+
+    result = {
+        param.curr,
+        move_towards(param.curr, target, param_delta * delta),
+    }
+
+    param.curr = result[1]
+
+    return result
 }
 
 unpack_sample_u8 :: proc(v: u8) -> f32 {
@@ -674,6 +723,12 @@ lerp :: proc "contextless" (a, b: $T, t: f32) -> T {
 }
 
 @(require_results)
+dot :: proc "contextless" (a, b: [3]f32) -> f32 {
+    ab := a * b
+    return ab.x + ab.y + ab.z
+}
+
+@(require_results)
 cross :: proc "contextless" (a, b: [3]f32) -> (c: [3]f32) {
     return a.yzx*b.zxy - b.yzx*a.zxy
 }
@@ -687,6 +742,32 @@ normalize :: proc "contextless" (v: [3]f32) -> [3]f32 {
     }
     return v / length
 }
+
+move_towards :: proc {
+    move_towards_f32,
+    move_towards_vec3,
+}
+
+@(require_results)
+move_towards_f32 :: proc "contextless" (val: f32, target: f32, delta: f32) -> f32 {
+    diff := target - val
+    if abs(diff) < delta {
+        return target
+    }
+    return val + (diff > 0 ? delta : -delta)
+}
+
+@(require_results)
+move_towards_vec3 :: proc "contextless" (val: [3]f32, target: [3]f32, delta: f32) -> [3]f32 {
+    diff := target - val
+    len2 := dot(diff, diff)
+    if len2 < delta * delta {
+        return target
+    }
+    dir := diff / intrinsics.sqrt(len2)
+    return val + dir * delta
+}
+
 
 @(require_results)
 reinterpret_bytes :: proc "contextless" ($T: typeid, bytes: []byte) -> []T {

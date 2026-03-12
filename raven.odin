@@ -4939,13 +4939,14 @@ play_sound :: proc(
     delay:          f32 = 0,
     volume:         f32 = 1,
     pitch:          f32 = 1,
+    pan:            f32 = 0,
     pos:            Maybe([3]f32) = nil,
 ) -> (result: audio.Sound_Handle, ok: bool) #optional_ok {
     validate(resource != {})
 
     // base.log_info("Playing sound %v", resource)
 
-    result, ok = audio.create_sound(resource_handle = resource, pitch = pitch)
+    result, ok = audio.create_sound(resource_handle = resource, pitch = pitch, pan = pan, volume = volume)
     if !ok {
         base.log_err("Failed to play sound", resource)
         return {}, false
