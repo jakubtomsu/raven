@@ -4958,6 +4958,9 @@ screen_to_world_ray :: proc(pos: Vec2, cam: Camera) -> Vec3 {
 // MARK: Sounds
 //
 
+// play sound
+create_sound :: audio.create_sound
+
 load_sound_resource :: proc(path: string) -> (result: Sound_Resource_Handle, ok: bool) #optional_ok {
     name := strip_path_name(path)
     // TODO: register the resource internally for hot-reload
@@ -4995,66 +4998,6 @@ insert_sound_resource_by_hash :: proc(name: string, handle: Sound_Resource_Handl
     index, _ := _table_insert_hash(&_state.sound_resources_hash, hash) or_return
     _state.sound_resources[index] = handle
     return true
-}
-
-play_sound :: proc(
-    resource:       Sound_Resource_Handle,
-    start           := true,
-    loop            := false,
-    delay:          f32 = 0,
-    volume:         f32 = 1,
-    pitch:          f32 = 1,
-    pan:            f32 = 0,
-    attenuation_range:  [2]f32 = {0.1, 100},
-    pos:            Maybe([3]f32) = nil,
-    flags:          bit_set[audio.Sound_Flag] = {},
-    doppler_factor: f32 = 1.0,
-) -> (result: audio.Sound_Handle, ok: bool) #optional_ok {
-    validate(resource != {})
-
-    // base.log_info("Playing sound %v", resource)
-
-    result, ok = audio.create_sound(
-        resource_handle = resource,
-        pitch = pitch,
-        pan = pan,
-        volume = volume,
-        attenuation_range = attenuation_range,
-        flags = flags,
-        doppler_factor = doppler_factor,
-    )
-
-    if !ok {
-        base.log_err("Failed to play sound", resource)
-        return {}, false
-    }
-
-    // if delay > 0 {
-    //     audio.set_sound_start_delay(result, delay, .Seconds)
-    // }
-
-    // if start {
-    //     audio.set_sound_playing(result, start)
-    // }
-
-    // if loop {
-    //     audio.set_sound_looping(result, loop)
-    // }
-
-    // if volume != 1 {
-    //     audio.set_sound_volume(result, volume)
-    // }
-
-    // if pitch != 1 {
-    //     audio.set_sound_pitch(result, pitch)
-    // }
-
-    // if p, p_ok := pos.?; p_ok {
-    //     audio.set_sound_spatialization(result, true)
-    //     audio.set_sound_position(result, p)
-    // }
-
-    return result, true
 }
 
 

@@ -28,7 +28,7 @@ main :: proc() {
     rv.run_main_loop(_module_desc)
 }
 
-ATTENUATION_RANGE :: [2]f32{1, 100}
+ATTENUATION_RANGE :: [2]f32{1, 40}
 
 _init :: proc() {
     state = new(State)
@@ -40,11 +40,14 @@ _init :: proc() {
     state.cam_pos = {1.5, 3, -8}
     state.cam_ang = {0.3, 0, 0}
 
-    state.res = rv.create_sound_resource_encoded("sound", #load("../data/snake_powerup_sound.wav"))
-    state.sound = rv.play_sound(state.res,
-        volume = 2,
+    // state.res = rv.create_sound_resource_encoded("sound", #load("../data/snake_powerup_sound.wav"))
+    state.res = rv.create_sound_resource_encoded("sound", #load("../data/snake_death_sound.wav"))
+    state.sound = rv.create_sound(state.res,
+        volume = 10,
         flags = {.Loop, .Spatial},
         attenuation_range = ATTENUATION_RANGE,
+        lowpass = 0.9,
+        // highpass = 0.9,
     )
 }
 
@@ -79,16 +82,18 @@ _update :: proc(hot_state: rawptr) -> rawptr {
     cam_rot := rv.euler_rot(state.cam_ang)
     mat := linalg.matrix3_from_quaternion_f32(cam_rot)
 
-    speed: f32 = 1.0
+    speed: f32 = 2.0
     if rv.key_down(.Left_Shift) {
         speed *= 10
     } else if rv.key_down(.Left_Control) {
         speed *= 0.1
     }
 
-    state.cam_pos += mat[0] * move.x * delta * speed
-    state.cam_pos += mat[2] * move.z * delta * speed
-    state.cam_pos.y += move.y * delta * speed
+    cam_vel: rv.Vec3
+    cam_vel += mat[0] * move.x * speed
+    cam_vel += mat[2] * move.z * speed
+    cam_vel.y += move.y * speed
+    state.cam_pos += cam_vel * delta
 
     rv.set_layer_params(0, rv.make_3d_perspective_camera(state.cam_pos, cam_rot))
     rv.set_layer_params(1, rv.make_screen_camera())
@@ -96,7 +101,7 @@ _update :: proc(hot_state: rawptr) -> rawptr {
     rv.bind_depth_test(true)
     rv.bind_depth_write(true)
 
-    audio.set_listener(state.cam_pos, mat[2], mat[0])
+    audio.set_listener(state.cam_pos, cam_vel, forw = mat[2], right = mat[0])
 
     sound_vel := math.cos_f32(rv.get_time()) * 20
     state.sound_x += sound_vel * delta
@@ -110,9 +115,6 @@ _update :: proc(hot_state: rawptr) -> rawptr {
         rv.bind_fill(.Front)
 
         rv.draw_line_grid(col = rv.WHITE * 0.7)
-
-        // rv.draw_mesh(rv.get_mesh("Disk"), {-3, 0, 0}, col = rv.YELLOW)
-        // rv.draw_mesh(rv.get_mesh("Plane"), {0, 0, 0}, col = rv.GREEN)
 
         rv.draw_mesh(rv.get_builtin_mesh(.Icosphere), sound_pos, scale = 0.5, col = rv.ORANGE)
         rv.draw_line_sphere(sound_pos, ATTENUATION_RANGE[0], rv.ORANGE * rv.fade(0.5))

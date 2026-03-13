@@ -104,12 +104,32 @@ Sound :: struct {
     attenuation_range:  [2]f32,
     doppler_factor:     f32,
 
+    // Linear gain.
+    //  0 = muted
+    //  1 = default
+    // >1 = louder
     volume:             Param(f32),
+    // -1 = hard left
+    //  0 = centered
+    //  1 = hard right
     pan:                Param(f32),
+    // Raw speed factor.
+    // Pitch of 2 will play the signal 2x faster.
     pitch:              Param(f32),
+    // Muffles the sound.
+    // Value of 0 means no filtering.
+    // Alpha factor value in 0..1 range. One-pole filter.
+    lowpass:            Param(f32),
+    // Sharpens the sound.
+    // Value of 0 means no filtering.
+    // Alpha factor value in 0..1 range. One-pole filter.
+    highpass:           Param(f32),
     pos:                Param([3]f32),
     vel_curr:           [3]f32,
     vel_prev:           [3]f32,
+
+    lpf_prev:            [2]f32,
+    hpf_prev:            [2]f32,
 }
 
 Sound_Flag :: enum u8 {
@@ -310,9 +330,11 @@ create_sound :: proc(
     pitch:              f32 = 1.0,
     pan:                f32 = 0,
     volume:             f32 = 1,
-    attenuation_range:  [2]f32 = {0.1, 10},
+    attenuation_range:  [2]f32 = {0.1, 100},
     doppler_factor:     f32 = 1.0,
-) -> (result: Sound_Handle, ok: bool) {
+    lowpass:            f32 = 0.0,
+    highpass:           f32 = 0.0,
+) -> (result: Sound_Handle, ok: bool) #optional_ok {
     index, index_ok := spsc_pop(&_state.sounds_free)
     if !index_ok {
         base.log_err("No free sound slots")
@@ -339,6 +361,8 @@ create_sound :: proc(
         pan = {target = pan, curr = pan, delta = 1},
         attenuation_range = attenuation_range,
         doppler_factor = doppler_factor,
+        lowpass = {target = lowpass, curr = lowpass, delta = 1},
+        highpass = {target = highpass, curr = highpass, delta = 1},
     }
 
     intrinsics.atomic_store(&_state.sounds_state[index], .Used)
@@ -362,7 +386,7 @@ destroy_sound :: proc(handle: Sound_Handle) -> bool {
     return true
 }
 
-get_sound_time :: proc(handle: Sound_Handle) -> f32 {
+get_sound_time :: proc(handle: Sound_Handle, unit: Unit = .Seconds) -> f32 {
     sound, ok := _get_sound(handle)
     if !ok {
         return 0
@@ -505,6 +529,9 @@ default_master_mixer :: proc(frame_buf: [][2]f32, frame_rate: int) {
         pitch_range := update_param(&sound.pitch, delta_seconds)
         volume_range := update_param(&sound.volume, delta_seconds)
         pan_range := update_param(&sound.pan, delta_seconds)
+        lpf_range := update_param(&sound.lowpass, delta_seconds)
+        hpf_range := update_param(&sound.highpass, delta_seconds)
+
         vel_range := [2][3]f32{
             sound.vel_prev,
             atomic_load_components_acquire(&sound.vel_curr),
@@ -519,6 +546,8 @@ default_master_mixer :: proc(frame_buf: [][2]f32, frame_rate: int) {
                 pos_range[1] - listener_pos,
             }
 
+            // Distance Attenuation
+
             // Note: we're approximating the attenuation with linear equations.
             // This could be an issue for fast moving objects when they go right near the listener.
             dists := [2]f32{
@@ -531,28 +560,39 @@ default_master_mixer :: proc(frame_buf: [][2]f32, frame_rate: int) {
                 linear_attenuation(dists[1], sound.attenuation_range),
             }
 
-            if sound.doppler_factor > 0.01 {
-                dirs := [2][3]f32{
-                    diffs[0] / max(0.0001, dists[0]),
-                    diffs[1] / max(0.0001, dists[1]),
-                }
+            volume_range *= attenuation
 
-                doppler := [2]f32{
-                    (SPEED_OF_SOUND + dot(dirs[0], listener_prev.vel)) /
-                    (SPEED_OF_SOUND + dot(dirs[0], vel_range[0])),
-                    (SPEED_OF_SOUND + dot(dirs[1], listener_vel)) /
-                    (SPEED_OF_SOUND + dot(dirs[1], vel_range[1])),
-                }
+            // Doppler
 
-                doppler = {
-                    lerp(f32(1.0), doppler[0], sound.doppler_factor),
-                    lerp(f32(1.0), doppler[1], sound.doppler_factor),
-                }
-
-                pitch_range *= doppler
+            dirs := [2][3]f32{
+                diffs[0] / max(0.0001, dists[0]),
+                diffs[1] / max(0.0001, dists[1]),
             }
 
-            volume_range *= attenuation
+            doppler := [2]f32{
+                (SPEED_OF_SOUND + dot(dirs[0], listener_prev.vel)) /
+                (SPEED_OF_SOUND + dot(dirs[0], vel_range[0])),
+                (SPEED_OF_SOUND + dot(dirs[1], listener_vel)) /
+                (SPEED_OF_SOUND + dot(dirs[1], vel_range[1])),
+            }
+
+            doppler = {
+                lerp(f32(1.0), doppler[0], sound.doppler_factor),
+                lerp(f32(1.0), doppler[1], sound.doppler_factor),
+            }
+
+            pitch_range *= doppler
+
+            // Spatial panning
+
+            ear_dots := [2]f32{
+                dot(dirs[0], listener_prev.right),
+                dot(dirs[1], listener_right),
+            }
+
+            ear_dots = -ear_dots
+
+            pan_range = pan_range + ear_dots * 0.85
         }
 
         // Skip silent
@@ -561,7 +601,9 @@ default_master_mixer :: proc(frame_buf: [][2]f32, frame_rate: int) {
             continue sound_loop
         }
 
-        base.log_info("Playing")
+        for &pan in pan_range {
+            pan = clamp(pan, -1, 1)
+        }
 
         end_time := sample_base_signal(
             frame_buf = scratch,
@@ -579,7 +621,52 @@ default_master_mixer :: proc(frame_buf: [][2]f32, frame_rate: int) {
             destroy = true
         }
 
+
+        // Recursive filters
+        // One-pole HPF and LPF
+
         inv_frames := 1.0 / f32(len(frame_buf))
+
+        lpf_range = {
+            clamp(lpf_range[0], 0, 1),
+            clamp(lpf_range[1], 0, 1),
+        }
+
+        hpf_range = {
+            clamp(hpf_range[0], 0, 1.0 - 1e-5),
+            clamp(hpf_range[1], 0, 1.0 - 1e-5),
+        }
+
+        if
+            lpf_range[0] > 1e-5 ||
+            lpf_range[1] > 1e-5 ||
+            hpf_range[0] > 1e-5 ||
+            hpf_range[1] > 1e-5
+        {
+            lpf_prev := sound.lpf_prev
+            hpf_prev := sound.hpf_prev
+
+            lpf_range = 1 - lpf_range
+
+            for &frame, i in scratch {
+                block_t := f32(i) * inv_frames
+                lpf_alpha := lerp(lpf_range[0], lpf_range[1], block_t)
+                hpf_alpha := lerp(hpf_range[0], hpf_range[1], block_t)
+
+                lpf_prev = lerp(lpf_prev, frame, lpf_alpha)
+                hpf_prev = lerp(hpf_prev, frame, hpf_alpha)
+
+                frame = lpf_prev - hpf_prev
+
+                frame *= 1.0 / (1.0 - hpf_alpha)
+            }
+
+            sound.lpf_prev = lpf_prev
+            sound.hpf_prev = hpf_prev
+        }
+
+
+        // Final output
 
         for frame, i in scratch {
             block_t := f32(i) * inv_frames
@@ -591,16 +678,14 @@ default_master_mixer :: proc(frame_buf: [][2]f32, frame_rate: int) {
 
             // Pan/Balance:
             // -1 = hard left, L=1, R=0
-            // 0 = center, L^2 + R^2 = ~1
+            // 0 = center, L^2 + R^2 = 1
             // 1 = hard right, L=0, R=1
             //
-            // Polynomial approximation
-            // https://www.desmos.com/calculator/rrnaswgquf
+            // https://www.desmos.com/calculator/ouck8jw1me
 
             pan_half := pan * 0.5
-            val.x *= 1.0 - (pan_half + 0.5) * (pan_half + 0.5)
-            val.y *= 1.0 - (pan_half - 0.5) * (pan_half - 0.5)
-            val *= 1.0 / 1.06066017178 // 1.0 / sqrt(1.125)
+            val.x *= intrinsics.sqrt(0.5 + pan_half)
+            val.y *= intrinsics.sqrt(0.5 - pan_half)
 
             frame_buf[i] += val
         }
@@ -764,7 +849,7 @@ update_param :: proc(param: ^Param($T), delta: f32) -> (result: [2]T) {
 // https://www.desmos.com/calculator/yzwr08ktae
 linear_attenuation :: proc(x: f32, range: [2]f32) -> f32 {
     val := 1 - clamp((x - range[0]) / (range[1] - range[0]), 0, 1)
-    return val * val
+    return val // * val
 }
 
 unpack_sample_u8 :: proc(v: u8) -> f32 {

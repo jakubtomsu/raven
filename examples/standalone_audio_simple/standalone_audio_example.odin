@@ -21,6 +21,7 @@ main :: proc() {
 
     audio.set_listener(
         pos = 0,
+        vel = 0,
         forw = {0, 0, 1},
         right = {1, 0, 0},
     )
