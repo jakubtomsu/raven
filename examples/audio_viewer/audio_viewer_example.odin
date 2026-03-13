@@ -111,7 +111,7 @@ _update :: proc(_: rawptr) -> rawptr {
             pitch = rand.float32_range(0.01, 2),
             volume = 2,
             // pan = rand.float32_range(-1, 1),
-            pan = rand.float32() > 0.5 ? -1 : 1,
+            // pan = rand.float32() > 0.5 ? -1 : 1,
         )
     }
 

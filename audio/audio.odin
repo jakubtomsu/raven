@@ -78,7 +78,7 @@ Resource :: struct {
     samples:        []byte,
     data_format:    Resource_Format,
     sample_format:  Resource_Format,
-    flags:          bit_set[Resource_Flag],
+    flags:          bit_set[Resource_Flag], // Only read by the Audio Thread
     frame_num:      u32,
     frame_rate:     u32, // hz
 }
@@ -96,16 +96,20 @@ Resource_Format :: enum u8 {
 }
 
 Sound :: struct {
-    frame:          f64,
-    end_frame:      u32,
-    resource:       Resource_Handle,
-    flags:          bit_set[Sound_Flag],
-    playing:        bool,
+    frame:              f64,
+    end_frame:          u32,
+    resource:           Resource_Handle,
+    flags:              bit_set[Sound_Flag],
+    playing:            bool,
+    attenuation_range:  [2]f32,
+    doppler_factor:     f32,
 
-    volume:         Param(f32),
-    pan:            Param(f32),
-    pitch:          Param(f32),
-    pos:            Param([3]f32),
+    volume:             Param(f32),
+    pan:                Param(f32),
+    pitch:              Param(f32),
+    pos:                Param([3]f32),
+    vel_curr:           [3]f32,
+    vel_prev:           [3]f32,
 }
 
 Sound_Flag :: enum u8 {
@@ -121,8 +125,15 @@ Param :: struct($T: typeid) {
 
 Listener :: struct {
     pos:    [3]f32,
+    vel:    [3]f32,
     forw:   [3]f32,
     right:  [3]f32,
+}
+
+Unit :: enum u8 {
+    Seconds = 0,
+    Frames,
+    Percentage, // 0..1
 }
 
 
@@ -187,21 +198,17 @@ set_master_mixer :: proc(mixer: Generator_Proc) {
 }
 
 set_listener :: proc(
-    pos:   [3]f32,
-    forw:  [3]f32 = {0, 0, 1},
-    right: [3]f32 = {1, 0, 0},
+    pos:    [3]f32,
+    vel:    [3]f32,
+    forw:   [3]f32 = {0, 0, 1},
+    right:  [3]f32 = {1, 0, 0},
 ) {
     // This write isn't atomic as a whole, which could possibly result in small glitches
     // during very fast movement.
-    intrinsics.atomic_store_explicit(&_state.listener_curr.pos.x, pos.x, .Release)
-    intrinsics.atomic_store_explicit(&_state.listener_curr.pos.y, pos.y, .Release)
-    intrinsics.atomic_store_explicit(&_state.listener_curr.pos.z, pos.z, .Release)
-    intrinsics.atomic_store_explicit(&_state.listener_curr.forw.x, forw.x, .Release)
-    intrinsics.atomic_store_explicit(&_state.listener_curr.forw.y, forw.y, .Release)
-    intrinsics.atomic_store_explicit(&_state.listener_curr.forw.z, forw.z, .Release)
-    intrinsics.atomic_store_explicit(&_state.listener_curr.right.x, right.x, .Release)
-    intrinsics.atomic_store_explicit(&_state.listener_curr.right.y, right.y, .Release)
-    intrinsics.atomic_store_explicit(&_state.listener_curr.right.z, right.z, .Release)
+    atomic_store_components_release_vec(&_state.listener_curr.pos, pos)
+    atomic_store_components_release_vec(&_state.listener_curr.vel, vel)
+    atomic_store_components_release_vec(&_state.listener_curr.forw, forw)
+    atomic_store_components_release_vec(&_state.listener_curr.right, right)
 }
 
 
@@ -303,6 +310,8 @@ create_sound :: proc(
     pitch:              f32 = 1.0,
     pan:                f32 = 0,
     volume:             f32 = 1,
+    attenuation_range:  [2]f32 = {0.1, 10},
+    doppler_factor:     f32 = 1.0,
 ) -> (result: Sound_Handle, ok: bool) {
     index, index_ok := spsc_pop(&_state.sounds_free)
     if !index_ok {
@@ -328,6 +337,8 @@ create_sound :: proc(
         end_frame = res.frame_num,
         volume = {target = volume, curr = volume, delta = 1},
         pan = {target = pan, curr = pan, delta = 1},
+        attenuation_range = attenuation_range,
+        doppler_factor = doppler_factor,
     }
 
     intrinsics.atomic_store(&_state.sounds_state[index], .Used)
@@ -359,6 +370,16 @@ get_sound_time :: proc(handle: Sound_Handle) -> f32 {
     return f32(sound.frame)
 }
 
+set_sound_spatial :: proc(handle: Sound_Handle, pos: [3]f32, vel: [3]f32) {
+    sound, ok := _get_sound(handle)
+    if !ok {
+        return
+    }
+    atomic_store_components_release_vec(&sound.pos.target, pos)
+    atomic_store_components_release_vec(&sound.vel_curr, vel)
+    intrinsics.atomic_store_explicit(&sound.pos.delta, 10, .Release)
+    sound.flags += {.Spatial}
+}
 
 is_sound_playing :: proc(handle: Sound_Handle) -> bool {
     sound, ok := _get_sound(handle)
@@ -415,10 +436,15 @@ _get_sound :: proc(handle: Sound_Handle) -> (^Sound, bool) {
 }
 
 
-// MARK: Internal
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// MARK: Mixer
+//
 
 LANES :: 16
 SCRATCH_BUFFER_SIZE :: 1024 * 2
+
+SPEED_OF_SOUND :: 343 // m/s, dry air at around 20C
 
 default_master_mixer :: proc(frame_buf: [][2]f32, frame_rate: int) {
     base.log_info("Mix")
@@ -428,30 +454,15 @@ default_master_mixer :: proc(frame_buf: [][2]f32, frame_rate: int) {
 
     listener_prev := _state.listener_prev
 
-    listener_pos := [3]f32{
-        intrinsics.atomic_load_explicit(&_state.listener_curr.pos.x, .Acquire),
-        intrinsics.atomic_load_explicit(&_state.listener_curr.pos.y, .Acquire),
-        intrinsics.atomic_load_explicit(&_state.listener_curr.pos.z, .Acquire),
-    }
+    listener_pos := atomic_load_components_acquire_vec(&_state.listener_curr.pos)
+    listener_vel := atomic_load_components_acquire_vec(&_state.listener_curr.vel)
+    listener_forw := atomic_load_components_acquire_vec(&_state.listener_curr.forw)
+    listener_right := atomic_load_components_acquire_vec(&_state.listener_curr.right)
 
-    listener_forw := [3]f32{
-        intrinsics.atomic_load_explicit(&_state.listener_curr.forw.x, .Acquire),
-        intrinsics.atomic_load_explicit(&_state.listener_curr.forw.y, .Acquire),
-        intrinsics.atomic_load_explicit(&_state.listener_curr.forw.z, .Acquire),
-    }
-
-    listener_right := [3]f32{
-        intrinsics.atomic_load_explicit(&_state.listener_curr.right.x, .Acquire),
-        intrinsics.atomic_load_explicit(&_state.listener_curr.right.y, .Acquire),
-        intrinsics.atomic_load_explicit(&_state.listener_curr.right.z, .Acquire),
-    }
-
-    _state.listener_prev = {
-        pos = listener_pos,
-        forw = listener_forw,
-        right = listener_right,
-    }
-
+    atomic_store_components_release_vec(&_state.listener_prev.pos, listener_pos)
+    _state.listener_prev.forw = listener_forw
+    _state.listener_prev.right = listener_right
+    _state.listener_prev.vel = listener_vel
 
     sound_loop: for sound_index in 1..<MAX_SOUNDS {
         switch intrinsics.atomic_load_explicit(&_state.sounds_state[sound_index], .Acquire) {
@@ -494,6 +505,63 @@ default_master_mixer :: proc(frame_buf: [][2]f32, frame_rate: int) {
         pitch_range := update_param(&sound.pitch, delta_seconds)
         volume_range := update_param(&sound.volume, delta_seconds)
         pan_range := update_param(&sound.pan, delta_seconds)
+        vel_range := [2][3]f32{
+            sound.vel_prev,
+            atomic_load_components_acquire(&sound.vel_curr),
+        }
+        sound.vel_prev = vel_range[1]
+
+        if .Spatial in sound.flags {
+            pos_range := update_param(&sound.pos, delta_seconds)
+
+            diffs := [2][3]f32{
+                pos_range[0] - listener_prev.pos,
+                pos_range[1] - listener_pos,
+            }
+
+            // Note: we're approximating the attenuation with linear equations.
+            // This could be an issue for fast moving objects when they go right near the listener.
+            dists := [2]f32{
+                length(diffs[0]),
+                length(diffs[1]),
+            }
+
+            attenuation := [2]f32{
+                linear_attenuation(dists[0], sound.attenuation_range),
+                linear_attenuation(dists[1], sound.attenuation_range),
+            }
+
+            if sound.doppler_factor > 0.01 {
+                dirs := [2][3]f32{
+                    diffs[0] / max(0.0001, dists[0]),
+                    diffs[1] / max(0.0001, dists[1]),
+                }
+
+                doppler := [2]f32{
+                    (SPEED_OF_SOUND + dot(dirs[0], listener_prev.vel)) /
+                    (SPEED_OF_SOUND + dot(dirs[0], vel_range[0])),
+                    (SPEED_OF_SOUND + dot(dirs[1], listener_vel)) /
+                    (SPEED_OF_SOUND + dot(dirs[1], vel_range[1])),
+                }
+
+                doppler = {
+                    lerp(f32(1.0), doppler[0], sound.doppler_factor),
+                    lerp(f32(1.0), doppler[1], sound.doppler_factor),
+                }
+
+                pitch_range *= doppler
+            }
+
+            volume_range *= attenuation
+        }
+
+        // Skip silent
+        SILENCE_EPS :: 0.01
+        if abs(volume_range[0]) < SILENCE_EPS && abs(volume_range[1]) < SILENCE_EPS {
+            continue sound_loop
+        }
+
+        base.log_info("Playing")
 
         end_time := sample_base_signal(
             frame_buf = scratch,
@@ -519,7 +587,6 @@ default_master_mixer :: proc(frame_buf: [][2]f32, frame_rate: int) {
             pan := lerp(pan_range[0], pan_range[1], block_t)
 
             val := frame
-
             val *= volume
 
             // Pan/Balance:
@@ -533,7 +600,7 @@ default_master_mixer :: proc(frame_buf: [][2]f32, frame_rate: int) {
             pan_half := pan * 0.5
             val.x *= 1.0 - (pan_half + 0.5) * (pan_half + 0.5)
             val.y *= 1.0 - (pan_half - 0.5) * (pan_half - 0.5)
-            val *= 1.0 / 1.06066017178 // sqrt(1.125)
+            val *= 1.0 / 1.06066017178 // 1.0 / sqrt(1.125)
 
             frame_buf[i] += val
         }
@@ -550,6 +617,11 @@ default_master_mixer :: proc(frame_buf: [][2]f32, frame_rate: int) {
         spsc_push(&_state.sounds_free, Handle_Index(sound_index))
     }
 }
+
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// MARK: Signal
+//
 
 // Interpolated, Stereo/Mono
 sample_base_signal :: proc(
@@ -647,8 +719,35 @@ sample_base_signal :: proc(
     }
 }
 
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// MARK: Misc
+//
+
+atomic_load_components_acquire :: proc {
+    atomic_load_components_acquire_single,
+    atomic_load_components_acquire_vec,
+}
+
+atomic_load_components_acquire_single :: proc(v: ^$T) -> T where !intrinsics.type_is_array(T) {
+    return intrinsics.atomic_load_explicit(v, .Acquire)
+}
+
+atomic_load_components_acquire_vec :: proc(v: ^$T/[$N]$V) -> (result: T) {
+    for &res, i in result {
+        res = intrinsics.atomic_load_explicit(&v[i], .Acquire)
+    }
+    return result
+}
+
+atomic_store_components_release_vec :: proc(dst: ^$T/[$N]$V, v: T) {
+    for &res, i in dst {
+        intrinsics.atomic_store_explicit(&dst[i], v[i], .Release)
+    }
+}
+
 update_param :: proc(param: ^Param($T), delta: f32) -> (result: [2]T) {
-    target := intrinsics.atomic_load_explicit(&param.target, .Acquire)
+    target := atomic_load_components_acquire(&param.target)
     param_delta := intrinsics.atomic_load_explicit(&param.delta, .Acquire)
 
     result = {
@@ -659,6 +758,13 @@ update_param :: proc(param: ^Param($T), delta: f32) -> (result: [2]T) {
     param.curr = result[1]
 
     return result
+}
+
+// Result is in 0..1 range
+// https://www.desmos.com/calculator/yzwr08ktae
+linear_attenuation :: proc(x: f32, range: [2]f32) -> f32 {
+    val := 1 - clamp((x - range[0]) / (range[1] - range[0]), 0, 1)
+    return val * val
 }
 
 unpack_sample_u8 :: proc(v: u8) -> f32 {
@@ -734,13 +840,18 @@ cross :: proc "contextless" (a, b: [3]f32) -> (c: [3]f32) {
 }
 
 @(require_results)
-normalize :: proc "contextless" (v: [3]f32) -> [3]f32 {
+length :: proc "contextless" (v: [3]f32) -> f32 {
     vv := v * v
-    length := intrinsics.sqrt(vv.x + vv.y + vv.z)
-    if length <= 1e-6 {
+    return intrinsics.sqrt(vv.x + vv.y + vv.z)
+}
+
+@(require_results)
+normalize :: proc "contextless" (v: [3]f32) -> [3]f32 {
+    l := length(v)
+    if l <= 1e-6 {
         return 0
     }
-    return v / length
+    return v / l
 }
 
 move_towards :: proc {
@@ -761,7 +872,7 @@ move_towards_f32 :: proc "contextless" (val: f32, target: f32, delta: f32) -> f3
 move_towards_vec3 :: proc "contextless" (val: [3]f32, target: [3]f32, delta: f32) -> [3]f32 {
     diff := target - val
     len2 := dot(diff, diff)
-    if len2 < delta * delta {
+    if len2 < delta * delta || len2 < 0.001 {
         return target
     }
     dir := diff / intrinsics.sqrt(len2)
