@@ -3883,6 +3883,32 @@ draw_line_circle :: proc(
     draw_lines(..verts)
 }
 
+draw_line_sphere :: proc(
+    pos:        Vec3,
+    mat:        Mat3 = 1,
+    col         := WHITE,
+    segments    := 12,
+) {
+    if col.a < 0.01 do return
+
+    circle := _calc_circle_points(segments)
+
+    verts := make([]Vertex, segments * 2 * 3, context.temp_allocator)
+    p0 := circle[len(circle) - 1]
+    for p1, i in circle {
+        // XY, YZ, ZX
+        verts[i * 6 + 0] = pack_vertex(pos + mat[0] * p0.x + mat[1] * p0.y, col = col)
+        verts[i * 6 + 1] = pack_vertex(pos + mat[0] * p1.x + mat[1] * p1.y, col = col)
+        verts[i * 6 + 2] = pack_vertex(pos + mat[1] * p0.x + mat[2] * p0.y, col = col)
+        verts[i * 6 + 3] = pack_vertex(pos + mat[1] * p1.x + mat[2] * p1.y, col = col)
+        verts[i * 6 + 4] = pack_vertex(pos + mat[2] * p0.x + mat[0] * p0.y, col = col)
+        verts[i * 6 + 5] = pack_vertex(pos + mat[2] * p1.x + mat[0] * p1.y, col = col)
+        p0 = p1
+    }
+
+    draw_lines(..verts)
+}
+
 draw_line_cylinder :: proc(pos: [2]Vec3, rad: f32 = 1.0, col := WHITE, segments := 12) {
     if col.a < 0.01 do return
 
@@ -3911,6 +3937,37 @@ draw_line_cylinder :: proc(pos: [2]Vec3, rad: f32 = 1.0, col := WHITE, segments 
     }
 
     draw_lines(..verts)
+}
+
+// The axis vectors determine a single cell size.
+// Segments are the number of lines in ONE QUADRANT.
+draw_line_grid :: proc(
+    pos:        Vec3 = 0,
+    axis_a:     Vec3 = {1, 0, 0},
+    axis_b:     Vec3 = {0, 0, 1},
+    col         := WHITE,
+    segments:   [2]i32 = 5,
+) {
+    buf := make([]Vertex,  (segments.x * 2 + 1 + segments.y * 2 + 1) * 2, context.temp_allocator)
+    index := 0
+
+    for i in -segments.x..=segments.x {
+        c := i == 0 ? col + 0.1 : col * 0.8
+        offs := axis_a * f32(i)
+        buf[index + 0] = pack_vertex(pos + offs - axis_b * f32(segments.y), col = c)
+        buf[index + 1] = pack_vertex(pos + offs + axis_b * f32(segments.y), col = c)
+        index += 2
+    }
+
+    for i in -segments.y..=segments.y {
+        c := i == 0 ? col + 0.1 : col * 0.8
+        offs := axis_b * f32(i)
+        buf[index + 0] = pack_vertex(pos + offs - axis_a * f32(segments.x), col = c)
+        buf[index + 1] = pack_vertex(pos + offs + axis_a * f32(segments.x), col = c)
+        index += 2
+    }
+
+    draw_lines(..buf)
 }
 
 _draw_line_box_corners :: proc(corners: [8]Vec3, col: Vec4) {
@@ -3993,11 +4050,19 @@ _upload_gpu_global_constants :: proc() {
     }))
 }
 
+_draw_layer_no_instances :: proc(layer: Draw_Layer) -> bool {
+    return \
+        len(layer.sprites) == 0 &&
+        len(layer.meshes) == 0 &&
+        len(layer.triangles) == 0 &&
+        len(layer.lines) == 0
+}
+
 _upload_gpu_layer_constants :: proc() {
     consts_buf: [MAX_DRAW_LAYERS]Draw_Layer_Constants
 
     for &layer, i in _state.draw_layers {
-        if len(layer.sprites) == 0 && len(layer.meshes) == 0 {
+        if _draw_layer_no_instances(layer) {
             continue
         }
 
@@ -4893,6 +4958,9 @@ screen_to_world_ray :: proc(pos: Vec2, cam: Camera) -> Vec3 {
 // MARK: Sounds
 //
 
+// play sound
+create_sound :: audio.create_sound
+
 load_sound_resource :: proc(path: string) -> (result: Sound_Resource_Handle, ok: bool) #optional_ok {
     name := strip_path_name(path)
     // TODO: register the resource internally for hot-reload
@@ -4907,7 +4975,7 @@ load_sound_resource :: proc(path: string) -> (result: Sound_Resource_Handle, ok:
 create_sound_resource_encoded :: proc(name: string, data: []byte) -> (result: Sound_Resource_Handle, ok: bool) #optional_ok {
     base.log_info("Creating sound resource '%s' with size %i bytes", name, len(data))
 
-    res := audio.create_resource_encoded(data) or_return
+    res := audio.create_resource(.WAV, data) or_return
 
     if !insert_sound_resource_by_hash(name, res) {
         // NOTE: currently this can continue running somewhat correctly, the result is valid.
@@ -4930,58 +4998,6 @@ insert_sound_resource_by_hash :: proc(name: string, handle: Sound_Resource_Handl
     index, _ := _table_insert_hash(&_state.sound_resources_hash, hash) or_return
     _state.sound_resources[index] = handle
     return true
-}
-
-play_sound :: proc(
-    resource:       Sound_Resource_Handle,
-    start           := true,
-    loop            := false,
-    delay:          f32 = 0,
-    volume:         f32 = 1,
-    pitch:          f32 = 1,
-    pos:            Maybe([3]f32) = nil,
-    async_decode    := false,
-) -> (result: audio.Sound_Handle, ok: bool) #optional_ok {
-    validate(resource != {})
-
-    // base.log_info("Playing sound %v", resource)
-
-    result, ok = audio.create_sound(resource_handle = resource, group_handle = {}, async_decode = async_decode)
-    if !ok {
-        base.log_err("Failed to play sound", resource)
-        return {}, false
-    }
-
-    if delay > 0 {
-        audio.set_sound_start_delay(result, delay, .Seconds)
-    }
-
-    if start {
-        audio.set_sound_playing(result, start)
-    }
-
-    if loop {
-        audio.set_sound_looping(result, loop)
-    }
-
-    if volume != 1 {
-        audio.set_sound_volume(result, volume)
-    }
-
-    if pitch != 1 {
-        audio.set_sound_pitch(result, pitch)
-    }
-
-    if p, p_ok := pos.?; p_ok {
-        audio.set_sound_spatialization(result, true)
-        audio.set_sound_position(result, p)
-    }
-
-    return result, true
-}
-
-destroy_sound :: proc(handle: Sound_Handle) {
-    audio.destroy_sound(handle)
 }
 
 
@@ -5052,6 +5068,11 @@ strip_path_name :: proc "contextless" (str: string) -> (result: string) {
     result = str[max(back_index, forw_index) + 1:]
     dot_index := bytes.index_byte(transmute([]byte)result, '.')
     return result[:dot_index]
+}
+
+@(deferred_out = runtime.default_temp_allocator_temp_end)
+temp_allocator_guard :: proc(loc := #caller_location) -> (temp: runtime.Arena_Temp, location: runtime.Source_Code_Location) {
+    return runtime.default_temp_allocator_temp_begin(loc), loc
 }
 
 @(require_results)
@@ -5454,6 +5475,11 @@ validate_draw_sort_key :: proc(key: Draw_Sort_Key) {
     validate(key.texture != {} || key.texture_mode != .Non_Pooled)
     validate(key.ps != {})
     validate(key.vs != {})
+    // switch key.texture_mode {
+    // case .Non_Pooled:
+    // case .Pooled:
+    // case .Render_Texture:
+    // }
 }
 
 
