@@ -3,10 +3,11 @@ package raven_audio
 
 // TODO: this package could be completely self contained, no base dependency.
 
-import "core:math"
 import "../base"
 import "base:intrinsics"
 import "base:runtime"
+import "core:math"
+
 import "wav"
 // import "qoa"
 
@@ -63,7 +64,7 @@ State :: struct #align(64) {
     sounds:             [MAX_SOUNDS]Sound,
 }
 
-Generator_Proc :: #type proc(frames: [][2]f32, sample_rate: int)
+Generator_Proc :: #type proc(frames: [][2]f32, frame_rate: int)
 
 // Atomic
 Slot_State :: enum u32 {
@@ -1070,3 +1071,17 @@ reinterpret_bytes :: proc "contextless" ($T: typeid, bytes: []byte) -> []T {
 to_bytes :: proc "contextless" (data: []$T) -> []byte {
     return (cast([^]byte)raw_data(data))[:size_of(T) * len(data)]
 }
+
+volume_linear_to_db :: proc(factor: f32) -> f32 {
+    return 20 * math.log10_f32(factor)
+}
+
+volume_db_to_linear :: proc(gain: f32) -> f32 {
+    return math.pow_f32(10, gain / 20.0)
+}
+
+// Returns frequency in Hz for a given midi note.
+note :: proc(#any_int midi_n: i32) -> f32 {
+    return 440 * math.pow_f32(2, f32(midi_n - 69) * (1.0 / 12.0))
+}
+

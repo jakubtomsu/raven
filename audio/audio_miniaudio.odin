@@ -47,7 +47,7 @@ when BACKEND == BACKEND_MINIAUDIO {
     }
 
     _update_output_buffer :: proc() {
-        // Nothing.
+        // No single threaded support
     }
 
     _miniaudio_data_callback :: proc "c" (
@@ -68,12 +68,10 @@ when BACKEND == BACKEND_MINIAUDIO {
         assert(frameCount > 0)
 
         frame_buf := (cast([^][2]f32)pOutput)[:frameCount]
-        mixer_proc := intrinsics.atomic_load(&_state.master_mixer_proc)
-
         assert(0 == runtime.memory_compare_zero(pOutput, size_of(f32) * 2 * int(frameCount)))
 
-        mixer_proc(frame_buf, sample_rate = int(_state.frame_rate))
-
+        mixer_proc := intrinsics.atomic_load(&_state.master_mixer_proc)
+        mixer_proc(frame_buf, frame_rate = int(_state.frame_rate))
     }
 
 }
