@@ -471,8 +471,6 @@ SCRATCH_BUFFER_SIZE :: 1024 * 2
 SPEED_OF_SOUND :: 343 // m/s, dry air at around 20C
 
 default_master_mixer :: proc(frame_buf: [][2]f32, frame_rate: int) {
-    base.log_info("Mix")
-
     _scratch: [SCRATCH_BUFFER_SIZE][2]f32
     scratch := _scratch[:len(frame_buf)]
 
@@ -487,6 +485,9 @@ default_master_mixer :: proc(frame_buf: [][2]f32, frame_rate: int) {
     _state.listener_prev.forw = listener_forw
     _state.listener_prev.right = listener_right
     _state.listener_prev.vel = listener_vel
+
+    listener_up := normalize(cross(listener_forw, listener_right))
+    listener_prev_up := normalize(cross(listener_prev.forw, listener_prev.right))
 
     sound_loop: for sound_index in 1..<MAX_SOUNDS {
         switch intrinsics.atomic_load_explicit(&_state.sounds_state[sound_index], .Acquire) {
@@ -585,14 +586,44 @@ default_master_mixer :: proc(frame_buf: [][2]f32, frame_rate: int) {
 
             // Spatial panning
 
-            ear_dots := [2]f32{
+            side_dots := [2]f32{
                 dot(dirs[0], listener_prev.right),
                 dot(dirs[1], listener_right),
             }
 
-            ear_dots = -ear_dots
+            side_dots = -side_dots
 
-            pan_range = pan_range + ear_dots * 0.85
+            pan_range = pan_range + side_dots * 0.9
+
+            // Small spatial frequency response (hacky)
+            // Above: HPF due to ear shape
+
+            forw_dots := [2]f32{
+                dot(dirs[0], listener_prev.forw),
+                dot(dirs[1], listener_forw),
+            }
+
+            up_dots := [2]f32{
+                dot(dirs[0], listener_prev_up),
+                dot(dirs[1], listener_up),
+            }
+
+            // LPF from behind
+            lpf_range += {
+                max(-forw_dots[0], 0),
+                max(-forw_dots[1], 0),
+            } * 0.4
+
+            // LPF from below (ground/body in the way)
+            lpf_range += {
+                max(-up_dots[0], 0),
+                max(-up_dots[1], 0),
+            } * 0.4
+
+            hpf_range += {
+                max(up_dots[0], 0),
+                max(up_dots[1], 0),
+            } * 0.05
         }
 
         // Skip silent
@@ -624,12 +655,14 @@ default_master_mixer :: proc(frame_buf: [][2]f32, frame_rate: int) {
 
         // Recursive filters
         // One-pole HPF and LPF
+        // TODO: 2nd-order filtering?
+        // Per-channel filtering?
 
         inv_frames := 1.0 / f32(len(frame_buf))
 
         lpf_range = {
-            clamp(lpf_range[0], 0, 1),
-            clamp(lpf_range[1], 0, 1),
+            clamp(lpf_range[0], 0, 0.995),
+            clamp(lpf_range[1], 0, 0.995),
         }
 
         hpf_range = {
@@ -658,7 +691,7 @@ default_master_mixer :: proc(frame_buf: [][2]f32, frame_rate: int) {
 
                 frame = lpf_prev - hpf_prev
 
-                frame *= 1.0 / (1.0 - hpf_alpha)
+                frame *= 1.0 / (1.0 - hpf_alpha) // HPF volume compensation
             }
 
             sound.lpf_prev = lpf_prev

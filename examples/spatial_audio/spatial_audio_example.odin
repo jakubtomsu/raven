@@ -46,8 +46,6 @@ _init :: proc() {
         volume = 10,
         flags = {.Loop, .Spatial},
         attenuation_range = ATTENUATION_RANGE,
-        lowpass = 0.9,
-        // highpass = 0.9,
     )
 }
 
@@ -103,7 +101,7 @@ _update :: proc(hot_state: rawptr) -> rawptr {
 
     audio.set_listener(state.cam_pos, cam_vel, forw = mat[2], right = mat[0])
 
-    sound_vel := math.cos_f32(rv.get_time()) * 20
+    sound_vel := math.cos_f32(rv.get_time() * 2) * 5
     state.sound_x += sound_vel * delta
     sound_pos := rv.Vec3{state.sound_x, 1, 0}
 
