@@ -20,9 +20,6 @@ when BACKEND == BACKEND_WASAPI {
         buffer_frame_num:   u32,
     }
 
-    _Sound :: struct {}
-    _Resource :: struct {}
-
     _shutdown :: proc() {}
 
     @(require_results)

@@ -19,7 +19,7 @@ BACKEND :: #config(AUDIO_BACKEND, BACKEND_DEFAULT)
 when ODIN_OS == .Windows {
     BACKEND_DEFAULT :: BACKEND_WASAPI
 } else {
-    BACKEND_DEFAULT :: BACKEND_NONE
+    BACKEND_DEFAULT :: BACKEND_MINIAUDIO
 }
 
 SINGLE_THREAD :: #config(AUDIO_SINGLE_THREAD, false)
@@ -197,6 +197,9 @@ init :: proc(state: ^State) -> bool {
     if !_init() {
         return false
     }
+
+    assert(_state.frame_rate >= 8000)
+    assert(_state.frame_rate <= 192000)
 
     return true
 }
