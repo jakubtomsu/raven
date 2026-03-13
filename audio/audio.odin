@@ -210,6 +210,8 @@ shutdown :: proc() {
         return
     }
 
+    _state.running = false
+
     _shutdown()
 
     _state = nil
@@ -312,8 +314,6 @@ create_resource :: proc(
         resource.frame_rate = header.format.sample_rate
         resource.frame_num = u32(len(samples)) / u32(header.format.num_channels)
 
-        base.log_dump(header)
-
         switch header.format.num_channels {
         case 1: resource.flags += {.Mono}
         case 2: resource.flags -= {.Mono}
@@ -322,8 +322,6 @@ create_resource :: proc(
             return {}, false
         }
     }
-
-    base.log_dump(resource)
 
     assert(resource.frame_rate != 0)
     assert(resource.data_format != .Invalid)
