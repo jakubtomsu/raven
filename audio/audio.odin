@@ -100,36 +100,41 @@ Sound :: struct {
     end_frame:          u32,
     resource:           Resource_Handle,
     flags:              bit_set[Sound_Flag],
-    playing:            bool,
+
+    // Constant parameters
     attenuation_range:  [2]f32,
     doppler_factor:     f32,
+
+    playing:            b32,
 
     // Linear gain.
     //  0 = muted
     //  1 = default
     // >1 = louder
-    volume:             Param(f32),
+    volume:             Param,
     // -1 = hard left
     //  0 = centered
     //  1 = hard right
-    pan:                Param(f32),
+    pan:                Param,
     // Raw speed factor.
     // Pitch of 2 will play the signal 2x faster.
-    pitch:              Param(f32),
+    pitch:              Param,
     // Muffles the sound.
     // Value of 0 means no filtering.
     // Alpha factor value in 0..1 range. One-pole filter.
-    lowpass:            Param(f32),
+    lowpass:            Param,
     // Sharpens the sound.
     // Value of 0 means no filtering.
     // Alpha factor value in 0..1 range. One-pole filter.
-    highpass:           Param(f32),
-    pos:                Param([3]f32),
+    highpass:           Param,
+
+    pos_curr:           [3]f32,
+    pos_prev:           [3]f32,
     vel_curr:           [3]f32,
     vel_prev:           [3]f32,
 
-    lpf_prev:            [2]f32,
-    hpf_prev:            [2]f32,
+    lpf_prev:           [2]f32,
+    hpf_prev:           [2]f32,
 }
 
 Sound_Flag :: enum u8 {
@@ -137,9 +142,10 @@ Sound_Flag :: enum u8 {
     Spatial,
 }
 
-Param :: struct($T: typeid) {
-    target: T, // Game thread
-    curr:   T, // Audio thread
+// Smoothly updated parameter
+Param :: struct {
+    target: f32, // Game thread
+    curr:   f32, // Audio thread
     delta:  f32, // Game thread
 }
 
@@ -330,6 +336,7 @@ create_sound :: proc(
     pitch:              f32 = 1.0,
     pan:                f32 = 0,
     volume:             f32 = 1,
+    playing             := true,
     attenuation_range:  [2]f32 = {0.1, 100},
     doppler_factor:     f32 = 1.0,
     lowpass:            f32 = 0.0,
@@ -355,6 +362,7 @@ create_sound :: proc(
     sound^ = {
         resource = resource_handle,
         flags = flags,
+        playing = b32(playing),
         pitch = {target = pitch, curr = pitch, delta = 1},
         end_frame = res.frame_num,
         volume = {target = volume, curr = volume, delta = 1},
@@ -394,23 +402,67 @@ get_sound_time :: proc(handle: Sound_Handle, unit: Unit = .Seconds) -> f32 {
     return f32(sound.frame)
 }
 
-set_sound_spatial :: proc(handle: Sound_Handle, pos: [3]f32, vel: [3]f32) {
-    sound, ok := _get_sound(handle)
-    if !ok {
-        return
-    }
-    atomic_store_components_release_vec(&sound.pos.target, pos)
-    atomic_store_components_release_vec(&sound.vel_curr, vel)
-    intrinsics.atomic_store_explicit(&sound.pos.delta, 10, .Release)
-    sound.flags += {.Spatial}
-}
-
 is_sound_playing :: proc(handle: Sound_Handle) -> bool {
     sound, ok := _get_sound(handle)
     if !ok {
         return false
     }
+    return bool(sound.playing)
+}
+
+set_sound_playing :: proc(handle: Sound_Handle, playing: bool) -> bool {
+    sound := _get_sound(handle) or_return
+    intrinsics.atomic_store_explicit(&sound.playing, b32(playing), .Release)
     return true
+}
+
+set_sound_volume :: proc(handle: Sound_Handle, value: f32, dur: f32 = 0) -> bool {
+    sound := _get_sound(handle) or_return
+    intrinsics.atomic_store_explicit(&sound.volume.target, value, .Release)
+    intrinsics.atomic_store_explicit(&sound.volume.delta, _duration_delta(dur), .Release)
+    return true
+}
+
+set_sound_pan :: proc(handle: Sound_Handle, value: f32, dur: f32 = 0) -> bool {
+    sound := _get_sound(handle) or_return
+    intrinsics.atomic_store_explicit(&sound.pan.target, value, .Release)
+    intrinsics.atomic_store_explicit(&sound.pan.delta, _duration_delta(dur), .Release)
+    return true
+}
+
+set_sound_pitch :: proc(handle: Sound_Handle, value: f32, dur: f32 = 0) -> bool {
+    sound := _get_sound(handle) or_return
+    intrinsics.atomic_store_explicit(&sound.pitch.target, value, .Release)
+    intrinsics.atomic_store_explicit(&sound.pitch.delta, _duration_delta(dur), .Release)
+    return true
+}
+
+set_sound_lowpass :: proc(handle: Sound_Handle, value: f32, dur: f32 = 0) -> bool {
+    sound := _get_sound(handle) or_return
+    intrinsics.atomic_store_explicit(&sound.lowpass.target, value, .Release)
+    intrinsics.atomic_store_explicit(&sound.lowpass.delta, _duration_delta(dur), .Release)
+    return true
+}
+
+set_sound_highpass :: proc(handle: Sound_Handle, value: f32, dur: f32 = 0) -> bool {
+    sound := _get_sound(handle) or_return
+    intrinsics.atomic_store_explicit(&sound.highpass.target, value, .Release)
+    intrinsics.atomic_store_explicit(&sound.highpass.delta, _duration_delta(dur), .Release)
+    return true
+}
+
+_duration_delta :: proc(dur: f32) -> f32 {
+    return dur < 0.01 ? 1e6 : 1.0 / dur
+}
+
+set_sound_spatial :: proc(handle: Sound_Handle, pos: [3]f32, vel: [3]f32) {
+    sound, ok := _get_sound(handle)
+    if !ok {
+        return
+    }
+    atomic_store_components_release_vec(&sound.pos_curr, pos)
+    atomic_store_components_release_vec(&sound.vel_curr, vel)
+    sound.flags += {.Spatial}
 }
 
 is_resource_valid :: proc(handle: Resource_Handle) -> bool {
@@ -540,7 +592,11 @@ default_master_mixer :: proc(frame_buf: [][2]f32, frame_rate: int) {
         sound.vel_prev = vel_range[1]
 
         if .Spatial in sound.flags {
-            pos_range := update_param(&sound.pos, delta_seconds)
+            pos_range := [2][3]f32{
+                sound.pos_prev,
+                atomic_load_components_acquire(&sound.pos_curr),
+            }
+            sound.pos_prev = pos_range[1]
 
             diffs := [2][3]f32{
                 pos_range[0] - listener_prev.pos,
@@ -608,22 +664,24 @@ default_master_mixer :: proc(frame_buf: [][2]f32, frame_rate: int) {
                 dot(dirs[1], listener_up),
             }
 
-            // LPF from behind
+            LPF_BEHIND :: 0.45
+            LPF_BELOW :: 0.35 // ground/body in the way
+            HPF_ABOVE :: 0.04
+
             lpf_range += {
                 max(-forw_dots[0], 0),
                 max(-forw_dots[1], 0),
-            } * 0.4
+            } * LPF_BEHIND
 
-            // LPF from below (ground/body in the way)
             lpf_range += {
                 max(-up_dots[0], 0),
                 max(-up_dots[1], 0),
-            } * 0.4
+            } * LPF_BELOW
 
             hpf_range += {
                 max(up_dots[0], 0),
                 max(up_dots[1], 0),
-            } * 0.05
+            } * HPF_ABOVE
         }
 
         // Skip silent
@@ -864,13 +922,13 @@ atomic_store_components_release_vec :: proc(dst: ^$T/[$N]$V, v: T) {
     }
 }
 
-update_param :: proc(param: ^Param($T), delta: f32) -> (result: [2]T) {
-    target := atomic_load_components_acquire(&param.target)
+update_param :: proc(param: ^Param, delta: f32) -> (result: [2]f32) {
+    target := intrinsics.atomic_load_explicit(&param.target, .Acquire)
     param_delta := intrinsics.atomic_load_explicit(&param.delta, .Acquire)
 
     result = {
         param.curr,
-        move_towards(param.curr, target, param_delta * delta),
+        move_towards_f32(param.curr, target, param_delta * delta),
     }
 
     param.curr = result[1]

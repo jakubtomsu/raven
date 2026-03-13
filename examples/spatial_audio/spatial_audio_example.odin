@@ -12,7 +12,8 @@ state: ^State
 State :: struct {
     cam_pos:    rv.Vec3,
     cam_ang:    rv.Vec3,
-    res:        rv.Sound_Resource_Handle,
+    res0:       rv.Sound_Resource_Handle,
+    res1:       rv.Sound_Resource_Handle,
     sound:      rv.Sound_Handle,
     sound_x:    f32,
 }
@@ -40,10 +41,9 @@ _init :: proc() {
     state.cam_pos = {1.5, 3, -8}
     state.cam_ang = {0.3, 0, 0}
 
-    // state.res = rv.create_sound_resource_encoded("sound", #load("../data/snake_powerup_sound.wav"))
-    state.res = rv.create_sound_resource_encoded("sound", #load("../data/snake_death_sound.wav"))
-    state.sound = rv.create_sound(state.res,
-        volume = 10,
+    state.res0 = rv.create_sound_resource_encoded("sound", #load("../data/snake_death_sound.wav"))
+    state.res1 = rv.create_sound_resource_encoded("sound", #load("../data/snake_powerup_sound.wav"))
+    state.sound = rv.create_sound(state.res1,
         flags = {.Loop, .Spatial},
         attenuation_range = ATTENUATION_RANGE,
     )
@@ -101,11 +101,16 @@ _update :: proc(hot_state: rawptr) -> rawptr {
 
     audio.set_listener(state.cam_pos, cam_vel, forw = mat[2], right = mat[0])
 
-    sound_vel := math.cos_f32(rv.get_time() * 2) * 5
+    sound_vel := math.cos_f32(rv.get_time() * 2) * 10
     state.sound_x += sound_vel * delta
     sound_pos := rv.Vec3{state.sound_x, 1, 0}
 
     audio.set_sound_spatial(state.sound, sound_pos, {sound_vel, 0, 0})
+
+    if rv.key_pressed(.Space) {
+        sound := rv.create_sound(state.res0, pitch = 2)
+        audio.set_sound_pitch(sound, 0.1, 3.0)
+    }
 
     if rv.scope_binds() {
         rv.bind_texture(rv.get_builtin_texture(.Default))

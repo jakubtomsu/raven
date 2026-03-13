@@ -63,6 +63,7 @@ when BACKEND == BACKEND_WASAPI {
 
         BUFFER_MS :: 1
         buffer_duration: wasapi.REFERENCE_TIME = 10 * 1000 * BUFFER_MS
+
         client_flags: u32
         if !SINGLE_THREAD {
             client_flags |= u32(wasapi.AUDCLNT_FLAG.STREAM_EVENTCALLBACK)
