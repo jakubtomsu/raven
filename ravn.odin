@@ -2714,17 +2714,18 @@ draw_perf_scopes :: proc(pos: [3]f32 = {10, 40, 0.1}, scale: f32 = 1) {
         FRAME_TIME :: 1.0 / 60.0
 
         cycles_to_ms := f64(_state.frame_dur_ns) / (f64(_state.frame_dur_cycles) * 1e6)
+        shadow_offs := max(1, math.round(scale))
 
         for scope, i in scopes {
-            p := pos + [3]f32{0, f32(i) * 16, 0}
+            p := pos + [3]f32{0, f32(i) * 16 * scale, 0}
 
             ms := f32(f64(scope.cycles) * cycles_to_ms)
-            width := max(1, clamp(ms, 0, 16) * 10)
+            width := max(1, clamp(ms, 0, 16) * 10) * scale
 
             text := base.tprintf("%s: %f ms", scope.name, ms)
-            draw_text(text, p)
-            draw_text(text, p + {1, 1, 0.001}, col = BLACK)
-            draw_sprite(p + {-5, 5, 0.01}, rect, {width, 16}, anchor = {-1, 0},
+            draw_text(text, p, scale = {scale, scale})
+            draw_text(text, p + {shadow_offs, shadow_offs, 0.001}, col = BLACK, scale = {scale, scale})
+            draw_sprite(p + {-5 * scale, 5 * scale, 0.01}, rect, {width, 16 * scale}, anchor = {-1, 0},
                 col = ms > 16.1 ? RED : (ms < 1 ? GREEN : ORANGE),
             )
         }
