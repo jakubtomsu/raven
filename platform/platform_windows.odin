@@ -812,20 +812,20 @@ when BACKEND == BACKEND_WINDOWS {
             info := cast(^windows.FILE_NOTIFY_INFORMATION)&watcher.buffer[0]
 
             for {
-                if info.action == windows.FILE_ACTION_MODIFIED || info.action == windows.FILE_ACTION_ADDED {
-                    data := cast([^]u16)&info.file_name[0]
-                    num_chars := info.file_name_length / 2 // file_name_length is in num bytes, excluding null terminator
+                if info.Action == windows.FILE_ACTION_MODIFIED || info.Action == windows.FILE_ACTION_ADDED {
+                    data := cast([^]u16)&info.FileName[0]
+                    num_chars := info.FileNameLength / 2 // file_name_length is in num bytes, excluding null terminator
 
                     str, _ := windows.wstring_to_utf8_alloc(cstring16(data), int(num_chars), context.temp_allocator)
 
                     append(&result, str)
                 }
 
-                if info.next_entry_offset == 0 {
+                if info.NextEntryOffset == 0 {
                     break
                 }
 
-                info = cast(^windows.FILE_NOTIFY_INFORMATION)(cast(uintptr)info + cast(uintptr)info.next_entry_offset)
+                info = cast(^windows.FILE_NOTIFY_INFORMATION)(cast(uintptr)info + cast(uintptr)info.NextEntryOffset)
             }
 
             windows.ResetEvent(watcher.overlapped.hEvent)
