@@ -7,11 +7,19 @@ import "core:log"
 import "core:testing"
 
 @(test)
+_asset_name_from_path_test :: proc(t: ^testing.T) {
+    testing.expect(t, asset_name_from_path("bar.txt") == "bar")
+    testing.expect(t, asset_name_from_path("foo/bar.txt") == "bar")
+    testing.expect(t, asset_name_from_path("foo\\bar.txt") == "bar")
+    testing.expect(t, asset_name_from_path("foo/foo2/bar.txt.bin") == "bar.txt")
+}
+
+@(test)
 _file_name_from_path_test :: proc(t: ^testing.T) {
-    testing.expect(t, file_name_from_path("bar.txt") == "bar")
-    testing.expect(t, file_name_from_path("foo/bar.txt") == "bar")
-    testing.expect(t, file_name_from_path("foo\\bar.txt") == "bar")
-    testing.expect(t, file_name_from_path("foo/foo2/bar.txt.bin") == "bar")
+    testing.expect(t, file_name_from_path("bar.txt") == "bar.txt")
+    testing.expect(t, file_name_from_path("foo/bar.txt") == "bar.txt")
+    testing.expect(t, file_name_from_path("foo\\bar.txt") == "bar.txt")
+    testing.expect(t, file_name_from_path("foo/foo2/bar.txt.bin") == "bar.txt.bin")
 }
 
 @(test)
