@@ -130,7 +130,7 @@ _update :: proc(hot_state: rawptr) -> rawptr {
         rv.draw_line_mat3({-2, 0, 5})
         rv.draw_line_box({1, 0, 5}, 1, rv.GRAY)
         rv.draw_line_circle({4, 0, 5}, col = rv.ORANGE)
-        rv.draw_line_cylinder({{6, -1, 5}, {6, 1, 5}}, rad = 0.5)
+        rv.draw_line_cylinder({6, -1, 5}, {6, 1, 5}, rad = 0.5)
         rv.draw_line_sphere({8, 0, 5}, mat = 0.7, col = rv.RED)
 
         rv.set_draw_shader(state.shader)
