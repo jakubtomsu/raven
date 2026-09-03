@@ -115,7 +115,7 @@ _get_gamepad_state :: proc(#any_int index: int) -> (result: Gamepad_State, ok: b
     if state.buttons[10].pressed do result.buttons += {.Left_Thumb}
     if state.buttons[11].pressed do result.buttons += {.Right_Thumb}
     if state.buttons[4].pressed do result.buttons += {.Left_Shoulder}
-    if state.buttons[4].pressed do result.buttons += {.Right_Shoulder}
+    if state.buttons[5].pressed do result.buttons += {.Right_Shoulder}
     if state.buttons[0].pressed do result.buttons += {.A}
     if state.buttons[1].pressed do result.buttons += {.B}
     if state.buttons[2].pressed do result.buttons += {.X}
@@ -130,7 +130,7 @@ _get_gamepad_state :: proc(#any_int index: int) -> (result: Gamepad_State, ok: b
         .Right_Thumb_Y = -f32(state.axes[3]),
     }
 
-    return {}, false
+    return result, true
 }
 
 @(require_results)

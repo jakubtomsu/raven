@@ -349,7 +349,7 @@ when BACKEND == BACKEND_WINDOWS {
             }
             arg_list[i] = string(buf[:n])
         }
-
+        windows.LocalFree(arg_list_ptr)
         return arg_list
     }
 
@@ -519,7 +519,7 @@ when BACKEND == BACKEND_WINDOWS {
         windows.GlobalUnlock(memory_handle)
 
         windows.SetClipboardData(
-            windows.CF_TEXT,
+            windows.CF_UNICODETEXT,
             cast(windows.HANDLE)memory_handle,
         )
 
@@ -540,7 +540,7 @@ when BACKEND == BACKEND_WINDOWS {
 
         defer windows.CloseClipboard()
 
-        memory_handle := windows.GetClipboardData(windows.CF_TEXT)
+        memory_handle := windows.GetClipboardData(windows.CF_UNICODETEXT)
 
         if memory_handle == nil {
             return {}, false
@@ -731,7 +731,8 @@ when BACKEND == BACKEND_WINDOWS {
             windows.utf8_to_wstring_buf(buf[:], path),
         )
 
-        return (attribs & windows.FILE_ATTRIBUTE_DIRECTORY) != 0
+        return attribs != windows.INVALID_FILE_ATTRIBUTES &&
+            (attribs & windows.FILE_ATTRIBUTE_DIRECTORY) != 0
     }
 
     _iter_directory :: proc(iter: ^Directory_Iter, path: string, allocator := context.temp_allocator) -> (result: string, ok: bool) {
@@ -1053,7 +1054,7 @@ when BACKEND == BACKEND_WINDOWS {
                     case .Left_Alt: key = .Right_Alt
                     case .Left_Control: key = .Right_Control
                     case .Slash: key = .Keypad_Divide
-                    case .Capslock: key = .Keypad_Add
+                    case .Capslock: key = .Capslock
                     }
                 } else {
                     #partial switch key  {
@@ -1564,7 +1565,7 @@ when BACKEND == BACKEND_WINDOWS {
             defer windows.LocalFree(rawptr(msg_buf))
 
             str, _ := windows.wstring_to_utf8_alloc(msg_buf, int(num_msg_chars), context.temp_allocator)
-            if str[len(str)-1] == '\n' {
+            if len(str) > 1 && str[len(str)-1] == '\n' {
                 str = str[:len(str)-1]
             }
             base.log_err("%s : %s", text, str, loc = loc)
