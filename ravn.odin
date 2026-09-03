@@ -375,12 +375,12 @@ run_main_loop :: proc(desc: App_Desc) {
 
     } else when ODIN_OS == .JS {
 
-        init_state(context.allocator)
+        init_state(context.allocator, desc.window_init_config)
         _state.app_desc = desc
 
     } else when ODIN_OS == .Windows || ODIN_OS == .Linux || ODIN_OS == .Darwin {
 
-        init_state(context.allocator)
+        init_state(context.allocator, desc.window_init_config)
         context = get_context()
 
         ensure(_state.gpu_state.init_done)
@@ -456,7 +456,7 @@ __app_hot_step :: proc "contextless" (prev_state: ^State, desc: App_Desc) -> ^St
 
         assert(_state == nil)
 
-        init_state(context.allocator)
+        init_state(context.allocator, desc.window_init_config)
         context = get_context()
         ensure(_state != nil)
         assert(gpu.is_init_done())
@@ -512,7 +512,7 @@ init_context_state :: proc(ctx: ^Context_State, allocator: runtime.Allocator) {
 }
 
 // Create state, init context, init subsystems.
-init_state :: proc(allocator: runtime.Allocator) {
+init_state :: proc(allocator: runtime.Allocator, wic: base.Window_Init_Config) {
     ensure(_state == nil)
 
     state_err: runtime.Allocator_Error
@@ -549,7 +549,22 @@ init_state :: proc(allocator: runtime.Allocator) {
 
     base.log_info("Creating Window...")
 
-    _state.window = platform.create_window("Ravn App", style = .Regular, high_dpi = true)
+    default_wic := wic == base.Window_Init_Config{}
+
+    high_dpi := true if default_wic else wic.high_dpi
+    name := wic.name if wic.name != "" else "Ravn App"
+    rect: platform.Rect
+    if wic.size.x > 0 && wic.size.y > 0 {
+        window_size := [2]i32{i32(wic.size.x), i32(wic.size.y)}
+        monitor := platform.get_main_monitor_rect()
+        offset := (monitor.size - window_size) / 2
+        rect = {
+            min  = monitor.min + [2]i32{max(offset.x, 0), max(offset.y, 0)},
+            size = window_size,
+        }
+    }
+
+    _state.window = platform.create_window(name, style = .Regular, rect = rect, high_dpi = high_dpi)
 
     base.log_info("Initializing GPU...")
     if !gpu.init(&_state.gpu_state, platform.get_native_window_ptr(_state.window)) {

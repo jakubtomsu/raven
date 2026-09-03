@@ -121,10 +121,11 @@ _logger_prefix := [?]string{
 
 // NOTE: This structure is passed between DLLs when hot-reloading.
 App_Desc :: struct {
-    state_size: i64,
-    init:       App_Init_Proc,
-    shutdown:   App_Shutdown_Proc,
-    update:     App_Update_Proc,
+	state_size:         i64,
+	init:               App_Init_Proc,
+	shutdown:           App_Shutdown_Proc,
+	update:             App_Update_Proc,
+	window_init_config: Window_Init_Config,
 }
 
 // Called after internal init is done to let the app initialize.
@@ -136,6 +137,12 @@ App_Shutdown_Proc ::   #type proc()
 // This way you can
 App_Update_Proc ::     #type proc(hot_ptr: rawptr) -> (data_ptr: rawptr)
 
+Window_Init_Config :: struct {
+	name:     string,
+	// style:    Window_Style, // Proably shouldnt leak ravn_platform into ravn_base but this dose mean we dont have full controll over _create_window  options
+ 	size:     [2]f32,
+	high_dpi: bool,
+}
 
 
 
