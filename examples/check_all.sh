@@ -56,6 +56,7 @@ odin check examples/standalone_gpu_sdl3_triangle
 
 odin test . -debug
 odin test entities -debug
+odin test bvh -debug
 
 set +x # Stop printing runned commands
 echo "All checks passed!"

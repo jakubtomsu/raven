@@ -1,32 +1,28 @@
 #+private file
 package ravn_bvh
 
-// Fuzz test: build a BVH from random AABBs, then run random sphere-overlap and
-// closest-ray queries through the iter() traversal and compare each against a
-// brute-force scan. Run with:  odin test bvh
-//
-// Results must match brute-force exactly: node bounds enclose their prims and the
-// traversal uses the same scalar tests as the brute-force pass, so pruning never
-// drops a real hit and no float tolerance is needed.
-
 import "core:math/rand"
 import "core:slice"
 import "core:testing"
 
 @(test)
 _fuzz_test :: proc(t: ^testing.T) {
-    for trial in 0..<64 {
+    for i in 0..<256 {
         free_all(context.temp_allocator)
         context.allocator = context.temp_allocator
 
-        rand.reset(u64(trial) * 0x9E3779B97F4A7C15 + 1) // deterministic, reproducible per trial
+        rand.reset(u64(i) * 0x9E3779B97F4A7C15 + 1)
 
         num := 1 + rand.int_max(1024)
         max_leaf := 1 + rand.int_max(64)
 
         prims := make([][2][3]f32, num)
         for &p in prims {
-            p = random_box()
+            for j in 0..<3 {
+                pos := rand.float32_range(-100, 100)
+                p[0][j] = pos
+                p[1][j] = pos + rand.float32_range(0, 4) * rand.float32_range(0, 4)
+            }
         }
 
         nodes := make([]Node, max_nodes_for_prims(num))
@@ -34,14 +30,14 @@ _fuzz_test :: proc(t: ^testing.T) {
 
         bvh: BVH
         init(&bvh, nodes, indices, prims, max_leaf)
-        switch trial % 4 {
+        switch i % 4 {
         case 0: build_mid(&bvh)
         case 1: build_binned(&bvh)
         case 2: build_mean_sah(&bvh)
         case 3: build_sah(&bvh)
         }
 
-        for q in 0..<8 {
+        for _ in 0..<8 {
             pos := random_point()
             rad := rand.float32_range(0, 3)
             got: [dynamic]int
@@ -57,7 +53,7 @@ _fuzz_test :: proc(t: ^testing.T) {
             testing.expect(t, slice.equal(got[:], want[:]))
         }
 
-        for q in 0..<8 {
+        for _ in 0..<8 {
             pos := random_point()
             move := random_move()
             bvh_t, bvh_hit := query_ray(&bvh, pos, move)
@@ -76,16 +72,6 @@ _fuzz_test :: proc(t: ^testing.T) {
     }
 
     return
-
-    random_box :: proc() -> [2][3]f32 {
-        lo, hi: [3]f32
-        for i in 0..<3 {
-            a := rand.float32_range(-100, 100)
-            lo[i] = a
-            hi[i] = a + rand.float32_range(0, 4) * rand.float32_range(0, 4)
-        }
-        return {lo, hi}
-    }
 
     random_point :: proc() -> [3]f32 {
         return {rand.float32_range(-120, 120), rand.float32_range(-120, 120), rand.float32_range(-120, 120)}
@@ -111,13 +97,13 @@ _fuzz_test :: proc(t: ^testing.T) {
         return d2 <= rad * rad
     }
 
-    ray_vs_aabb :: proc(pos, move: [3]f32, box: [2][3]f32, range: f32 = 1) -> (t: f32, ok: bool) #optional_ok {
+    ray_vs_aabb :: proc(pos, move: [3]f32, box: [2][3]f32, range: f32 = 1) -> (f32, bool) {
         inv := 1.0 / move
         t1 := (box[0] - pos) * inv
         t2 := (box[1] - pos) * inv
         tmin := max(min(t1.x, t2.x), min(t1.y, t2.y), min(t1.z, t2.z))
         tmax := min(max(t1.x, t2.x), max(t1.y, t2.y), max(t1.z, t2.z))
-        ok = tmax >= max(0, tmin) && tmin < range
+        ok := tmax >= max(0, tmin) && tmin < range
         return tmin, ok
     }
 
