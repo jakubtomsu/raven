@@ -143,7 +143,7 @@ State :: struct #align(64) {
     allocator:                  runtime.Allocator,
     window:                     platform.Window,
     dpi_scale:                  f32,
-    app_desc:                   ^App_Desc,
+    app_desc:                   App_Desc,
     app_data:                   rawptr,
     shutdown_requested:         bool,
     submitted_layers:           bool,
@@ -375,7 +375,7 @@ when ODIN_OS == .JS {
 
 } else when ODIN_BUILD_MODE == .Dynamic {
     @(export) _app_hot_step :: proc "contextless" (prev_state: ^State, desc: ^App_Desc) -> ^State {
-        return __app_hot_step(prev_state, desc)
+        return __app_hot_step(prev_state, desc^)
     }
 }
 
@@ -384,7 +384,7 @@ when ODIN_OS == .JS {
 // Calling this does nothing when compiling as a DLL, it's the responsibility
 // of whoever loaded the DLL (e.g. hotreload runner) to call the app.
 // NOTE: Things like reload never get called in this mode.
-run_main_loop :: proc(desc: ^App_Desc) {
+run_main_loop :: proc(desc: App_Desc) {
     ensure(desc.update != nil)
 
     when ODIN_BUILD_MODE == .Dynamic {
@@ -424,7 +424,7 @@ run_main_loop :: proc(desc: ^App_Desc) {
     }
 }
 
-_app_update_frame :: proc(desc: ^App_Desc, hot_ptr: rawptr = nil) -> bool {
+_app_update_frame :: proc(desc: App_Desc, hot_ptr: rawptr = nil) -> bool {
     if !begin_frame() {
         return false
     }
@@ -465,7 +465,7 @@ __js_step :: proc(dt: f32) -> (keep_running: bool) {
     return true
 }
 
-__app_hot_step :: proc "contextless" (prev_state: ^State, desc: ^App_Desc) -> ^State {
+__app_hot_step :: proc "contextless" (prev_state: ^State, desc: App_Desc) -> ^State {
     hotreloaded := false
 
     if prev_state == nil {
