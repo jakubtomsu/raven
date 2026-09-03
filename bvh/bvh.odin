@@ -8,7 +8,7 @@ MAX_BINS :: 32
 
 BVH :: struct {
     nodes:          []Node,
-    indices:        []u16, // Indexes prims
+    indices:        []u32, // Indexes prims
     prims:          [][2][3]f32,
     nodes_used:     i32,
     max_leaf_prims: i32,
@@ -29,18 +29,18 @@ Node_SIMD4 :: struct #align(32) {
 
 @(require_results)
 max_nodes_for_prims :: proc "contextless" (#any_int num_prims: int) -> int {
-    return max(1, 2 * num_prims - 1)
+    return max(4, 2 * num_prims)
 }
 
 init :: proc(
     bvh:                    ^BVH,
     nodes:                  []Node,
-    indices:                []u16,
+    indices:                []u32,
     prims:                  [][2][3]f32 = nil,
     #any_int max_leaf_prims := 3,
 ) {
     assert(max_leaf_prims > 0)
-    assert(len(nodes) < int(max(u16)))
+    assert(len(nodes) < int(max(u32)))
 
     bvh^ = {
         nodes = nodes,
@@ -57,14 +57,14 @@ init :: proc(
 
 // Re-initialize the primitive buffer only and clears the existing nodes.
 init_prims :: proc(bvh: ^BVH, prims: [][2][3]f32) {
-    assert(len(prims) < int(max(u16)))
+    assert(len(prims) < int(max(u32)))
     assert(len(bvh.nodes) >= len(prims))
     assert(len(bvh.indices) >= len(prims))
 
     bvh.prims = prims
 
     for i in 0..<len(prims) {
-        bvh.indices[i] = u16(i)
+        bvh.indices[i] = u32(i)
     }
 
     if len(prims) > 0 {

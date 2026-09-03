@@ -163,7 +163,7 @@ init :: proc(state: ^State, allocator := context.allocator) {
         bvh.init(&step.tlas,
             prims = nil,
             nodes = runtime.make_aligned([]bvh.Node, bvh.max_nodes_for_prims(MAX_SHAPES), 64, allocator),
-            indices = make([]u16, MAX_SHAPES, allocator),
+            indices = make([]u32, MAX_SHAPES, allocator),
             max_leaf_prims = 1,
         )
     }
@@ -431,7 +431,7 @@ create_mesh :: proc(
     bvh.init(&mesh.blas,
         prims = tri_bbs,
         nodes = runtime.make_aligned([]bvh.Node, bvh.max_nodes_for_prims(len(triangles)), 64, allocator),
-        indices = make([]u16, len(triangles), allocator),
+        indices = make([]u32, len(triangles), allocator),
         max_leaf_prims = 4,
     )
 
