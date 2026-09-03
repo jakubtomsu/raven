@@ -2,9 +2,9 @@
 package ravn_audio
 
 import "../base"
-import "wasapi"
 import "base:intrinsics"
 import "core:sys/windows"
+import "vendor:windows/wasapi"
 
 when BACKEND == BACKEND_WASAPI {
     _State :: struct {
