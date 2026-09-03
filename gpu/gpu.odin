@@ -61,11 +61,11 @@ RENDER_TEXTURE_BIND_SLOTS :: 4
 
 // If you ever hit the pipeline limit it's probably a good idea to investigate
 // *why* you have so many pipelines in the first place, before raising it.
-MAX_PIPELINES :: #config(GPU_MAX_PIPELINES, 256)
-MAX_COMPUTE_PIPELINES :: #config(GPU_MAX_COMPUTE_PIPELINES, 128)
-MAX_RESOURCES :: #config(GPU_MAX_RESOURCES, 1024)
-MAX_SHADERS :: #config(GPU_MAX_SHADERS, 128)
-MAX_CONSTANTS :: #config(GPU_MAX_RESOURCES, 64)
+MAX_PIPELINES           :: #config(GPU_MAX_PIPELINES, 256)
+MAX_COMPUTE_PIPELINES   :: #config(GPU_MAX_COMPUTE_PIPELINES, 128)
+MAX_RESOURCES           :: #config(GPU_MAX_RESOURCES, 1024)
+MAX_SHADERS             :: #config(GPU_MAX_SHADERS, 128)
+MAX_CONSTANTS           :: #config(GPU_MAX_CONSTANTS, 64)
 
 HASH_SEED :: #config(GPU_HASH_SEED, 0xf8dff210ad)
 MAX_HASH_PROBE_DIST :: 64
@@ -915,7 +915,7 @@ create_buffer :: proc(
     }
 
     if usage == .Immutable {
-        validate(len(data) > 1)
+        validate(len(data) > 0)
     }
 
     index := _table_find_slot(_state.resource_used) or_return

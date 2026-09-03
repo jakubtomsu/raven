@@ -291,6 +291,9 @@ when BACKEND == BACKEND_D3D11 {
         return result
 
         _d3d11_blend_desc :: proc(desc: Blend_Desc) -> d3d.RENDER_TARGET_BLEND_DESC {
+            if desc == {} {
+                return d3d.RENDER_TARGET_BLEND_DESC{BlendEnable = false}
+            }
             return d3d.RENDER_TARGET_BLEND_DESC{
                 BlendEnable             = true,
                 SrcBlend                = _d3d11_blend_factor(desc.src_color),
@@ -1094,7 +1097,7 @@ when BACKEND == BACKEND_D3D11 {
         }
 
         if curr.constants != prev.constants {
-            cbufs: [SAMPLER_BIND_SLOTS]^d3d.IBuffer
+            cbufs: [CONSTANTS_BIND_SLOTS]^d3d.IBuffer
             for handle, i in curr.constants {
                 const := _get_resource(handle) or_continue
                 cbufs[i] = const.buf
