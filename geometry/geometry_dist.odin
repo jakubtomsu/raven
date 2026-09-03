@@ -161,10 +161,10 @@ get_triangle_dist_grad :: proc "contextless" (pos: [3]f32, tri: [3][3]f32) -> (d
     } else {
         // 1 face
         d := linalg.vector_dot(normal, p1)
-        normal_len2 := linalg.vector_length2(normal)
-        grad = normal * (1.0 / intrinsics.sqrt(normal_len2))
+        normal_len := linalg.vector_length(normal)
+        grad = normal * (1.0 / normal_len)
         grad = d >= 0 ? grad : -grad
-        dist = abs(d) * (1.0 / normal_len2)
+        dist = abs(d) * (1.0 / normal_len)
     }
 
     return dist, grad

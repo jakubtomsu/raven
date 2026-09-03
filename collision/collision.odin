@@ -357,7 +357,7 @@ _arena_allocator_proc :: proc(
 
 @(require_results)
 get_arena :: proc(handle: Arena_Handle) -> (^Arena, bool) {
-    if handle.index <= 0 || handle.index > MAX_ARENAS {
+    if handle.index <= 0 || handle.index >= MAX_ARENAS {
         return nil, false
     }
 
@@ -370,7 +370,7 @@ get_arena :: proc(handle: Arena_Handle) -> (^Arena, bool) {
 
 @(require_results)
 get_mesh :: proc(handle: Mesh_Handle) -> (^Mesh, bool) {
-    if handle.index <= 0 || handle.index > MAX_MESHES {
+    if handle.index <= 0 || handle.index >= MAX_MESHES {
         return nil, false
     }
 
@@ -447,7 +447,7 @@ create_mesh :: proc(
 
     return {
         index = Handle_Index(index),
-        gen = _state.arena_gen[index],
+        gen = _state.mesh_gen[index],
     }, true
 }
 
@@ -1028,7 +1028,7 @@ find_contacts_sphere_buf :: proc(
                 )
 
                 contacts := out_contacts[num_contacts:][:num_new_contacts]
-                tris := out_triangles[:num_triangles][:num_new_triangles]
+                tris := out_triangles[num_triangles:][:num_new_triangles]
 
                 for &c in contacts {
                     c.shape = i32(index)
@@ -1152,6 +1152,9 @@ generate_filtered_sphere_vs_triangle_contacts :: proc(
             }
         }
 
+        if int(num_contacts) >= len(out_contacts) {
+            break
+        }
 
         dist := intrinsics.sqrt(sort.dist_sq)
         out_contacts[num_contacts] = Contact{
@@ -1214,7 +1217,7 @@ get_mesh_triangle :: proc(handle: Mesh_Handle, #any_int tri_index: int) -> (vert
     return {
         mesh.verts[tri[0]],
         mesh.verts[tri[1]],
-        mesh.verts[tri[1]],
+        mesh.verts[tri[2]],
     }, true
 }
 
