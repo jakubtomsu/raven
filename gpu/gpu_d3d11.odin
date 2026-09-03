@@ -844,7 +844,7 @@ when BACKEND == BACKEND_D3D11 {
         }
 
         if .Compute in shaders {
-            _state.device_context->PSSetSamplers(
+            _state.device_context->CSSetSamplers(
                 StartSlot = u32(index_offset),
                 NumSamplers = u32(len(smps)),
                 ppSamplers = raw_data(smps),
