@@ -97,10 +97,28 @@ Shader_Handle :: distinct Handle
 Sound_Resource_Handle :: audio.Resource_Handle
 Sound_Handle :: audio.Sound_Handle
 
-App_Desc :: base.App_Desc
-App_Init_Proc :: base.App_Init_Proc
-App_Shutdown_Proc :: base.App_Shutdown_Proc
-App_Update_Proc :: base.App_Update_Proc
+// NOTE: This structure is passed between DLLs when hot-reloading.
+App_Desc :: struct {
+    init:               App_Init_Proc,
+    shutdown:           App_Shutdown_Proc,
+    update:             App_Update_Proc,
+    window_init_config: Window_Init_Config,
+}
+
+// Called after internal init is done to let the app initialize.
+App_Init_Proc ::       #type proc()
+// Called after request_shutdown() but before the engine cleans up.
+App_Shutdown_Proc ::   #type proc()
+// Called every frame.
+// Usually, hot_ptr is nil. But after a hotreload, hot_ptr is the last returned data_ptr.
+App_Update_Proc ::     #type proc(hot_ptr: rawptr) -> (data_ptr: rawptr)
+
+Window_Init_Config :: struct {
+    name:     string,
+    style:    platform.Window_Style,
+    size:     [2]f32,
+    high_dpi: bool,
+}
 
 Rect :: struct {
     min:    [2]f32,
@@ -125,7 +143,7 @@ State :: struct #align(64) {
     allocator:                  runtime.Allocator,
     window:                     platform.Window,
     dpi_scale:                  f32,
-    app_desc:                   App_Desc,
+    app_desc:                   ^App_Desc,
     app_data:                   rawptr,
     shutdown_requested:         bool,
     submitted_layers:           bool,
@@ -356,7 +374,7 @@ when ODIN_OS == .JS {
     }
 
 } else when ODIN_BUILD_MODE == .Dynamic {
-    @(export) _app_hot_step :: proc "contextless" (prev_state: ^State, desc: App_Desc) -> ^State {
+    @(export) _app_hot_step :: proc "contextless" (prev_state: ^State, desc: ^App_Desc) -> ^State {
         return __app_hot_step(prev_state, desc)
     }
 }
@@ -366,7 +384,7 @@ when ODIN_OS == .JS {
 // Calling this does nothing when compiling as a DLL, it's the responsibility
 // of whoever loaded the DLL (e.g. hotreload runner) to call the app.
 // NOTE: Things like reload never get called in this mode.
-run_main_loop :: proc(desc: App_Desc) {
+run_main_loop :: proc(desc: ^App_Desc) {
     ensure(desc.update != nil)
 
     when ODIN_BUILD_MODE == .Dynamic {
@@ -406,7 +424,7 @@ run_main_loop :: proc(desc: App_Desc) {
     }
 }
 
-_app_update_frame :: proc(desc: App_Desc, hot_ptr: rawptr = nil) -> bool {
+_app_update_frame :: proc(desc: ^App_Desc, hot_ptr: rawptr = nil) -> bool {
     if !begin_frame() {
         return false
     }
@@ -447,7 +465,7 @@ __js_step :: proc(dt: f32) -> (keep_running: bool) {
     return true
 }
 
-__app_hot_step :: proc "contextless" (prev_state: ^State, desc: App_Desc) -> ^State {
+__app_hot_step :: proc "contextless" (prev_state: ^State, desc: ^App_Desc) -> ^State {
     hotreloaded := false
 
     if prev_state == nil {
@@ -512,7 +530,7 @@ init_context_state :: proc(ctx: ^Context_State, allocator: runtime.Allocator) {
 }
 
 // Create state, init context, init subsystems.
-init_state :: proc(allocator: runtime.Allocator, wic: base.Window_Init_Config) {
+init_state :: proc(allocator: runtime.Allocator, wic: Window_Init_Config) {
     ensure(_state == nil)
 
     state_err: runtime.Allocator_Error
@@ -549,7 +567,7 @@ init_state :: proc(allocator: runtime.Allocator, wic: base.Window_Init_Config) {
 
     base.log_info("Creating Window...")
 
-    default_wic := wic == base.Window_Init_Config{}
+    default_wic := wic == Window_Init_Config{}
 
     high_dpi := true if default_wic else wic.high_dpi
     name := wic.name if wic.name != "" else "Ravn App"

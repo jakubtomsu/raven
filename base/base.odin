@@ -117,35 +117,6 @@ _logger_prefix := [?]string{
 }
 
 
-// MARK: Module
-
-// NOTE: This structure is passed between DLLs when hot-reloading.
-App_Desc :: struct {
-	state_size:         i64,
-	init:               App_Init_Proc,
-	shutdown:           App_Shutdown_Proc,
-	update:             App_Update_Proc,
-	window_init_config: Window_Init_Config,
-}
-
-// Called after internal init is done to let the app initialize.
-App_Init_Proc ::       #type proc()
-// Called after request_shutdown() but before the engine cleans up.
-App_Shutdown_Proc ::   #type proc()
-// Called every frame.
-// Usually, hot_ptr is nil. But after a hotreload, hot_ptr is the last returned data_ptr.
-// This way you can
-App_Update_Proc ::     #type proc(hot_ptr: rawptr) -> (data_ptr: rawptr)
-
-Window_Init_Config :: struct {
-	name:     string,
-	// style:    Window_Style, // Proably shouldnt leak ravn_platform into ravn_base but this dose mean we dont have full controll over _create_window  options
- 	size:     [2]f32,
-	high_dpi: bool,
-}
-
-
-
 @(require_results)
 reinterpret_slice :: proc "contextless" ($T: typeid, data: []$E, loc := #caller_location) -> []T {
     bytes := to_bytes(data)
