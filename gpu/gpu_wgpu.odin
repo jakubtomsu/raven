@@ -762,7 +762,11 @@ when BACKEND == BACKEND_WGPU {
             },
         )
 
-        return {}, true
+        if result.pip == nil {
+            return {}, false
+        }
+
+        return result, true
     }
 
     _update_swapchain :: proc(_: ^_Resource, _: rawptr, size: [2]i32) -> (ok: bool) {
