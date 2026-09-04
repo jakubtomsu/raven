@@ -476,8 +476,8 @@ create_window :: proc(name: string, style: Window_Style = .Regular, rect: Rect =
 
         case .Regular:
             rect = {
-                min = monitor.min + monitor.size / 6,
-                size = (monitor.size * 2) / 3,
+                min = monitor.min + monitor.size / 4,
+                size = monitor.size / 2,
             }
         }
     }

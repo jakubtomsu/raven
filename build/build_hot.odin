@@ -19,11 +19,8 @@ when ODIN_OS == .Windows {
 
 Hotreload_Module :: struct {
 	mod:      platform.Module,
-	// Opaque pointer to the app's exported '_app_desc' global inside the DLL.
-	// The build package never inspects it, it just passes it back into the callback.
-	// TODO: we should probably add a different system for checking user state struct doesn't get corrupted
-	desc:     rawptr,
-	callback: proc "contextless" (_: rawptr, _: rawptr) -> rawptr,
+	desc:     rawptr, // Opaque pointer to _app_desc export
+	callback: proc "contextless" (_: rawptr, _: rawptr) -> rawptr, // _app_hot_step
 }
 
 Hotreload_File :: struct {
@@ -80,22 +77,11 @@ when ODIN_OS == .Linux || ODIN_OS == .Darwin{
     }
 
 
-    /// Taken from  Odin/core/os/path.odin
-    /*
-    Gets the file name and extension from a path.
-
-    e.g.
-        'path/to/name.tar.gz' -> 'name.tar.gz'
-        'path/to/name.txt'    -> 'name.txt'
-        'path/to/name'        -> 'name'
-
-    Returns "." if the path is an empty string.
-    */
+    // Based on Odin/core/os/path.odin
     filepath_base :: proc(path: string) -> string {
         if path == "" {
             return "."
         }
-
         _, file := split_path(path)
         return file
     }

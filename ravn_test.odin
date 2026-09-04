@@ -31,6 +31,13 @@ _normalize_path_test :: proc(t: ^testing.T) {
 }
 
 @(test)
+_cp437_rune_char_table :: proc(t: ^testing.T) {
+    for ch in 0..<max(u8) {
+        testing.expectf(t, ch == rune_to_char(char_to_rune(ch)), "%v : %v", ch, char_to_rune(ch))
+    }
+}
+
+@(test)
 _uv_packing :: proc(t: ^testing.T) {
     for x in -8..=8 {
         for y in -8..=8 {
