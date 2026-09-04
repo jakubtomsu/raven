@@ -18,19 +18,6 @@ import "core:math"
 import "base:runtime"
 import debug_trace "core:debug/trace"
 
-// TODO: objects in scene data
-// TODO: asset_load and reload
-// TODO: consistent get_* and no get API!
-// TODO: font state
-// TODO: try core:image?
-// TODO: separate hash table size from backing array size?
-// TODO: default module init/shutdown procs
-// TODO: load_* vs create_*, insert_* naming convention, and resource management naming in general
-// TODO: DXT texture compression
-// TODO: figure out file flushing and custom file data loop
-// TODO: all resources should return a handle if an identifier exists already
-// TODO: fix scene mesh normals
-
 RELEASE :: #config(RAVN_RELEASE, base.RELEASE)
 VALIDATION :: #config(RAVN_VALIDATION, !RELEASE)
 DEBUG_TRACE_ENABLED :: ODIN_DEBUG && #config(RAVN_DEBUG_TRACE, !RELEASE) // Debug symbols are required
@@ -56,9 +43,7 @@ MAX_TOTAL_DYNAMIC_VERTS :: 1024 * 64 // Shared between triangles and lines
 
 MAX_TEXTURE_POOLS :: 8
 MAX_TEXTURE_POOL_SLICES :: 64
-
 MAX_DRAW_STATE_DEPTH :: 64
-
 MAX_TOTAL_DRAW_BATCHES :: 4096
 
 // This is the actual swapchain used for rendering directly to screen.
@@ -66,14 +51,13 @@ DEFAULT_RENDER_TEXTURE :: Render_Texture_Handle{MAX_RENDER_TEXTURES - 1, 0}
 
 HASH_SEED :: #config(RAVN_HASH_SEED, 0xcbf29ce484222325)
 MAX_PROBE_DIST :: #config(RAVN_MAX_TABLE_PROBE_DIST, 16)
-
 HASH_ALG :: "fnv64a"
+
+Hash :: u64
 
 UV_EPS :: (1.0 / 2048.0)
 
 LANES :: 8
-
-Hash :: u64
 
 HANDLE_INDEX_INVALID :: ~Handle_Index(0)
 
@@ -99,10 +83,15 @@ Sound_Handle :: audio.Sound_Handle
 
 // NOTE: This structure is passed between DLLs when hot-reloading.
 App_Desc :: struct {
+    name:               string,
+
     init:               App_Init_Proc,
     shutdown:           App_Shutdown_Proc,
     update:             App_Update_Proc,
-    window_init_config: Window_Init_Config,
+
+    window_style:      platform.Window_Style,
+    window_size:       [2]i32,
+    window_high_dpi:   bool,
 }
 
 // Called after internal init is done to let the app initialize.
@@ -112,13 +101,6 @@ App_Shutdown_Proc ::   #type proc()
 // Called every frame.
 // Usually, hot_ptr is nil. But after a hotreload, hot_ptr is the last returned data_ptr.
 App_Update_Proc ::     #type proc(hot_ptr: rawptr) -> (data_ptr: rawptr)
-
-Window_Init_Config :: struct {
-    name:     string,
-    style:    platform.Window_Style,
-    size:     [2]f32,
-    high_dpi: bool,
-}
 
 Rect :: struct {
     min:    [2]f32,
@@ -380,7 +362,6 @@ when ODIN_OS == .JS {
 }
 
 // Default runner for a ravn app.
-//
 // Calling this does nothing when compiling as a DLL, it's the responsibility
 // of whoever loaded the DLL (e.g. hotreload runner) to call the app.
 // NOTE: Things like reload never get called in this mode.
@@ -393,12 +374,11 @@ run_main_loop :: proc(desc: App_Desc) {
 
     } else when ODIN_OS == .JS {
 
-        init_state(context.allocator, desc.window_init_config)
-        _state.app_desc = desc
+        init_state(context.allocator, desc)
 
     } else when ODIN_OS == .Windows || ODIN_OS == .Linux || ODIN_OS == .Darwin {
 
-        init_state(context.allocator, desc.window_init_config)
+        init_state(context.allocator, desc)
         context = get_context()
 
         ensure(_state.gpu_state.init_done)
@@ -474,7 +454,7 @@ __app_hot_step :: proc "contextless" (prev_state: ^State, desc: App_Desc) -> ^St
 
         assert(_state == nil)
 
-        init_state(context.allocator, desc.window_init_config)
+        init_state(context.allocator, desc)
         context = get_context()
         ensure(_state != nil)
         assert(gpu.is_init_done())
@@ -530,7 +510,7 @@ init_context_state :: proc(ctx: ^Context_State, allocator: runtime.Allocator) {
 }
 
 // Create state, init context, init subsystems.
-init_state :: proc(allocator: runtime.Allocator, wic: Window_Init_Config) {
+init_state :: proc(allocator: runtime.Allocator, desc: App_Desc) {
     ensure(_state == nil)
 
     state_err: runtime.Allocator_Error
@@ -540,6 +520,7 @@ init_state :: proc(allocator: runtime.Allocator, wic: Window_Init_Config) {
         panic("Failed to allocate Ravn State")
     }
 
+    _state.app_desc = desc
     _state.init_allocator = allocator
 
     init_context_state(&_state.context_state, allocator)
@@ -567,22 +548,21 @@ init_state :: proc(allocator: runtime.Allocator, wic: Window_Init_Config) {
 
     base.log_info("Creating Window...")
 
-    default_wic := wic == Window_Init_Config{}
-
-    high_dpi := true if default_wic else wic.high_dpi
-    name := wic.name if wic.name != "" else "Ravn App"
+    window_title := desc.name == "" ? "RAVN App" : desc.name
     rect: platform.Rect
-    if wic.size.x > 0 && wic.size.y > 0 {
-        window_size := [2]i32{i32(wic.size.x), i32(wic.size.y)}
+    if desc.window_size != 0 {
         monitor := platform.get_main_monitor_rect()
-        offset := (monitor.size - window_size) / 2
+        size := [2]i32{
+            min(monitor.size.x, desc.window_size.x),
+            min(monitor.size.y, desc.window_size.y),
+        }
         rect = {
-            min  = monitor.min + [2]i32{max(offset.x, 0), max(offset.y, 0)},
-            size = window_size,
+            min  = monitor.min + monitor.size / 2 - size / 2,
+            size = size,
         }
     }
 
-    _state.window = platform.create_window(name, style = .Regular, rect = rect, high_dpi = high_dpi)
+    _state.window = platform.create_window(window_title, style = desc.window_style, rect = rect, high_dpi = desc.window_high_dpi)
 
     base.log_info("Initializing GPU...")
     if !gpu.init(&_state.gpu_state, platform.get_native_window_ptr(_state.window)) {
@@ -2991,6 +2971,7 @@ char_to_rune :: proc(ch: u8) -> rune {
     case 29: return '↔'
     case 30: return '▲'
     case 31: return '▼'
+    case 32: return ' '
     case 127: return '⌂'
     case 128: return 'Ç'
     case 129: return 'ü'
