@@ -116,8 +116,11 @@ when BACKEND == BACKEND_WASAPI {
         assert(_state.audio_client != nil)
         assert(_state.render_client != nil)
         _state.audio_client->Stop()
-        windows.WaitForSingleObject(_state.thread, 1000)
+        windows.WaitForSingleObject(_state.thread, 2000)
         windows.CloseHandle(_state.thread)
+        _state.render_client->Release();
+        _state.audio_client->Release();
+        windows.CloseHandle(_state.buffer_event)
         windows.CoUninitialize()
     }
 
@@ -163,9 +166,10 @@ when BACKEND == BACKEND_WASAPI {
         for _state.running {
             assert(_state != nil)
 
-            windows.WaitForSingleObject(_state.buffer_event, windows.INFINITE)
-
-            _wasapi_render_buffer()
+            wait_res := windows.WaitForSingleObject(_state.buffer_event, 1000)
+            if wait_res == windows.WAIT_OBJECT_0 {
+                _wasapi_render_buffer()
+            }
         }
 
         return 0
