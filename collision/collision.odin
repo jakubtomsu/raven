@@ -39,7 +39,7 @@ Layer_Mask :: [4]u64
 
 ID :: u64
 
-State :: struct {
+State :: struct #align(4096) {
     init_allocator:     runtime.Allocator,
 
     arena_data:         [MAX_ARENAS]Arena,

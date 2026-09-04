@@ -107,7 +107,7 @@ Rect :: struct {
 
 _state: ^State
 
-State :: struct #align(64) {
+State :: struct #align(4096) {
     initialized:                bool,
     start_time:                 u64,
     curr_time:                  u64,

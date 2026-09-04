@@ -1,4 +1,4 @@
-// Simple program to check
+// Simple program to check all the examples and run tests
 package ravn_build_check
 
 import "base:runtime"

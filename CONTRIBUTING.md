@@ -23,8 +23,7 @@ For small stupid things like typos, prefer posting it on Discord over a PR.
 
 If you implement a large feature, consider the **maintenance cost**.
 
-Before submitting the PR, please run `odin run build/check` (works on all platforms).
-You can also smoke-test the examples with `odin run build/check -- run`.
+Before submitting the PR, please run `odin run build/check`.
 
 ### Bug Fixes
 

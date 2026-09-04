@@ -2,7 +2,10 @@ package ravn_base
 
 import "base:intrinsics"
 
-Pool :: struct($N: int, $D: typeid, $H: typeid) where intrinsics.type_core_type(H) == Handle {
+Pool :: struct($N: int, $D: typeid, $H: typeid) where
+    intrinsics.type_has_field(H, "index"),
+    intrinsics.type_has_field(H, "gen")
+{
     used:   Bit_Pool(N),
     gen:    [N]Handle_Gen,
     data:   [N]D,
@@ -16,40 +19,41 @@ pool_clear :: proc "contextless" (pool: ^$T/Pool($N, $D, $H)) {
 
 @(require_results)
 pool_has :: proc "contextless" (pool: $T/Pool($N, $D, $H), handle: H) -> bool {
-    return handle.index > 0 && handle.index < N && handle.gen == pool.gen[handle.index]
+    return handle.index > 0 && handle.index < Handle_Index(N) && handle.gen == pool.gen[handle.index]
 }
 
 @(require_results)
-pool_find_free :: proc "contextless" (pool: $T/Pool($N, $D, $H)) -> (H, bool) {
-    index := base.bit_pool_find_0(pool.used) or_return
-    return {index = Handle_Index(index), gen = pool.gen[index]}
+pool_find_free :: proc "contextless" (pool: $T/Pool($N, $D, $H)) -> (handle: H, ok: bool) {
+    index := bit_pool_find_0(pool.used) or_return
+    return {index = Handle_Index(index), gen = pool.gen[index]}, true
 }
 
 @(require_results)
 pool_insert :: proc "contextless" (pool: ^$T/Pool($N, $D, $H), handle: H, data: D) -> bool {
-    if pool_has(pool^, handle) || base.bit_pool_is_1(pool.used, handle.index) {
+    if !pool_has(pool^, handle) || bit_pool_is_1(pool.used, handle.index) {
         return false
     }
-    base.bit_pool_set_1(&pool.used, handle.index)
+    bit_pool_set_1(&pool.used, handle.index)
     pool.data[handle.index] = data
     return true
 }
 
 @(require_results)
-pool_remove :: proc(pool: ^$T/Pool($N, $D, $H), handle: Handle) -> bool {
+pool_remove :: proc(pool: ^$T/Pool($N, $D, $H), handle: H) -> bool {
     if !pool_has(pool^, handle) {
         return false
     }
-    assert(base.bit_pool_is_1(pool.used^, handle.index))
-    base.bit_pool_set_0(pool.used, handle.index)
+    assert(bit_pool_is_1(pool.used, handle.index))
+    bit_pool_set_0(&pool.used, handle.index)
     pool.gen[handle.index] += 1
+    return true
 }
 
 @(require_results)
-pool_get :: proc(pool: ^$T/Pool($N, $D, $H)) -> (^D, bool) {
+pool_get :: proc(pool: ^$T/Pool($N, $D, $H), handle: H) -> (^D, bool) {
     if !pool_has(pool^, handle) {
         return nil, false
     }
-    assert(base.bit_pool_is_1(pool.used^, handle.index))
+    assert(bit_pool_is_1(pool.used, handle.index))
     return &pool.data[handle.index], true
 }

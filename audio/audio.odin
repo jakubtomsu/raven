@@ -56,7 +56,7 @@ Sound_Handle :: distinct Handle
 
 _state: ^State
 
-State :: struct #align(64) {
+State :: struct #align(4096) {
     using native:       _State,
     running:            bool,
     init_context:       runtime.Context,

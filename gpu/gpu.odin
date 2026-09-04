@@ -70,10 +70,21 @@ MAX_CONSTANTS           :: #config(GPU_MAX_CONSTANTS, 64)
 HASH_SEED :: #config(GPU_HASH_SEED, 0xf8dff210ad)
 MAX_HASH_PROBE_DIST :: 64
 
+Handle :: base.Handle
+Handle_Gen :: u8
+Handle_Index :: u16
+
+Hash :: u64
+
+Pipeline_Handle :: distinct Handle
+Compute_Pipeline_Handle :: distinct Handle
+Shader_Handle :: distinct Handle
+Resource_Handle :: distinct Handle
+
 // Holds all global state.
 _state: ^State
 
-State :: struct #align(64) {
+State :: struct #align(4096) {
     using native:                   _State,
     in_frame:                       bool,
     init_context:                   runtime.Context,
@@ -82,23 +93,13 @@ State :: struct #align(64) {
     // On WebGPU, the initialization is async.
     init_done:                      bool,
 
-    pipeline_hash:                  [MAX_PIPELINES]u64,
-    pipeline_desc:                  [MAX_PIPELINES]Pipeline_Desc,
-    pipeline_data:                  [MAX_PIPELINES]Pipeline_State,
-    pipeline_gen:                   [MAX_PIPELINES]Handle_Gen,
+    pipelines:                      base.Hash_Pool(MAX_PIPELINES, Pipeline_State, Pipeline_Handle),
+    pipelines_desc:                 [MAX_PIPELINES]Pipeline_Desc,
+    compute_pipelines:              base.Hash_Pool(MAX_COMPUTE_PIPELINES, Compute_Pipeline_State, Compute_Pipeline_Handle),
+    compute_pipelines_desc:         [MAX_COMPUTE_PIPELINES]Compute_Pipeline_Desc,
 
-    compute_pipeline_hash:          [MAX_COMPUTE_PIPELINES]u64,
-    compute_pipeline_desc:          [MAX_COMPUTE_PIPELINES]Compute_Pipeline_Desc,
-    compute_pipeline_data:          [MAX_COMPUTE_PIPELINES]Compute_Pipeline_State,
-    compute_pipeline_gen:           [MAX_COMPUTE_PIPELINES]Handle_Gen,
-
-    resource_used:                  base.Bit_Pool(MAX_RESOURCES),
-    resource_gen:                   [MAX_RESOURCES]Handle_Gen,
-    resource_data:                  [MAX_RESOURCES]Resource_State,
-
-    shader_used:                    base.Bit_Pool(MAX_SHADERS),
-    shader_gen:                     [MAX_SHADERS]Handle_Gen,
-    shader_data:                    [MAX_SHADERS]Shader_State,
+    resources:                      base.Pool(MAX_RESOURCES, Resource_State, Resource_Handle),
+    shaders:                        base.Pool(MAX_SHADERS, Shader_State, Shader_Handle),
 
     curr_pass_desc:                 Pass_Desc,
     curr_pipeline:                  Pipeline_Handle,
@@ -109,21 +110,6 @@ State :: struct #align(64) {
     curr_compute_pipeline:          Compute_Pipeline_Handle,
     curr_compute_pipeline_desc:     Compute_Pipeline_Desc,
 }
-
-Handle_Gen :: distinct u8
-Handle_Index :: distinct u16
-
-Handle :: struct #packed {
-    gen:    Handle_Gen,
-    index:  Handle_Index,
-}
-
-Hash :: u64
-
-Pipeline_Handle :: distinct Handle
-Compute_Pipeline_Handle :: distinct Handle
-Shader_Handle :: distinct Handle
-Resource_Handle :: distinct Handle
 
 Pipeline_State :: struct {
     using native:   _Pipeline,
@@ -475,8 +461,8 @@ init :: proc(state: ^State, native_window: rawptr) -> bool {
     _state = state
     _state.init_context = context
 
-    base.bit_pool_set_1(&_state.shader_used, 0)
-    base.bit_pool_set_1(&_state.resource_used, 0)
+    base.pool_clear(&_state.shaders)
+    base.pool_clear(&_state.resources)
 
     return _init(native_window)
 }
@@ -597,19 +583,12 @@ create_pipeline :: proc(
     validate_pipeline_desc(desc, loc = loc)
 
     hash := hash_pipeline_desc(desc)
+    handle, existing := base.hash_pool_find_free(_state.pipelines, hash) or_return
 
-    index, prev := _table_find_empty_hash(&_state.pipeline_hash, hash) or_return
-
-    // Already exists
-    if prev != 0 {
-        assert(_state.pipeline_desc[index] != {})
-        validate(desc == _state.pipeline_desc[index], "Hash Collision")
-        result = {
-            index = Handle_Index(index),
-            gen = _state.pipeline_gen[index],
-        }
-
-        return result, true
+    if existing {
+        assert(_state.pipelines_desc[handle.index] != {})
+        validate(desc == _state.pipelines_desc[handle.index], "Hash Collision")
+        return handle, true
     }
 
     base.log_debug("Creating pipeline '%s' %x", name, hash)
@@ -617,16 +596,9 @@ create_pipeline :: proc(
     state: Pipeline_State
     state.native = _create_pipeline(name, desc) or_return
 
-    _state.pipeline_desc[index] = desc
-    _state.pipeline_data[index] = state
-    _state.pipeline_hash[index] = hash
-
-    result = {
-        index = Handle_Index(index),
-        gen = _state.pipeline_gen[index],
-    }
-
-    return result, true
+    _state.pipelines_desc[handle.index] = desc
+    base.hash_pool_insert(&_state.pipelines, hash, handle, state) or_return
+    return handle, true
 }
 
 @(require_results)
@@ -683,19 +655,12 @@ create_compute_pipeline :: proc(
     validate_compute_pipeline_desc(desc, loc = loc)
 
     hash := hash_compute_pipeline_desc(desc)
+    handle, existing := base.hash_pool_find_free(_state.compute_pipelines, hash) or_return
 
-    index, prev := _table_find_empty_hash(&_state.compute_pipeline_hash, hash) or_return
-
-    // Already exists
-    if prev != 0 {
-        assert(_state.compute_pipeline_desc[index] != {})
-        validate(desc == _state.compute_pipeline_desc[index], "Hash Collision")
-        result = {
-            index = Handle_Index(index),
-            gen = _state.compute_pipeline_gen[index],
-        }
-
-        return result, true
+    if existing {
+        assert(_state.compute_pipelines_desc[handle.index] != {})
+        validate(desc == _state.compute_pipelines_desc[handle.index], "Hash Collision")
+        return handle, true
     }
 
     base.log_debug("Creating compute pipeline '%s' %x", name, hash)
@@ -703,16 +668,9 @@ create_compute_pipeline :: proc(
     state: Compute_Pipeline_State
     state.native = _create_compute_pipeline(name, desc) or_return
 
-    _state.compute_pipeline_desc[index] = desc
-    _state.compute_pipeline_data[index] = state
-    _state.compute_pipeline_hash[index] = hash
-
-    result = {
-        index = Handle_Index(index),
-        gen = _state.compute_pipeline_gen[index],
-    }
-
-    return result, true
+    _state.compute_pipelines_desc[handle.index] = desc
+    base.hash_pool_insert(&_state.compute_pipelines, hash, handle, state) or_return
+    return handle, true
 }
 
 // Set 'item_num' to 2 or more to enable multi const buffers with dynamic offsets.
@@ -723,8 +681,7 @@ create_constants :: proc(name: string, item_size: i32, item_num: i32 = 1) -> (re
     validate(item_size < MAX_CONSTANT_BUFFER_SIZE)
     validate(item_size % 16 == 0)
 
-    index: int
-    index, ok = _table_find_slot(_state.resource_used)
+    result, ok = base.pool_find_free(_state.resources)
     if !ok {
         base.log_err("GPU: Failed to find an empty slot for new constants")
         return {}, false
@@ -740,9 +697,8 @@ create_constants :: proc(name: string, item_size: i32, item_num: i32 = 1) -> (re
         return {}, false
     }
 
-    _state.resource_data[index] = state
-
-    return Resource_Handle(_table_insert(&_state.resource_used, _state.resource_gen, index)), true
+    base.pool_insert(&_state.resources, result, state) or_return
+    return result, true
 }
 
 @(require_results)
@@ -754,8 +710,7 @@ create_shader :: proc(
     validate(kind != .Invalid)
     validate(len(data) > 0)
 
-    index: int
-    index, ok = _table_find_slot(_state.shader_used)
+    result, ok = base.pool_find_free(_state.shaders)
     if !ok {
         base.log_err("GPU: Failed to find an empty slot for a new shader")
         return {}, false
@@ -769,9 +724,8 @@ create_shader :: proc(
         return {}, false
     }
 
-    _state.shader_data[index] = state
-
-    return Shader_Handle(_table_insert(&_state.shader_used, _state.shader_gen, index)), true
+    base.pool_insert(&_state.shaders, result, state) or_return
+    return result, true
 }
 
 // Resources
@@ -799,7 +753,7 @@ update_swapchain :: proc(window: rawptr, size: [2]i32) -> (result: Resource_Hand
         result = _state.swapchain_res
 
     } else {
-        index := _table_find_slot(_state.resource_used) or_return
+        result = base.pool_find_free(_state.resources) or_return
 
         state: Resource_State
         state.kind = .Swapchain
@@ -807,10 +761,7 @@ update_swapchain :: proc(window: rawptr, size: [2]i32) -> (result: Resource_Hand
         state.usage = .Default
         _update_swapchain(&state.native, window, size) or_return
 
-        _state.resource_data[index] = state
-
-        result = Resource_Handle(_table_insert(&_state.resource_used, _state.resource_gen, index))
-
+        base.pool_insert(&_state.resources, result, state) or_return
         _state.swapchain_res = result
     }
 
@@ -839,7 +790,6 @@ create_texture_2d :: proc(
     validate(size.y <= MAX_TEXTURE_2D_SIZE)
     validate(array_depth < MAX_TEXTURE_ARRAY_DEPTH)
 
-
     if render_texture {
         validate(array_depth == 1)
         validate(usage == .Default)
@@ -860,7 +810,7 @@ create_texture_2d :: proc(
         validate(len(data) == (int(size.x * size.y) * int(texture_pixel_size(format))))
     }
 
-    index := _table_find_slot(_state.resource_used) or_return
+    result = base.pool_find_free(_state.resources) or_return
 
     state: Resource_State
     state.kind = .Texture2D
@@ -880,9 +830,8 @@ create_texture_2d :: proc(
         data = data,
     ) or_return
 
-    _state.resource_data[index] = state
-
-    return Resource_Handle(_table_insert(&_state.resource_used, _state.resource_gen, index)), true
+    base.pool_insert(&_state.resources, result, state) or_return
+    return result, true
 }
 
 // Must set size or data.
@@ -918,7 +867,7 @@ create_buffer :: proc(
         validate(len(data) > 0)
     }
 
-    index := _table_find_slot(_state.resource_used) or_return
+    result = base.pool_find_free(_state.resources) or_return
 
     state: Resource_State
     state.kind = .Buffer
@@ -933,9 +882,8 @@ create_buffer :: proc(
         data = data,
     ) or_return
 
-    _state.resource_data[index] = state
-
-    return Resource_Handle(_table_insert(&_state.resource_used, _state.resource_gen, index)), true
+    base.pool_insert(&_state.resources, result, state) or_return
+    return result, true
 }
 
 // Must set size or data.
@@ -954,7 +902,7 @@ create_index_buffer :: proc(
 
     validate(size > 0)
 
-    index := _table_find_slot(_state.resource_used) or_return
+    result = base.pool_find_free(_state.resources) or_return
 
     state: Resource_State
     state.kind = .Index_Buffer
@@ -968,9 +916,8 @@ create_index_buffer :: proc(
         usage = usage,
     ) or_return
 
-    _state.resource_data[index] = state
-
-    return Resource_Handle(_table_insert(&_state.resource_used, _state.resource_gen, index)), true
+    base.pool_insert(&_state.resources, result, state) or_return
+    return result, true
 }
 
 
@@ -984,22 +931,16 @@ destroy :: proc {
     destroy_resource,
 }
 
-destroy_shader :: proc(handle: Shader_Handle) {
-    state, state_ok := _table_get(&_state.shader_data, _state.shader_gen, handle)
-    if !state_ok {
-        return
-    }
+destroy_shader :: proc(handle: Shader_Handle) -> bool {
+    state := base.pool_get(&_state.shaders, handle) or_return
     _destroy_shader(state^)
-    _table_destroy(&_state.shader_used, &_state.shader_gen, handle)
+    return base.pool_remove(&_state.shaders, handle)
 }
 
-destroy_resource :: proc(handle: Resource_Handle) {
-    state, state_ok := _table_get(&_state.resource_data, _state.resource_gen, handle)
-    if !state_ok {
-        return
-    }
+destroy_resource :: proc(handle: Resource_Handle) -> bool {
+    state := base.pool_get(&_state.resources, handle) or_return
     _destroy_resource(state^)
-    _table_destroy(&_state.resource_used, &_state.resource_gen, handle)
+    return base.pool_remove(&_state.resources, handle)
 }
 
 
@@ -1044,7 +985,7 @@ set_pipeline :: proc(handle: Pipeline_Handle) {
         return
     }
 
-    pip_desc := _state.pipeline_desc[handle.index]
+    pip_desc := _state.pipelines_desc[handle.index]
 
     validate_pipeline_desc(pip_desc)
     validate_pipeline_for_pass(pip_desc, _state.curr_pass_desc)
@@ -1052,7 +993,7 @@ set_pipeline :: proc(handle: Pipeline_Handle) {
     prev_desc := _state.curr_pipeline_desc
 
     _state.curr_pipeline = handle
-    _state.curr_pipeline_desc = _state.pipeline_desc[handle.index]
+    _state.curr_pipeline_desc = _state.pipelines_desc[handle.index]
 
     // Needed for validation
     num_consts: i32
@@ -1097,14 +1038,14 @@ set_compute_pipeline :: proc(handle: Compute_Pipeline_Handle) {
         return
     }
 
-    pip_desc := _state.compute_pipeline_desc[handle.index]
+    pip_desc := _state.compute_pipelines_desc[handle.index]
 
     validate_compute_pipeline_desc(pip_desc)
 
     prev_desc := _state.curr_compute_pipeline_desc
 
     _state.curr_compute_pipeline = handle
-    _state.curr_compute_pipeline_desc = _state.compute_pipeline_desc[handle.index]
+    _state.curr_compute_pipeline_desc = _state.compute_pipelines_desc[handle.index]
 
     _set_compute_pipeline(
         curr_pip = pip^,
@@ -1461,22 +1402,22 @@ validate_compute_pipeline_desc :: proc(desc: Compute_Pipeline_Desc, loc := #call
 
 @(require_results)
 _get_pipeline :: proc(handle: Pipeline_Handle) -> (^Pipeline_State, bool) {
-    return _table_get(&_state.pipeline_data, _state.pipeline_gen, handle)
+    return base.hash_pool_get(&_state.pipelines, handle)
 }
 
 @(require_results)
 _get_compute_pipeline :: proc(handle: Compute_Pipeline_Handle) -> (^Compute_Pipeline_State, bool) {
-    return _table_get(&_state.compute_pipeline_data, _state.compute_pipeline_gen, handle)
+    return base.hash_pool_get(&_state.compute_pipelines, handle)
 }
 
 @(require_results)
 _get_resource :: proc(handle: Resource_Handle) -> (^Resource_State, bool) {
-    return _table_get(&_state.resource_data, _state.resource_gen, handle)
+    return base.pool_get(&_state.resources, handle)
 }
 
 @(require_results)
 _get_shader :: proc(handle: Shader_Handle) -> (^Shader_State, bool) {
-    return _table_get(&_state.shader_data, _state.shader_gen, handle)
+    return base.pool_get(&_state.shaders, handle)
 }
 
 @(require_results)
