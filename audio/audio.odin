@@ -448,6 +448,7 @@ create_sound :: proc(
     pos:                    [3]f32 = 0,
     vel:                    [3]f32 = 0,
     #any_int group_index:   int = 0,
+    loc                     := #caller_location,
 ) -> (result: Sound_Handle, ok: bool) #optional_ok {
     pitch := pitch
     source := source
@@ -457,7 +458,7 @@ create_sound :: proc(
 
     index, index_ok := base.spsc_pop(&_state.sounds_free)
     if !index_ok {
-        // base.log_err("No free sound slots")
+        base.log_err("No free sound slots", loc = loc)
         return {}, false
     }
 
@@ -469,7 +470,7 @@ create_sound :: proc(
     case Resource_Handle:
         res, res_ok := _get_resource(s)
         if !res_ok {
-            base.log_err("Attempting to play sound with invalid resource handle %v", s)
+            base.log_err("Attempting to play sound with invalid resource handle %v", s, loc = loc)
             return {}, false
         }
 

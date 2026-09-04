@@ -119,8 +119,8 @@ new_game :: proc() {
 
     state.snake.pos = repel_from_obstacles(state.snake.pos, 0.3)
 
-    rv.destroy_sound(state.music)
-    state.music = rv.create_sound(state.music_res, flags = {.Loop})
+    audio.destroy_sound(state.music)
+    state.music = audio.create_sound(rv.get_sound_resource(state.music_res), flags = {.Loop})
 
     spawn_berry()
 }
@@ -134,7 +134,7 @@ spawn_berry :: proc() {
         state.berry.pos = repel_from_obstacles(state.berry.pos, 0.5)
     }
 
-    rv.create_sound(state.berry_sound, pitch = rand.float32_range(0.9, 1.2))
+    audio.create_sound(rv.get_sound_resource(state.berry_sound), pitch = rand.float32_range(0.9, 1.2))
 }
 
 rand_dir :: proc() -> [3]f32 {
@@ -260,8 +260,8 @@ _update :: proc(hot_state: rawptr) -> rawptr {
         state.cam_fov = rv.lexp(state.cam_fov, rv.deg(65 + rv.remap_clamped(state.berry_timer, 0, 0.5, 7, 0)), delta * 15)
 
         if die {
-            rv.create_sound(state.death_sound, pitch = rand.float32_range(0.9, 1.2))
-            rv.destroy_sound(state.music)
+            audio.create_sound(rv.get_sound_resource(state.death_sound), pitch = rand.float32_range(0.9, 1.2))
+            audio.destroy_sound(state.music)
             state.music = {}
             state.screen = .Death
         }

@@ -24,8 +24,10 @@ hash_pool_has :: proc "contextless" (pool: $T/Hash_Pool($N, $D, $H), handle: H) 
 }
 
 @(require_results)
-hash_pool_find_free :: proc(pool: $T/Hash_Pool($N, $D, $H), hash: u64) -> (handle: H, found_existing: bool, ok: bool) {
-    assert(hash != 0)
+hash_pool_find_free :: proc "contextless" (pool: $T/Hash_Pool($N, $D, $H), hash: u64) -> (handle: H, found_existing: bool, ok: bool) {
+    if hash == 0 {
+        return {}, false, false
+    }
     for offs in 0..<u64(HASH_POOL_MAX_PROBE_DIST) {
         slot := (hash + offs) %% u64(N)
         if slot != 0 && pool.hash[slot] == 0 || pool.hash[slot] == hash {
@@ -37,11 +39,13 @@ hash_pool_find_free :: proc(pool: $T/Hash_Pool($N, $D, $H), hash: u64) -> (handl
 
 @(require_results)
 hash_pool_find :: proc "contextless" (pool: $T/Hash_Pool($N, $D, $H), hash: u64) -> (H, bool) {
-    assert(hash != 0)
+    if hash == 0 {
+        return {}, false
+    }
     for offs in 0..<u64(HASH_POOL_MAX_PROBE_DIST) {
         slot := (hash + offs) %% u64(N)
-        if pool.hash[slot] == 0 {
-            return {index = Handle_Index(slot), gen = pool.gen[index]}
+        if pool.hash[slot] == hash {
+            return {index = Handle_Index(slot), gen = pool.gen[slot]}, true
         }
     }
     return {}, false
@@ -72,6 +76,6 @@ hash_pool_get :: proc(pool: ^$T/Hash_Pool($N, $D, $H), handle: H) -> (^D, bool) 
     if !hash_pool_has(pool^, handle) {
         return nil, false
     }
-    assert(pool.hash[handle.index] != 0)
+    assert(pool.hash[handle.index] != 0, "Corrupted state")
     return &pool.data[handle.index], true
 }

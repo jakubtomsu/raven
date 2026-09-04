@@ -504,7 +504,7 @@ begin_frame :: proc() -> (ok: bool) {
 
 
 
-end_frame :: proc(sync: bool = true) {
+end_frame :: proc(sync: bool = true, loc := #caller_location) {
     assert(_state != nil)
     assert(_state.in_frame)
     assert(_state.curr_pass_desc == {})
@@ -584,7 +584,7 @@ create_pipeline :: proc(
     desc:   Pipeline_Desc,
     loc     := #caller_location,
 ) -> (result: Pipeline_Handle, ok: bool) {
-    validate_pipeline_desc(desc, loc = loc)
+    validate_pipeline_desc(desc)
 
     hash := hash_pipeline_desc(desc)
     handle, existing := base.hash_pool_find_free(_state.pipelines, hash) or_return
@@ -633,7 +633,6 @@ compute_pipeline_desc :: proc(
     resources:          []Resource_Handle = {},
     rw_resources:       []Resource_Handle = {},
 ) -> (result: Compute_Pipeline_Desc) {
-
     assert(len(result.resources) >= len(resources))
     assert(len(result.constants) >= len(consts))
     assert(len(result.samplers) >= len(samplers))
@@ -704,7 +703,7 @@ create_constants :: proc(name: string, item_size: i32, item_num: i32 = 1, loc :=
         return {}, false
     }
 
-    base.pool_insert(&_state.resources, result, state) or_return
+    base.pool_insert(&_state.resources, result, state) or_else panic("Failed to insert")
     return result, true
 }
 
@@ -733,7 +732,7 @@ create_shader :: proc(
         return {}, false
     }
 
-    base.pool_insert(&_state.shaders, result, state) or_return
+    base.pool_insert(&_state.shaders, result, state) or_else panic("Failed to insert")
     return result, true
 }
 
@@ -756,7 +755,6 @@ update_swapchain :: proc(window: rawptr, size: [2]i32, loc := #caller_location) 
         }
 
         existing.size = {size.x, size.y, 1}
-        existing.loc = loc
 
         _update_swapchain(&existing.native, window, size) or_return
 
@@ -772,7 +770,7 @@ update_swapchain :: proc(window: rawptr, size: [2]i32, loc := #caller_location) 
         state.loc = loc
         _update_swapchain(&state.native, window, size) or_return
 
-        base.pool_insert(&_state.resources, result, state) or_return
+        base.pool_insert(&_state.resources, result, state) or_else panic("Failed to insert")
         _state.swapchain_res = result
     }
 
@@ -843,7 +841,7 @@ create_texture_2d :: proc(
         data = data,
     ) or_return
 
-    base.pool_insert(&_state.resources, result, state) or_return
+    base.pool_insert(&_state.resources, result, state) or_else panic("Failed to insert")
     return result, true
 }
 
@@ -897,7 +895,7 @@ create_buffer :: proc(
         data = data,
     ) or_return
 
-    base.pool_insert(&_state.resources, result, state) or_return
+    base.pool_insert(&_state.resources, result, state) or_else panic("Failed to insert")
     return result, true
 }
 
@@ -933,7 +931,7 @@ create_index_buffer :: proc(
         usage = usage,
     ) or_return
 
-    base.pool_insert(&_state.resources, result, state) or_return
+    base.pool_insert(&_state.resources, result, state) or_else panic("Failed to insert")
     return result, true
 }
 
@@ -1119,17 +1117,18 @@ update_buffer :: proc(handle: Resource_Handle, offset: int, buffers: ..[]byte) {
     _update_buffer(res, offset, buffers)
 }
 
-update_texture_2d :: proc(handle: Resource_Handle, data: []byte, #any_int slice: i32 = 0) {
+update_texture_2d :: proc(handle: Resource_Handle, data: []byte, #any_int slice: i32 = 0) -> bool {
     assert(_state.curr_pass_desc == {}, "You must do all texture updates before rendering")
 
     res, res_ok := _get_resource(handle)
     if !res_ok {
-        return
+        return false
     }
 
     assert(res.kind == .Texture2D)
     assert(slice < res.size.z)
     _update_texture_2d(res^, data = data, slice = slice)
+    return true
 }
 
 
@@ -1231,7 +1230,7 @@ validate_pass_desc :: proc(desc: Pass_Desc) {
     }
 }
 
-validate_pipeline_desc :: proc(desc: Pipeline_Desc, loc := #caller_location) {
+validate_pipeline_desc :: proc(desc: Pipeline_Desc) {
     assert(desc.topo != .Invalid)
     assert(desc.fill != .Invalid)
     assert(desc.cull != .Invalid)
@@ -1315,7 +1314,7 @@ validate_pipeline_desc :: proc(desc: Pipeline_Desc, loc := #caller_location) {
 validate_pipeline_for_pass :: proc(pip: Pipeline_Desc, pass: Pass_Desc) {
     for col, i in pass.colors {
         _, res_ok := _get_resource(col.resource)
-        // TODO: validate format
+        // TODO: assert format
 
         if res_ok {
             assert(pip.color_format[i] != .Invalid)

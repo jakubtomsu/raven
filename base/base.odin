@@ -119,11 +119,11 @@ _logger_proc :: proc(
 
 @(rodata)
 _logger_prefix := [?]string{
-	 0..<10 = "DBG:  ",
-	10..<20 = "INFO: ",
-	20..<30 = "WARN: ",
-	30..<40 = "ERR:  ",
-	40..<50 = "FATAL: ",
+     0..<10 = "DBG:  ",
+    10..<20 = "INFO: ",
+    20..<30 = "WARN: ",
+    30..<40 = "ERR:  ",
+    40..<50 = "FATAL: ",
 }
 
 

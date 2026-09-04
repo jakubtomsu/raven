@@ -293,16 +293,28 @@ get :: proc(
 
 @(require_results)
 get_sub :: proc(ents: ^$Ents/Entities($Val_Union, $Sub_Union), handle: Handle, $Sub: typeid) -> (result: ^Sub, ok: bool) where UNION_HAS(Sub_Union, Sub) {
-    offset := ents.offsets[UNION_INDEX(Sub_Union, Sub)][handle.variant]
+    if handle.variant >= UNION_LEN(Val_Union) {
+        return {}, false
+    }
 
+    offset := ents.offsets[UNION_INDEX(Sub_Union, Sub)][handle.variant]
     if offset == -1 {
         return nil, false
     }
 
-    ptr :=
-        uintptr(ents.buffers[handle.variant].data) +
-        uintptr(handle.index) * uintptr(ents.sizes[handle.variant]) +
-        uintptr(offset)
+    buf := ents.buffers[handle.variant]
+    if  handle.index <= 0 ||
+        i32(handle.index) > buf.top
+    {
+        return {}, false
+    }
+
+    base := uintptr(buf.data) + uintptr(handle.index) * uintptr(ents.sizes[handle.variant])
+    if handle != (cast(^Base)base).handle {
+        return nil, false
+    }
+
+    ptr :=  base + uintptr(offset)
 
     return transmute(^Sub)ptr, true
 }

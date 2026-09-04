@@ -70,18 +70,20 @@ Vertex :: struct #align(16) {
 }
 
 
-Texture_Pool :: struct {
+Texture_Pool :: struct #all_or_none {
     slices_used:    bit_set[0..<MAX_TEXTURE_POOL_SLICES],
     size:           [2]i32,
     slices:         i32,
     resource:       gpu.Resource_Handle,
+    loc:            runtime.Source_Code_Location,
 }
 
-Texture :: struct {
+Texture :: struct #all_or_none {
     size:       [2]u16,
-    pool_index: u8, // set to max(u8) for non-pooled
+    pool:       Texture_Pool_Handle,
     slice:      u8,
     resource:   gpu.Resource_Handle,
+    loc:        runtime.Source_Code_Location,
 }
 
 Texture_Data :: struct {
@@ -183,6 +185,7 @@ Render_Texture :: struct #all_or_none {
     size:   [2]i32,
     color:  gpu.Resource_Handle,
     depth:  gpu.Resource_Handle,
+    loc:    runtime.Source_Code_Location,
 }
 
 // (CPU) Draw instance data
@@ -269,6 +272,10 @@ create_mesh_from_data :: proc(
 
     arena := _get_arena(arena_handle) or_return
 
+    hash := hash_name(name)
+    handle, exists := base.hash_pool_find_free(_state.meshes, hash) or_return
+    assert(!exists)
+
     if
         len(verts) > len(arena.vert_upload_buf) - int(arena.vert_upload_offs) ||
         len(indices) > len(arena.index_upload_buf) - int(arena.index_upload_offs)
@@ -297,8 +304,8 @@ create_mesh_from_data :: proc(
         mesh.bounds_rad = max(mesh.bounds_rad, linalg.length(vert.pos))
     }
 
-    handle, handle_ok := insert_mesh_by_name(name, mesh)
-    if !handle_ok {
+
+    if !base.hash_pool_insert(&_state.meshes, hash, handle, mesh) {
         base.log_err("Failed to create mesh '%s', table is full", name)
         return {}, false
     }
@@ -313,16 +320,7 @@ create_mesh_from_data :: proc(
 }
 
 destroy_mesh :: proc(handle: Mesh_Handle) -> bool {
-    mesh, mesh_ok := _get_mesh(handle)
-    if !mesh_ok {
-        return false
-    }
-
-    mesh^ = {}
-
-    _state.meshes_gen[handle.index] += 1
-    _state.meshes_hash[handle.index] = 0
-    return true
+    return base.hash_pool_remove(&_state.meshes, handle)
 }
 
 
@@ -335,41 +333,44 @@ destroy_mesh :: proc(handle: Mesh_Handle) -> bool {
 // When you create textures with the same size after this call they will get inserted into the pool.
 // NOTE: Strongly prefer square and power-of-two sizes for texture pools.
 // NOTE: A texture pool may not be destroyed.
-// NOTE: Beware of the memory consumed by high-res texture pools!
-create_texture_pool :: proc(size: [2]i32, slices: i32) -> (ok: bool) {
-    if _state.texture_pools_len >= len(_state.texture_pools) {
-        base.log_err("Failed to create texture pool, too many texture pools")
-        return false
+create_texture_pool :: proc(size: [2]i32, slices: i32, loc := #caller_location) -> (result: Texture_Pool_Handle, ok: bool) {
+    handle, handle_ok := base.pool_find_free(_state.texture_pools)
+    if !handle_ok {
+        base.log_err("Failed to find a slot for texture pool")
+        return {}, false
     }
 
-    pool: Texture_Pool
-    pool.size = size
-    pool.slices = slices
-    pool.resource, ok = gpu.create_texture_2d("rv-tex-pool",
+    pool := Texture_Pool{
+        slices_used = {},
+        size = size,
+        slices = slices,
+        resource = {},
+        loc = loc,
+    }
+
+    res_ok: bool
+    pool.resource, res_ok = gpu.create_texture_2d("rv-tex-pool",
         format = .RGBA_U8_Norm,
         size = size,
         array_depth = slices,
     )
 
-    assert(ok)
-
-    if pool.resource == {} {
+    if !res_ok {
         base.log_err("Failed to create %ix%ix%i texture pool GPU resource", size.x, size.y, slices)
-        return false
+        return {}, false
     }
 
-    index := _state.texture_pools_len
-    _state.texture_pools[index] = pool
-    _state.texture_pools_len += 1
+    assert(pool.resource != {})
 
-    return true
+    base.pool_insert(&_state.texture_pools, handle, pool) or_else panic("Failed to insert texture pool")
+    return handle, true
 }
 
 _get_texture :: proc(handle: Texture_Handle) -> (result: ^Texture, ok: bool) #optional_ok {
-    return _table_get(&_state.textures, _state.textures_gen, handle)
+    return base.hash_pool_get(&_state.textures, handle)
 }
 
-load_texture :: proc(path: string) -> (result: Texture_Handle, ok: bool) #optional_ok {
+load_texture :: proc(path: string, pool_handle: Texture_Pool_Handle = {}) -> (result: Texture_Handle, ok: bool) #optional_ok {
     npath := normalize_path(path, context.temp_allocator)
     name := asset_name_from_path(npath)
     base.log_info("Loading texture '%s' from path '%s'", name, npath)
@@ -378,148 +379,127 @@ load_texture :: proc(path: string) -> (result: Texture_Handle, ok: bool) #option
         base.log_err("Failed to load texture '%s', couldn't get file data", name)
         return {}, false
     }
-    return create_texture_from_encoded_data(name, data)
+    return create_texture_from_encoded_data(name, data, pool_handle)
 }
 
-create_texture_from_encoded_data :: proc(name: string, data: []byte) -> (result: Texture_Handle, ok: bool) {
+create_texture_from_encoded_data :: proc(name: string, data: []byte, pool_handle: Texture_Pool_Handle = {}) -> (result: Texture_Handle, ok: bool) {
     tex, tex_ok := decode_texture_data(data)
     if !tex_ok {
         base.log_err("Failed to decode texture '%s'", name)
+        return {}, false
     }
-
-    result, ok = create_texture_from_data(name, tex)
-
-    destroy_decoded_texture_data(&tex)
-
-    return result, ok
+    defer destroy_decoded_texture_data(&tex)
+    return create_texture_from_data(name, tex, pool_handle)
 }
 
-create_texture_from_data :: proc(name: string, data: Texture_Data) -> (result: Texture_Handle, ok: bool) {
+create_texture_from_data :: proc(name: string, data: Texture_Data, pool_handle: Texture_Pool_Handle = {}, loc := #caller_location) -> (result: Texture_Handle, ok: bool) {
+    assert(name != "")
     assert(data.size.x > 0)
     assert(data.size.y > 0)
     assert(len(data.pixels) == int(data.size.x * data.size.y))
 
     hash := hash_name(name)
+    handle, exists, handle_ok := base.hash_pool_find_free(_state.textures, hash)
+    assert(!exists)
+    if !handle_ok {
+        base.log_err("Failed to find slot for texture: '%s'", name)
+        return {}, false
+    }
 
-    index, prev := _table_insert_hash(&_state.textures_hash, hash) or_return
+    texture: Texture
+    if pool_handle != {} {
+        pool, pool_ok := base.pool_get(&_state.texture_pools, pool_handle)
+        if !pool_ok {
+            base.log_err("Invalid texture pool handle for texture: '%s'", name)
+            return {}, false
+        }
 
-    texture := &_state.textures[index]
-
-    create_resource := true
-
-    for &pool, pool_index in _state.texture_pools[:_state.texture_pools_len] {
         if pool.size != data.size {
-            continue
+            base.log_err("Invalid texture pool size: '%s'", name)
+            return {}, false
         }
 
-        full_set := (u64(1) << u64(pool.slices)) - 1
+        base.log_info("Creating a pooled texture '%s' of size %ix%i", name, data.size.x, data.size.y)
 
-        used_set := (transmute(u64)pool.slices_used)
-
-        if full_set == used_set {
-            continue
+        slice_index := intrinsics.count_trailing_zeros(~(transmute(u64)pool.slices_used))
+        if slice_index >= 64 {
+            base.log_err("Texture pool is full: '%s'", name)
+            return {}, false
         }
-
-        slice_index := intrinsics.count_trailing_zeros(~used_set)
-
-        assert(slice_index < 64)
-
-        base.log_info("Creating a pooled texture '%s' of size %ix%i with index %i", name, data.size.x, data.size.y, index)
-
-        create_resource = false
 
         pool.slices_used += {int(slice_index)}
 
-        texture^ = Texture{
+        texture = Texture{
             size = {u16(data.size.x), u16(data.size.y)},
-            pool_index = u8(pool_index),
+            pool = pool_handle,
             slice = u8(slice_index),
             resource = {},
+            loc = loc,
         }
 
-        gpu.update_texture_2d(
+        if !gpu.update_texture_2d(
             pool.resource,
             gpu.slice_bytes(data.pixels),
             slice_index,
-        )
-
-        break
-    }
-
-    if create_resource {
-        base.log_info("Creating a non-pooled texture '%s' of size %ix%i with index %i", name, data.size.x, data.size.y, index)
-
-        // Already exists, replace the old one.
-        // Possibly a name hash collision.
-        if prev == hash {
-            gpu.destroy_resource(texture.resource)
-            texture^ = {}
+        ) {
+            base.log_err("Failed to update GPU texture pool resource: '%s'", name)
+            return {}, false
         }
+
+    } else {
+        base.log_info("Creating a non-pooled texture '%s' of size %ix%i", name, data.size.x, data.size.y)
 
         res, res_ok := gpu.create_texture_2d(strings_join("rv-tex-", name, allocator = context.temp_allocator),
             format = .RGBA_U8_Norm,
             size = data.size,
             usage = .Immutable,
             data = gpu.slice_bytes(data.pixels),
+            loc = loc,
         )
 
         assert(res_ok)
 
-        texture^ = Texture{
+        texture = Texture{
             size = {u16(data.size.x), u16(data.size.y)},
-            pool_index = max(u8),
+            pool = {},
             slice = 0,
             resource = res,
+            loc = loc,
         }
     }
 
-    result = {
-        index = Handle_Index(index),
-        gen = _state.textures_gen[index],
-    }
-
-    return result, true
+    base.hash_pool_insert(&_state.textures, hash, handle, texture) or_return // TODO: panic
+    return handle, true
 }
 
-create_texture_from_resource :: proc(name: string, handle: gpu.Resource_Handle) -> (result: Texture_Handle, ok: bool) {
-    res := gpu._get_resource(handle) or_return
+create_texture_from_resource :: proc(name: string, gpu_resource: gpu.Resource_Handle, loc := #caller_location) -> (result: Texture_Handle, ok: bool) {
+    res := gpu._get_resource(gpu_resource) or_return
 
     if res.kind != .Texture2D {
         return {}, false
     }
 
     hash := hash_name(name)
+    handle, exists := base.hash_pool_find_free(_state.textures, hash) or_return
+    assert(!exists)
 
-    index, prev := _table_insert_hash(&_state.textures_hash, hash) or_return
-    assert(prev == 0, "Collision")
-
-    texture := &_state.textures[index]
-    texture^ = {
+    texture: Texture = {
         size = {u16(res.size.x), u16(res.size.y)},
-        pool_index = max(u8),
+        pool = {},
         slice = 0,
-        resource = handle,
+        resource = gpu_resource,
+        loc = loc,
     }
 
-    result = {
-        index = Handle_Index(index),
-        gen = _state.textures_gen[index],
-    }
-
-    return result, true
+    base.hash_pool_insert(&_state.textures, hash, handle, texture) or_return
+    return handle, true
 }
 
-destroy_texture :: proc(handle: Texture_Handle) {
-    texture, texture_ok := _get_texture(handle)
-    if !texture_ok {
-        return
-    }
-
+destroy_texture :: proc(handle: Texture_Handle) -> bool {
+    texture := base.hash_pool_get(&_state.textures, handle) or_return
     gpu.destroy_resource(texture.resource)
-    texture^ = {}
-
-    _state.textures_gen[handle.index] += 1
-    _state.textures_hash[handle.index] = 0
+    base.hash_pool_remove(&_state.textures, handle) or_return
+    return true
 }
 
 @(require_results)
@@ -557,6 +537,27 @@ destroy_decoded_texture_data :: proc(data: ^Texture_Data) {
     data^ = {}
 }
 
+find_available_texture_pool :: proc(size: [2]i32) -> (Texture_Pool_Handle, bool) {
+    for &pool, i in _state.texture_pools.data {
+        if !base.bit_pool_is_1(_state.texture_pools.used, i) {
+            continue
+        }
+
+        if pool.size != size {
+            continue
+        }
+
+        full_set := (u64(1) << u64(pool.slices)) - 1
+        if full_set == (transmute(u64)pool.slices_used) {
+            continue
+        }
+
+        return Texture_Pool_Handle{index = Handle_Index(i), gen = _state.texture_pools.gen[i]}, true
+    }
+    return {}, false
+}
+
+
 
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -589,48 +590,34 @@ load_shader :: proc(path: string) -> (result: Shader_Handle, ok: bool) #optional
 
 @(require_results)
 create_shader_from_bin :: proc(name: string, data: []byte) -> (result: Shader_Handle, ok: bool) #optional_ok {
-    hash := base.hash_fnv64a(data, HASH_SEED)
-
-    if eq_handle, eq_ok := _try_get_equivalent_existing_shader(name, hash); eq_ok {
-        return eq_handle, true
-    }
-
-    return _create_shader_from_bin_hash(name, data, hash)
-}
-
-@(require_results)
-_create_shader_from_bin_hash :: proc(name: string, data: []byte, hash: u64) -> (result: Shader_Handle, ok: bool) #optional_ok {
     kind := _shader_kind_from_name(name)
     if kind == .Invalid {
         base.log_err("Failed to create shader, invalid extension")
         return {}, false
     }
 
-    shader: gpu.Shader_Handle
-    shader, ok = gpu.create_shader(name, data, kind)
+    name_hash := hash_name(name)
+    handle, exists := base.hash_pool_find_free(_state.shaders, name_hash) or_return
+    assert(!exists)
 
-    if !ok {
-        base.log_err("Failed to create shader")
-        return
+    gpu_shader, gpu_ok := gpu.create_shader(name, data, kind)
+
+    if !gpu_ok {
+        base.log_err("Failed to create GPU shader")
+        return {}, false
     }
 
-    // TODO: if this fails the shader gets leaked.
-    // TODO: fix for ALL table inserts, including rscn loading and custom mesh creation etc.
-    return insert_shader_by_name(name, {
-        shader = shader,
-        hash = hash,
-    })
+    shader := Shader{
+        shader = gpu_shader,
+    }
+
+    base.hash_pool_insert(&_state.shaders, name_hash, handle, shader) or_else panic("Failed to insert shader")
+    return handle, true
 }
 
 when SHADER_COMPILER_ENABLED {
     @(require_results)
     create_shader_from_source :: proc(name: string, source: string) -> (result: Shader_Handle, ok: bool) #optional_ok {
-        hash := base.hash_fnv64a(transmute([]byte)source, HASH_SEED)
-
-        if eq_handle, eq_ok := _try_get_equivalent_existing_shader(name, hash); eq_ok {
-            return eq_handle, true
-        }
-
         compiled: []byte
         if _state.shader_compiler_target == .Invalid {
             base.log_err("Cannot compile shader from source, failed to init shader compiler")
@@ -657,39 +644,8 @@ when SHADER_COMPILER_ENABLED {
             }
         }
 
-        return _create_shader_from_bin_hash(name, compiled, hash)
+        return create_shader_from_bin(name, compiled)
     }
-
-    QUICK_SHADER_PREFIX :: #load("data/ravn.hlsli", string) + `
-
-RV_RESOURCE_SLOT(2, Texture2DArray tex);
-RV_SAMPLER_SLOT(0, SamplerState smp);
-
-float4 ps_main(RV_Varyings vars, uint frontface : SV_IsFrontFace) : SV_Target {
-    float3 normal = normalize(bool(frontface) ? -vars.normal : vars.normal);
-    float4 tex_col = tex.Sample(smp, float3(vars.uv, float(vars.tex_slice)));
-    float4 col = vars.add_col + vars.col * tex_col;
-` // Your code contiunes the shader
-
-    QUICK_SHADER_SUFFIX :: `
-    return col;
-}`
-
-    experimental_create_quick_pixel_shader :: proc(name: string, source_body: string) -> Shader_Handle {
-        return create_shader_from_source(name,
-            strings_join(QUICK_SHADER_PREFIX, source_body, QUICK_SHADER_SUFFIX, allocator = context.temp_allocator),
-        ) or_else panic("Failed to create quick shader")
-    }
-}
-
-_try_get_equivalent_existing_shader :: proc(name: string, input_hash: u64) -> (result: Shader_Handle, ok: bool) {
-    if existing_handle, existing_ok := get_shader_by_name(name); existing_ok {
-        existing := _get_shader(existing_handle) or_else panic("Found invalid shader")
-        if existing.hash == input_hash {
-            return existing_handle, true
-        }
-    }
-    return {}, false
 }
 
 _shader_kind_from_name :: proc(name: string) -> gpu.Shader_Kind {
@@ -724,31 +680,26 @@ _shader_include_proc :: proc(path: string, user: rawptr) -> (result: string, ok:
 //
 
 @(require_results)
-create_render_texture :: proc(size: [2]i32, depth := true) -> (result: Render_Texture_Handle, ok: bool) {
+create_render_texture :: proc(size: [2]i32, depth := true, loc := #caller_location) -> (result: Render_Texture_Handle, ok: bool) {
     assert(size.x > 0)
     assert(size.y > 0)
     assert(size.x <= 4096) // arbitrary
     assert(size.y <= 4096)
 
-    used_set := (transmute(u64)_state.render_textures_used) | 1
-    index := intrinsics.count_trailing_zeros(~used_set)
-    if index == 64 {
-        base.log_err("Failed to create render texture: there is already max number of render textures")
-        return {}, false
-    }
+    handle := base.pool_find_free(_state.render_textures) or_return
 
-    tex := &_state.render_textures[index]
-
-    tex^ = {
+    texture := Render_Texture{
         size = size,
         color = {},
         depth = {},
+        loc = loc,
     }
 
-    tex.color, ok = gpu.create_texture_2d("rv-render-tex",
+    texture.color, ok = gpu.create_texture_2d("rv-render-tex",
         format = .RGBA_U8_Norm, // HDR option in the future?
         size = size,
         render_texture = true,
+        loc = loc,
     )
 
     if !ok {
@@ -758,10 +709,11 @@ create_render_texture :: proc(size: [2]i32, depth := true) -> (result: Render_Te
 
     if depth {
         // WARNING: depth SRVs not yet implemented in gpu package
-        tex.depth, ok = gpu.create_texture_2d("rv-depth-tex",
+        texture.depth, ok = gpu.create_texture_2d("rv-depth-tex",
             format = .D_F32,
             size = size,
             render_texture = true,
+            loc = loc,
         )
 
         if !ok {
@@ -770,47 +722,27 @@ create_render_texture :: proc(size: [2]i32, depth := true) -> (result: Render_Te
         }
     }
 
-    result = Render_Texture_Handle{
-        index = Handle_Index(index),
-        gen = _state.render_textures_gen[index],
-    }
-
-    _state.render_textures_used += {int(index)}
-
-    return result, true
+    base.pool_insert(&_state.render_textures, handle, texture) or_return
+    return handle, true
 }
 
-destroy_render_texture :: proc(handle: Render_Texture_Handle) {
+destroy_render_texture :: proc(handle: Render_Texture_Handle) -> bool {
     assert(handle.index != DEFAULT_RENDER_TEXTURE.index)
-    tex, tex_ok := _get_render_texture(handle)
-    if !tex_ok {
-        // Completely fine, No-op
-        return
-    }
-
-    _destroy_render_texture(tex)
-
-    _state.render_textures_gen[handle.index] += 1
-    _state.render_textures_used -= {int(handle.index)}
+    tex := base.pool_get(&_state.render_textures, handle) or_return
+    _destroy_render_texture(tex) or_return
+    base.pool_remove(&_state.render_textures, handle) or_return
+    return true
 }
 
-_destroy_render_texture :: proc(tex: ^Render_Texture) {
-    gpu.destroy_resource(tex.color)
-    gpu.destroy_resource(tex.depth)
-    tex^ = {}
+_destroy_render_texture :: proc(tex: ^Render_Texture) -> bool {
+    gpu.destroy_resource(tex.color) or_return
+    gpu.destroy_resource(tex.depth) or_return
+    return true
 }
-
-// resize_render_texture :: proc(handle: Render_Texture_Handle, size: [2]i32) {
-//     assert(handle.index != DEFAULT_RENDER_TEXTURE.index)
-//     _, tex_ok := _get_render_texture(handle)
-//     if !tex_ok {
-//         return
-//     }
-// }
 
 @(require_results)
 _get_render_texture :: proc(handle: Render_Texture_Handle) -> (result: ^Render_Texture, ok: bool) {
-    return _table_get(&_state.render_textures, _state.render_textures_gen, handle)
+    return base.pool_get(&_state.render_textures, handle)
 }
 
 @(require_results)
@@ -930,12 +862,13 @@ _set_draw_texture :: proc(state: ^Draw_State, handle: Texture_Handle) -> bool {
         state.texture_size = tex.size
     } else {
         // Pool slice index
-        pool := _state.texture_pools[tex.pool_index]
+        pool, pool_ok := base.pool_get(&_state.texture_pools, tex.pool)
+        assert(pool_ok)
         assert(int(tex.slice) < int(pool.slices))
         assert(int(tex.slice) in pool.slices_used)
 
         state.texture_kind = .Pooled
-        state.texture = u8(tex.pool_index)
+        state.texture = u8(tex.pool.index)
         state.texture_slice = u8(tex.slice)
         state.texture_size = {
             u16(pool.size.x),
@@ -1988,7 +1921,7 @@ _prepare_mesh_draw_batch_cull :: proc(batch: ^Draw_Batch(Mesh_Inst), key: Draw_B
     // Cull data is actually per frame unlike instance data, which may be kept for inspector
     batch.cull_data = make([^]Draw_Cull_Group, batch_num, context.temp_allocator)
 
-    mesh := &_state.meshes[key.asset_index]
+    mesh := &_state.meshes.data[key.asset_index]
 
     for i in 0..<batch_num {
         group: Draw_Cull_Group
@@ -2526,8 +2459,8 @@ _render_layer_meshes :: proc(layer_index: i32, pip_desc: gpu.Pipeline_Desc) {
         _perf_counter_add(.Num_Draw_Calls, 1)
         _gpu_pipeline_desc_apply_draw_key(&pip_desc, key)
 
-        pip_desc.index.resource = _state.arenas[key.arena].ibuf
-        pip_desc.resources[1] = _state.arenas[key.arena].vbuf
+        pip_desc.index.resource = _state.arenas.data[key.arena].ibuf
+        pip_desc.resources[1] = _state.arenas.data[key.arena].vbuf
 
         pipeline, pipeline_ok := gpu.create_pipeline("mesh-pip", pip_desc)
         if !pipeline_ok {
@@ -2536,7 +2469,7 @@ _render_layer_meshes :: proc(layer_index: i32, pip_desc: gpu.Pipeline_Desc) {
 
         gpu.set_pipeline(pipeline)
 
-        mesh := _state.meshes[key.asset_index]
+        mesh := _state.meshes.data[key.asset_index]
 
         gpu.draw_indexed(
             index_num = mesh.index_num,
@@ -2636,14 +2569,14 @@ _gpu_pipeline_desc_apply_draw_key :: proc(pip_desc: ^gpu.Pipeline_Desc, key: Dra
     pip_desc.cull, pip_desc.fill = _gpu_fill_mode(key.fill_mode)
     pip_desc.depth_comparison = bool(u8(key.depth_mode) & (1 << 0)) ? .Greater_Equal : .Always
     pip_desc.depth_write = bool(u8(key.depth_mode) & (1 << 1))
-    pip_desc.ps = gpu.Shader_Handle(_state.shaders[key.ps].shader)
-    pip_desc.vs = gpu.Shader_Handle(_state.shaders[key.vs].shader)
+    pip_desc.ps = gpu.Shader_Handle(_state.shaders.data[key.ps].shader)
+    pip_desc.vs = gpu.Shader_Handle(_state.shaders.data[key.vs].shader)
 
     tex_res: gpu.Resource_Handle
     switch key.texture_kind {
-    case .Non_Pooled:       tex_res = _state.textures[key.texture].resource
-    case .Pooled:           tex_res = _state.texture_pools[key.texture].resource
-    case .Render_Texture:   tex_res = _state.render_textures[key.texture].color
+    case .Non_Pooled:       tex_res = _state.textures.data[key.texture].resource
+    case .Pooled:           tex_res = _state.texture_pools.data[key.texture].resource
+    case .Render_Texture:   tex_res = _state.render_textures.data[key.texture].color
     case: panic("Invalid texture mode")
     }
 

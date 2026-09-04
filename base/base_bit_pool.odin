@@ -6,7 +6,7 @@ import "base:intrinsics"
 // Size overhead is 1 bit per 4096 "fields"
 Bit_Pool :: struct($N: int) where N % 64 == 0 {
     l1: [(N + 4095) / 4096]u64,
-    l0: [N / 64]u64,
+    l0: [N / 64]u64, // Lowest level with the actual individual item bits
 }
 
 bit_pool_clear :: proc "contextless" (bp: ^Bit_Pool($N)) {
@@ -52,11 +52,8 @@ bit_pool_find_0 :: proc "contextless" (bp: Bit_Pool($N)) -> (index: int, ok: boo
 bit_pool_set_1 :: proc "contextless" (bp: ^Bit_Pool($N), #any_int index: u64) {
     assert_contextless(index >= 0 && index < u64(N))
 
-    l0_index := index / 64
-    l0_slot := index % 64
-
-    l1_index := l0_index / 64
-    l1_slot := l0_index % 64
+    l0_index, l0_slot := _bit_pool_decompose_index(index)
+    l1_index, l1_slot := _bit_pool_decompose_index(l0_index)
 
     bucket := bp.l0[l0_index]
     bucket |= 1 << l0_slot
@@ -71,11 +68,8 @@ bit_pool_set_1 :: proc "contextless" (bp: ^Bit_Pool($N), #any_int index: u64) {
 bit_pool_set_0 :: proc "contextless" (bp: ^Bit_Pool($N), #any_int index: u64) {
     assert_contextless(index >= 0 && index < u64(N))
 
-    l0_index := index / 64
-    l0_slot := index % 64
-
-    l1_index := l0_index / 64
-    l1_slot := l0_index % 64
+    l0_index, l0_slot := _bit_pool_decompose_index(index)
+    l1_index, l1_slot := _bit_pool_decompose_index(l0_index)
 
     // Always clear L0, it must be non-empty after deleting from L1
     bp.l1[l1_index] &= ~(1 << l1_slot)
@@ -87,7 +81,12 @@ bit_pool_set_0 :: proc "contextless" (bp: ^Bit_Pool($N), #any_int index: u64) {
 bit_pool_is_1 :: proc "contextless" (bp: Bit_Pool($N), #any_int index: u64) -> bool {
     assert_contextless(index >= 0 && index < u64(N))
 
-    l0_index := index / 64
-    l0_slot := index % 64
+    l0_index, l0_slot := _bit_pool_decompose_index(index)
+
     return (bp.l0[l0_index] & (1 << l0_slot)) != 0
+}
+
+@(require_results)
+_bit_pool_decompose_index :: #force_inline proc "contextless" (#any_int _index: u64) -> (index: u64, slot: u64) {
+    return _index / 64, _index % 64
 }
