@@ -3,10 +3,10 @@
 
 ## Packages
 
-- [ravn](#ravn) - 265 procedures
+- [ravn](#ravn) - 254 procedures
 - [ravn_audio](#ravn_audio) - 59 procedures
 - [audio_wav](#audio_wav) - 6 procedures
-- [ravn_base](#ravn_base) - 21 procedures
+- [ravn_base](#ravn_base) - 38 procedures
 - [ufmt](#ufmt) - 4 procedures
 - [ravn_bvh](#ravn_bvh) - 18 procedures
 - [ravn_collision](#ravn_collision) - 43 procedures
@@ -26,7 +26,7 @@ get_state_ptr() -> (state: ^State)
 run_main_loop(desc: App_Desc) // Default runner for a ravn app.
 get_context() -> (result: runtime.Context)
 init_context_state(ctx: ^Context_State, allocator: runtime.Allocator)
-init_state(allocator: runtime.Allocator) // Create state, init context, init subsystems.
+init_state(allocator: runtime.Allocator, desc: App_Desc) // Create state, init context, init subsystems.
 request_shutdown()
 shutdown_state() // Called automatically at the right time when you call rv.request_shutdown()!
 begin_frame() -> (keep_running: bool)
@@ -42,46 +42,39 @@ atlas_cell(split: [2]i32, coord: [2]i32, scale: [2]f32 = 1.0) -> Rect
 atlas_slot(split: [2]i32, #any_int index: i32) -> Rect
 font_cell(coord: [2]i32) -> Rect
 font_slot(#any_int index: i32) -> Rect // Use rune_to_char to convert unicode symbols to the index.
-hash_name(name: string) -> Hash
-hash_const_name($Name: string) -> Hash
+hash_name(name: string) -> u64
+hash_const_name($Name: string) -> u64
 get_screen_size() -> [2]f32
-create_arena(usage: Arena_Usage, #any_int max_mesh_verts: i32 = 1024 * 1024, #any_int max_mesh_indices: i32 = 1024 * 1024, #any_int max_spline_verts: i32 = 1024 * 8, #any_int max_total_children: i32 = 1024 * 8, #any_int collision_arena_size: u64 = 1024 * 1024) -> (result: Arena_Handle, ok: bool)
+create_arena(usage: Arena_Usage, #any_int max_mesh_verts: i32 = 1024 * 1024, #any_int max_mesh_indices: i32 = 1024 * 1024, #any_int max_spline_verts: i32 = 1024 * 8, #any_int collision_arena_size: u64 = 1024 * 1024) -> (result: Arena_Handle, ok: bool)
 clear_arena(handle: Arena_Handle)
 flush_arena_gpu_buffers(handle: Arena_Handle) // NOTE: doesn't clear!
 destroy_arena(handle: Arena_Handle)
 load_scene(name: string, arena_handle: Arena_Handle = {}) -> (result_arena: Arena_Handle, ok: bool)
 load_scene_from_data(txt: string, bin: []byte, arena_handle: Arena_Handle) -> (result_arena: Arena_Handle, ok: bool)
-get_children(handle: Object_Handle, loc := #caller_location) -> (: []Object_Handle, : bool)
-get_child_by_name(handle: Object_Handle, name: string) -> (result: Object_Handle, ok: bool)
 get_mesh($Name: string) -> (result: Mesh_Handle, ok: bool)
 get_mesh_by_name(name: string) -> (result: Mesh_Handle, ok: bool)
-get_mesh_by_hash(hash: Hash) -> (result: Mesh_Handle, ok: bool)
-get_object($Name: string) -> (result: Object_Handle, ok: bool)
-get_object_by_name(name: string) -> (result: Object_Handle, ok: bool)
-get_object_by_hash(hash: Hash) -> (result: Object_Handle, ok: bool)
+get_mesh_by_hash(hash: u64) -> (result: Mesh_Handle, ok: bool)
 get_texture($Name: string) -> (result: Texture_Handle, ok: bool)
 get_texture_by_name(name: string) -> (result: Texture_Handle, ok: bool)
-get_texture_by_hash(hash: Hash) -> (result: Texture_Handle, ok: bool)
+get_texture_by_hash(hash: u64) -> (result: Texture_Handle, ok: bool)
 get_spline($Name: string) -> (result: Spline_Handle, ok: bool)
 get_spline_by_name(name: string) -> (result: Spline_Handle, ok: bool)
-get_spline_by_hash(hash: Hash) -> (result: Spline_Handle, ok: bool)
+get_spline_by_hash(hash: u64) -> (result: Spline_Handle, ok: bool)
 get_shader($Name: string) -> (result: Shader_Handle, ok: bool)
 get_shader_by_name(name: string) -> (result: Shader_Handle, ok: bool)
-get_shader_by_hash(hash: Hash) -> (result: Shader_Handle, ok: bool)
+get_shader_by_hash(hash: u64) -> (result: Shader_Handle, ok: bool)
 insert_mesh_by_name(name: string, mesh: Mesh) -> (result: Mesh_Handle, ok: bool)
-insert_object_by_name(name: string, object: Object) -> (result: Object_Handle, ok: bool)
 insert_spline_by_name(name: string, spline: Spline) -> (result: Spline_Handle, ok: bool)
 insert_shader_by_name(name: string, shader: Shader) -> (result: Shader_Handle, ok: bool)
-insert_mesh_by_hash(hash: Hash, mesh: Mesh) -> (result: Mesh_Handle, ok: bool)
-insert_object_by_hash(hash: Hash, object: Object) -> (result: Object_Handle, ok: bool)
-insert_spline_by_hash(hash: Hash, spline: Spline) -> (result: Spline_Handle, ok: bool)
-insert_vertex_shader_by_hash(hash: Hash, shader: Shader) -> (result: Shader_Handle, ok: bool)
+insert_mesh_by_hash(hash: u64, mesh: Mesh) -> (result: Mesh_Handle, ok: bool)
+insert_spline_by_hash(hash: u64, spline: Spline) -> (result: Spline_Handle, ok: bool)
+insert_vertex_shader_by_hash(hash: u64, shader: Shader) -> (result: Shader_Handle, ok: bool)
 get_file_data(name: string, flush := false) -> (data: []byte, ok: bool)
-get_file_data_by_hash(hash: Hash, flush := false) -> (data: []byte, ok: bool)
+get_file_data_by_hash(hash: u64, flush := false) -> (data: []byte, ok: bool)
 load_asset(name: string, arena_handle: Arena_Handle) -> bool
 register_file(path: string) -> bool
 register_file_data(path: string, data: []byte, flags: bit_set[File_Flag] = {}) -> bool
-register_file_data_by_hash(hash: Hash, data: []byte, flags: bit_set[File_Flag]) -> bool
+register_file_data_by_hash(hash: u64, data: []byte, flags: bit_set[File_Flag]) -> bool
 register_const_directory(files: []runtime.Load_Directory_File) -> (ok: bool)
 register_directory(path: string) // TODO: allow path patterns, just like platform dir iterator?
 watch_asset_directory(path: string) -> bool
@@ -92,7 +85,6 @@ create_sound_resource_encoded(name: string, data: []byte) -> (result: Sound_Reso
 get_sound_resource(name: string) -> (result: Sound_Resource_Handle, ok: bool)
 insert_sound_resource_by_hash(name: string, handle: Sound_Resource_Handle) -> bool
 alloc_slice_non_zeroed($T: typeid, init_len: int, alignment: int = 2 * align_of(rawptr), allocator: runtime.Allocator) -> []T
-hash_fnv64a(data: []byte, seed: u64) -> u64
 normalize_path(path: string, allocator := context.temp_allocator) -> (result: string) // Clean up a VFS path
 asset_name_from_path(str: string) -> (result: string) // Convert VFS path to an asset name by stripping the directory and the last extension, for example:
 file_name_from_path(str: string) -> string
@@ -114,9 +106,6 @@ decode_octahedral(f: [2]f32) -> [3]f32 // Result is normalized vector on a spher
 pack_sprite_inst(pos: [3]f32, col: [4]f32, mat_x: [3]f32, uv_min: [2]f32, mat_y: [3]f32, uv_size: [2]f32, add_col: [4]f32, param: u32 = 0, tex_slice: u8) -> Sprite_Inst
 pack_mesh_inst(pos: [3]f32, col: [4]f32, mat_x: [3]f32, add_col: [4]f32, mat_y: [3]f32, tex_slice: u8, vert_offs: u32, mat_z: [3]f32, param: u32) -> Mesh_Inst
 pack_vertex(pos: [3]f32, uv: [2]f32 = 0, normal: [3]f32 = {0, 1, 0}, col: [4]f32 = 1, joints: [4]u8 = 0, weights: [4]f32 = {1, 0, 0, 0}) -> Vertex
-hash_murmurhash32_mix32(x: u32) -> u32
-hash_splittable64(x: u64) -> u64
-align_up(x: u32, align: u32) -> u32
 is_blend_mode_order_dependent(mode: Blend_Mode) -> bool // Order independent blend modes are a lot simpler on the renderer CPU side.
 draw_perf_counter(kind: Perf_Counter_Kind, pos: [3]f32, scale: f32 = 1, col: [4]f32 = 1, show_text := true) // Displays max of the recent history and a graph.
 perf_scope(name: string = "", loc := #caller_location) -> i64
@@ -404,16 +393,43 @@ reinterpret_bytes($T: typeid, bytes: []byte, loc := #caller_location) -> []T
 to_bytes(data: []$T) -> []byte
 is_finite_f32(x: f32) -> bool // Quickly checks if x is not NaN or Inf
 is_finite_vec(v: [$N]f32) -> bool
+hash_fnv64a(data: []byte, seed: u64) -> u64
+hash_murmurhash32_mix32(x: u32) -> u32
+hash_splittable64(x: u64) -> u64
 ```
 
 ### base_bit_pool.odin
 
 ```odin
+bit_pool_clear(bp: ^Bit_Pool($N))
 bit_pool_alloc(bp: ^Bit_Pool($N)) -> (result: int, ok: bool)
 bit_pool_find_0(bp: Bit_Pool($N)) -> (index: int, ok: bool)
 bit_pool_set_1(bp: ^Bit_Pool($N), #any_int index: u64)
 bit_pool_set_0(bp: ^Bit_Pool($N), #any_int index: u64)
-bit_pool_check_1(bp: Bit_Pool($N), #any_int index: u64) -> bool // bit_pool_get
+bit_pool_is_1(bp: Bit_Pool($N), #any_int index: u64) -> bool // bit_pool_get
+```
+
+### base_hash_pool.odin
+
+```odin
+hash_pool_clear(pool: ^$T/Hash_Pool($N, $D, $H)) // Call to initialize and destroy. Does not clear generation counters and values - garbage is fine.
+hash_pool_has(pool: $T/Hash_Pool($N, $D, $H), handle: H) -> bool
+hash_pool_find_free(pool: $T/Hash_Pool($N, $D, $H), hash: u64) -> (: H, : bool)
+hash_pool_find(pool: $T/Hash_Pool($N, $D, $H), hash: u64) -> (: H, : bool)
+hash_pool_insert(pool: ^$T/Hash_Pool($N, $D, $H), hash: u64, handle: H, data: D) -> bool
+hash_pool_remove(pool: ^$T/Hash_Pool($N, $D, $H), handle: Handle) -> bool
+hash_pool_get(pool: ^$T/Hash_Pool($N, $D, $H)) -> (: ^D, : bool)
+```
+
+### base_pool.odin
+
+```odin
+pool_clear(pool: ^$T/Pool($N, $D, $H)) // Call to initialize and destroy. Does not clear generation counters and values - garbage is fine.
+pool_has(pool: $T/Pool($N, $D, $H), handle: H) -> bool
+pool_find_free(pool: $T/Pool($N, $D, $H)) -> (: H, : bool)
+pool_insert(pool: ^$T/Pool($N, $D, $H), handle: H, data: D) -> bool
+pool_remove(pool: ^$T/Pool($N, $D, $H), handle: Handle) -> bool
+pool_get(pool: ^$T/Pool($N, $D, $H)) -> (: ^D, : bool)
 ```
 
 ### base_spsc.odin

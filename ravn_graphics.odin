@@ -1,6 +1,7 @@
 #+vet shadowing unused explicit-allocators style
 package ravn
 
+import "base:runtime"
 import "core:slice"
 import "gpu"
 import "base"
@@ -588,7 +589,7 @@ load_shader :: proc(path: string) -> (result: Shader_Handle, ok: bool) #optional
 
 @(require_results)
 create_shader_from_bin :: proc(name: string, data: []byte) -> (result: Shader_Handle, ok: bool) #optional_ok {
-    hash := hash_fnv64a(data, HASH_SEED)
+    hash := base.hash_fnv64a(data, HASH_SEED)
 
     if eq_handle, eq_ok := _try_get_equivalent_existing_shader(name, hash); eq_ok {
         return eq_handle, true
@@ -598,7 +599,7 @@ create_shader_from_bin :: proc(name: string, data: []byte) -> (result: Shader_Ha
 }
 
 @(require_results)
-_create_shader_from_bin_hash :: proc(name: string, data: []byte, hash: Hash) -> (result: Shader_Handle, ok: bool) #optional_ok {
+_create_shader_from_bin_hash :: proc(name: string, data: []byte, hash: u64) -> (result: Shader_Handle, ok: bool) #optional_ok {
     kind := _shader_kind_from_name(name)
     if kind == .Invalid {
         base.log_err("Failed to create shader, invalid extension")
@@ -624,7 +625,7 @@ _create_shader_from_bin_hash :: proc(name: string, data: []byte, hash: Hash) -> 
 when SHADER_COMPILER_ENABLED {
     @(require_results)
     create_shader_from_source :: proc(name: string, source: string) -> (result: Shader_Handle, ok: bool) #optional_ok {
-        hash := hash_fnv64a(transmute([]byte)source, HASH_SEED)
+        hash := base.hash_fnv64a(transmute([]byte)source, HASH_SEED)
 
         if eq_handle, eq_ok := _try_get_equivalent_existing_shader(name, hash); eq_ok {
             return eq_handle, true
@@ -681,7 +682,7 @@ float4 ps_main(RV_Varyings vars, uint frontface : SV_IsFrontFace) : SV_Target {
     }
 }
 
-_try_get_equivalent_existing_shader :: proc(name: string, input_hash: Hash) -> (result: Shader_Handle, ok: bool) {
+_try_get_equivalent_existing_shader :: proc(name: string, input_hash: u64) -> (result: Shader_Handle, ok: bool) {
     if existing_handle, existing_ok := get_shader_by_name(name); existing_ok {
         existing := _get_shader(existing_handle) or_else panic("Found invalid shader")
         if existing.hash == input_hash {
@@ -1904,7 +1905,7 @@ _calc_circle_points :: proc(segments: int) -> [][2]f32 {
 
 _draw_batch_table_init :: proc(table: ^$T/Draw_Batch_Table($Inst)) {
     for &batch in table.batches[:table.len] {
-        batch.last_len = align_up(batch.len, LANES)
+        batch.last_len = u32(runtime.align_forward_int(int(batch.len), LANES))
 
         batch.inst_data = nil
         batch.cull_data = nil
@@ -1928,7 +1929,7 @@ _draw_batch_table_push :: proc(table: ^$T/Draw_Batch_Table($Inst), key: Draw_Bat
 }
 
 _draw_batch_table_find_or_create :: proc(table: ^$T/Draw_Batch_Table($Inst), key: Draw_Batch_Key) -> (int, bool) #no_bounds_check {
-    hash := #force_inline hash_splittable64(transmute(u64)key)
+    hash := #force_inline base.hash_splittable64(transmute(u64)key)
 
     lookup_index := u64(hash % DRAW_BATCH_TABLE_LOOKUP)
     index := -1

@@ -53,8 +53,6 @@ HASH_SEED :: #config(RAVN_HASH_SEED, 0xcbf29ce484222325)
 MAX_PROBE_DIST :: #config(RAVN_MAX_TABLE_PROBE_DIST, 16)
 HASH_ALG :: "fnv64a"
 
-Hash :: u64
-
 UV_EPS :: (1.0 / 2048.0)
 
 LANES :: 8
@@ -171,19 +169,15 @@ State :: struct #align(64) {
     render_textures_gen:        [MAX_RENDER_TEXTURES]Handle_Gen,
     render_textures:            [MAX_RENDER_TEXTURES]Render_Texture,
 
-    objects_hash:               [MAX_OBJECTS]Hash,
-    objects_gen:                [MAX_OBJECTS]Handle_Gen,
-    objects:                    [MAX_OBJECTS]Object,
-
-    meshes_hash:                [MAX_MESHES]Hash,
+    meshes_hash:                [MAX_MESHES]u64,
     meshes_gen:                 [MAX_MESHES]Handle_Gen,
     meshes:                     [MAX_MESHES]Mesh,
 
-    splines_hash:               [MAX_SPLINES]Hash,
+    splines_hash:               [MAX_SPLINES]u64,
     splines_gen:                [MAX_SPLINES]Handle_Gen,
     splines:                    [MAX_SPLINES]Spline,
 
-    textures_hash:              [MAX_TEXTURES]Hash,
+    textures_hash:              [MAX_TEXTURES]u64,
     textures_gen:               [MAX_TEXTURES]Handle_Gen,
     textures:                   [MAX_TEXTURES]Texture,
 
@@ -191,17 +185,17 @@ State :: struct #align(64) {
     texture_pools:              [MAX_TEXTURE_POOLS]Texture_Pool,
     texture_pools_len:          i32,
 
-    shaders_hash:               [MAX_SHADERS]Hash,
+    shaders_hash:               [MAX_SHADERS]u64,
     shaders_gen:                [MAX_SHADERS]Handle_Gen,
     shaders:                    [MAX_SHADERS]Shader,
 
-    files_hash:                 [MAX_FILES]Hash,
+    files_hash:                 [MAX_FILES]u64,
     files:                      [MAX_FILES]File,
 
     // NOTE: currently, sound resource handles are direct handles into the audio package.
     // This means there is not necessarily an indirection, which simplifies things.
     // The name tracking is only important for hotreloads and name lookups.
-    sound_resources_hash:       [MAX_SOUNDS]Hash,
+    sound_resources_hash:       [MAX_SOUNDS]u64,
     sound_resources:            [MAX_SOUNDS]Sound_Resource_Handle,
 
     shader_compiler_state:      (shader_compiler.State when SHADER_COMPILER_ENABLED else struct {}),
@@ -237,7 +231,7 @@ Watched_Dir :: struct {
 
 Shader :: struct #all_or_none {
     shader: gpu.Shader_Handle,
-    hash:   Hash,
+    hash:   u64,
 }
 
 
@@ -249,8 +243,6 @@ Arena :: struct #all_or_none {
     spline_vert_num:    i32,
     object_child_num:   i32,
 
-    object_buf:         []Object,
-    object_child_buf:   []Object_Handle,
     spline_vert_buf:    []Spline_Vertex,
 
     collision_arena:    collision.Arena_Handle,
@@ -272,34 +264,6 @@ Arena_Usage :: enum u8 {
     // For scenes and long lived data.
     // All GPU buffers will be re-created on data flush.
     Static,
-}
-
-Object_Kind :: rscn.Object_Kind
-
-// TODO: objects in general are totally unfinished
-Object :: struct {
-    kind:               Object_Kind,
-
-    // TODO
-    // Format like "Enemy:Foo0"?
-    name_prefix:        Hash,
-    name:               [16]u8,
-
-    arena:              Arena_Handle,
-
-    // Depends on 'kind' - either mesh or spline handle.
-    data_handle:        Handle,
-    texture:            Texture_Handle,
-
-    parent:             Object_Handle,
-    child_offset:       i32,
-    child_num:          i32,
-
-    param:              u64, // user param
-
-    local_pos:          [3]f32,
-    local_rot:          matrix[3, 3]f32,
-    local_scale:        [3]f32,
 }
 
 Mesh :: struct #all_or_none {
@@ -1148,15 +1112,15 @@ font_slot :: proc(#any_int index: i32) -> Rect {
 }
 
 @(require_results)
-hash_name :: #force_inline proc "contextless" (name: string) -> Hash {
-    hash := hash_fnv64a(transmute([]byte)name, seed = HASH_SEED)
-    return Hash(hash == 0 ? 1 : hash)
+hash_name :: #force_inline proc "contextless" (name: string) -> u64 {
+    hash := base.hash_fnv64a(transmute([]byte)name, seed = HASH_SEED)
+    return hash == 0 ? 1 : hash
 }
 
 @(require_results)
-hash_const_name :: #force_inline proc "contextless" ($Name: string) -> Hash {
+hash_const_name :: #force_inline proc "contextless" ($Name: string) -> u64 {
     hash: u64 = #hash(Name, HASH_ALG)
-    return Hash(hash == 0 ? 1 : hash)
+    return u64(hash == 0 ? 1 : hash)
 }
 
 @(require_results)
@@ -1181,7 +1145,6 @@ create_arena :: proc(
     #any_int max_mesh_verts:         i32 = 1024 * 1024,
     #any_int max_mesh_indices:       i32 = 1024 * 1024,
     #any_int max_spline_verts:       i32 = 1024 * 8,
-    #any_int max_total_children:     i32 = 1024 * 8,
     #any_int collision_arena_size:   u64 = 1024 * 1024,
 ) -> (result: Arena_Handle, ok: bool) #optional_ok {
     used_set := (transmute(u64)_state.arenas_used) | 1
@@ -1197,7 +1160,6 @@ create_arena :: proc(
 
     arena^ = Arena{
         usage = usage,
-        object_child_buf    = runtime.make_aligned([]Object_Handle, max_total_children, 4096, _state.allocator),
         spline_vert_buf     = runtime.make_aligned([]Spline_Vertex, max_spline_verts, 4096, _state.allocator),
         vert_upload_buf     = runtime.make_aligned([]Vertex, max_mesh_verts, 4096, _state.allocator),
         index_upload_buf    = runtime.make_aligned([]Vertex_Index, max_mesh_indices, 4096, _state.allocator),
@@ -1206,7 +1168,6 @@ create_arena :: proc(
         object_child_num    = 0,
         ibuf                = {},
         vbuf                = {},
-        object_buf          = {},
         vert_upload_offs    = 0,
         index_upload_offs   = 0,
         dirty               = false,
@@ -1334,17 +1295,6 @@ destroy_arena :: proc(handle: Arena_Handle) {
         _state.meshes_gen[i] += 1
     }
 
-    for i in 0..<MAX_OBJECTS {
-        object := &_state.objects[i]
-        if object.arena != handle {
-            continue
-        }
-
-        object^ = {}
-        _state.objects_hash[i] = 0
-        _state.objects_gen[i] += 1
-    }
-
     for i in 0..<MAX_SPLINES {
         spline := &_state.splines[i]
         if spline.arena != handle {
@@ -1365,7 +1315,6 @@ destroy_arena :: proc(handle: Arena_Handle) {
 
 _delete_arena_buffers :: proc(arena: ^Arena) {
     delete(arena.spline_vert_buf, _state.allocator)
-    delete(arena.object_child_buf, _state.allocator)
     delete(arena.vert_upload_buf, _state.allocator)
     delete(arena.index_upload_buf, _state.allocator)
 }
@@ -1418,7 +1367,6 @@ load_scene_from_data :: proc(txt: string, bin: []byte, arena_handle: Arena_Handl
             max_mesh_verts = len(vert_buf),
             max_mesh_indices = len(index_buf),
             max_spline_verts = len(spline_vert_buf),
-            max_total_children = header.object_num,
         )
     }
 
@@ -1446,11 +1394,9 @@ load_scene_from_data :: proc(txt: string, bin: []byte, arena_handle: Arena_Handl
         return {}, false
     }
 
-    object_list := make([]Object_Handle, header.object_num, context.temp_allocator)
     mesh_list := make([]Mesh_Handle, header.object_num, context.temp_allocator)
     spline_list := make([]Spline_Handle, header.object_num, context.temp_allocator)
 
-    object_counter := 0
     mesh_counter := 0
     spline_counter := 0
 
@@ -1535,98 +1481,9 @@ load_scene_from_data :: proc(txt: string, bin: []byte, arena_handle: Arena_Handl
             spline_list[index] = handle
 
         case rscn.Object:
-            base.log_debug("Loading Object: %s", v.name)
-
-            index := object_counter
-            object_counter += 1
-
-            object: Object
-            object.arena = arena_handle
-
-            object.kind = v.kind
-            object.parent.index = v.parent == -1 ? HANDLE_INDEX_INVALID : Handle_Index(v.parent) // TEMP
-
-            switch v.kind {
-            case .Empty:
-                object.data_handle = {}
-
-            case .Mesh:
-                object.data_handle.index = v.mesh_index == -1 ? HANDLE_INDEX_INVALID : Handle_Index(v.mesh_index) // TEMP
-
-            case .Spline:
-                object.data_handle.index = v.spline_index == -1 ? HANDLE_INDEX_INVALID : Handle_Index(v.spline_index) // TEMP
-            }
-
-            handle, handle_ok := insert_object_by_name(v.name, object)
-            if !handle_ok {
-                base.log_err("Failed to insert object, table is full")
-                return {}, false
-            }
-
-            object_list[index] = handle
+            // Not supported yet
+            base.log_debug("Skipping Object: %s", v.name)
         }
-    }
-
-    // Resolve indices -> handles
-
-    // NOTE: the 2nd pass might be unnecessary if the data is ordered the right way? enforce it in rscn?
-    for handle in object_list {
-        obj := _get_object(handle) or_continue
-
-        if obj.parent.index == HANDLE_INDEX_INVALID {
-            continue
-        }
-
-        obj.parent = object_list[obj.parent.index]
-
-        if parent, parent_ok := _get_object(obj.parent); parent_ok {
-            parent.child_num += 1
-        }
-
-        switch obj.kind {
-        case .Empty:
-
-        case .Mesh:
-            obj.data_handle = Handle(mesh_list[obj.data_handle.index])
-
-        case .Spline:
-            obj.data_handle = Handle(spline_list[obj.data_handle.index])
-        }
-    }
-
-
-    // Reserve child array space
-    child_offset := arena.object_child_num
-    for handle in object_list {
-        obj := _get_object(handle) or_continue
-
-        obj.child_offset = child_offset
-
-        if child_offset + obj.child_num > i32(len(arena.object_child_buf)) {
-            base.log_err("Arena child buffer is too small to contain all children")
-            obj.child_num = 0
-            continue
-        }
-
-        child_offset += obj.child_num
-    }
-
-    arena.object_child_num = child_offset
-
-    // Fill child array
-    for handle in object_list {
-        obj := _get_object(handle) or_continue
-
-        parent := _get_object(obj.parent) or_continue
-
-        arena.object_child_buf[parent.child_offset] = handle
-        parent.child_offset += 1
-    }
-
-    // Reset child offsets (this is a bit weird, be careful)
-    for handle in object_list {
-        obj := _get_object(handle) or_continue
-        obj.child_offset -= obj.child_num
     }
 
     return arena_handle, true
@@ -1637,43 +1494,6 @@ load_scene_from_data :: proc(txt: string, bin: []byte, arena_handle: Arena_Handl
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // MARK: Lookups
 //
-
-get_children :: proc(handle: Object_Handle, loc := #caller_location) -> ([]Object_Handle, bool) #optional_ok {
-    obj, obj_ok := _get_object(handle)
-    if !obj_ok {
-        base.log_err("Failed to get object's children: invalid handle", loc = loc)
-        return nil, false
-    }
-
-    arena, arena_ok := _get_arena(obj.arena)
-    if !arena_ok {
-        base.log_err("Failed to get object's children: object's arena handle is invalid")
-        return nil, false
-    }
-
-    return arena.object_child_buf[obj.child_offset:][:obj.child_num], true
-}
-
-get_child_by_name :: proc(handle: Object_Handle, name: string) -> (result: Object_Handle, ok: bool) #optional_ok {
-    children := get_children(handle) or_return
-
-    hash := hash_name(name)
-
-    for ch in children {
-        if _state.objects_hash[ch.index] != hash {
-            continue
-        }
-
-        if _state.objects_gen[ch.index] != ch.gen {
-            continue
-        }
-
-        return ch, true
-    }
-
-    return {}, false
-}
-
 
 @(require_results)
 get_mesh :: proc($Name: string) -> (result: Mesh_Handle, ok: bool) #optional_ok {
@@ -1686,31 +1506,11 @@ get_mesh_by_name :: proc(name: string) -> (result: Mesh_Handle, ok: bool) #optio
 }
 
 @(require_results)
-get_mesh_by_hash :: proc(hash: Hash) -> (result: Mesh_Handle, ok: bool) #optional_ok {
+get_mesh_by_hash :: proc(hash: u64) -> (result: Mesh_Handle, ok: bool) #optional_ok {
     index := _table_lookup_hash(&_state.meshes_hash, hash) or_return
     return {
         index = Handle_Index(index),
         gen = _state.meshes_gen[index],
-    }, true
-}
-
-
-@(require_results)
-get_object :: proc($Name: string) -> (result: Object_Handle, ok: bool) #optional_ok {
-    return get_object_by_hash(hash_const_name(Name))
-}
-
-@(require_results)
-get_object_by_name :: proc(name: string) -> (result: Object_Handle, ok: bool) #optional_ok {
-    return get_object_by_hash(hash_name(name))
-}
-
-@(require_results)
-get_object_by_hash :: proc(hash: Hash) -> (result: Object_Handle, ok: bool) #optional_ok {
-    index := _table_lookup_hash(&_state.objects_hash, hash) or_return
-    return {
-        index = Handle_Index(index),
-        gen = _state.objects_gen[index],
     }, true
 }
 
@@ -1727,7 +1527,7 @@ get_texture_by_name :: proc(name: string) -> (result: Texture_Handle, ok: bool) 
 }
 
 @(require_results)
-get_texture_by_hash :: proc(hash: Hash) -> (result: Texture_Handle, ok: bool) #optional_ok {
+get_texture_by_hash :: proc(hash: u64) -> (result: Texture_Handle, ok: bool) #optional_ok {
     index := _table_lookup_hash(&_state.textures_hash, hash) or_return
     return {
         index = Handle_Index(index),
@@ -1748,7 +1548,7 @@ get_spline_by_name :: proc(name: string) -> (result: Spline_Handle, ok: bool) #o
 }
 
 @(require_results)
-get_spline_by_hash :: proc(hash: Hash) -> (result: Spline_Handle, ok: bool) #optional_ok {
+get_spline_by_hash :: proc(hash: u64) -> (result: Spline_Handle, ok: bool) #optional_ok {
     index := _table_lookup_hash(&_state.splines_hash, hash) or_return
     return {
         index = Handle_Index(index),
@@ -1769,7 +1569,7 @@ get_shader_by_name :: proc(name: string) -> (result: Shader_Handle, ok: bool) #o
 }
 
 @(require_results)
-get_shader_by_hash :: proc(hash: Hash) -> (result: Shader_Handle, ok: bool) #optional_ok {
+get_shader_by_hash :: proc(hash: u64) -> (result: Shader_Handle, ok: bool) #optional_ok {
     index := _table_lookup_hash(&_state.shaders_hash, hash) or_return
     return {
         index = Handle_Index(index),
@@ -1793,11 +1593,6 @@ _get_mesh :: proc(handle: Mesh_Handle) -> (result: ^Mesh, ok: bool) {
 }
 
 @(require_results)
-_get_object :: proc(handle: Object_Handle) -> (result: ^Object, ok: bool) {
-    return _table_get(&_state.objects, _state.objects_gen, handle)
-}
-
-@(require_results)
 _get_spline :: proc(handle: Spline_Handle) -> (result: ^Spline, ok: bool) {
     return _table_get(&_state.splines, _state.splines_gen, handle)
 }
@@ -1815,11 +1610,6 @@ insert_mesh_by_name :: proc(name: string, mesh: Mesh) -> (result: Mesh_Handle, o
 }
 
 @(require_results)
-insert_object_by_name :: proc(name: string, object: Object) -> (result: Object_Handle, ok: bool) {
-    return insert_object_by_hash(hash_name(name), object)
-}
-
-@(require_results)
 insert_spline_by_name :: proc(name: string, spline: Spline) -> (result: Spline_Handle, ok: bool) {
     return insert_spline_by_hash(hash_name(name), spline)
 }
@@ -1831,7 +1621,7 @@ insert_shader_by_name :: proc(name: string, shader: Shader) -> (result: Shader_H
 
 
 @(require_results)
-insert_mesh_by_hash :: proc(hash: Hash, mesh: Mesh) -> (result: Mesh_Handle, ok: bool) {
+insert_mesh_by_hash :: proc(hash: u64, mesh: Mesh) -> (result: Mesh_Handle, ok: bool) {
     index, _ := _table_insert_hash(&_state.meshes_hash, hash) or_return
 
     _state.meshes[index] = mesh
@@ -1845,21 +1635,7 @@ insert_mesh_by_hash :: proc(hash: Hash, mesh: Mesh) -> (result: Mesh_Handle, ok:
 }
 
 @(require_results)
-insert_object_by_hash :: proc(hash: Hash, object: Object) -> (result: Object_Handle, ok: bool) {
-    index, _ := _table_insert_hash(&_state.objects_hash, hash) or_return
-
-    _state.objects[index] = object
-
-    result = {
-        index = Handle_Index(index),
-        gen = _state.objects_gen[index],
-    }
-
-    return result, true
-}
-
-@(require_results)
-insert_spline_by_hash :: proc(hash: Hash, spline: Spline) -> (result: Spline_Handle, ok: bool) {
+insert_spline_by_hash :: proc(hash: u64, spline: Spline) -> (result: Spline_Handle, ok: bool) {
     index, _ := _table_insert_hash(&_state.splines_hash, hash) or_return
 
     _state.splines[index] = spline
@@ -1873,7 +1649,7 @@ insert_spline_by_hash :: proc(hash: Hash, spline: Spline) -> (result: Spline_Han
 }
 
 @(require_results)
-insert_vertex_shader_by_hash :: proc(hash: Hash, shader: Shader) -> (result: Shader_Handle, ok: bool) {
+insert_vertex_shader_by_hash :: proc(hash: u64, shader: Shader) -> (result: Shader_Handle, ok: bool) {
     index, _ := _table_insert_hash(&_state.shaders_hash, hash) or_return
 
     _state.shaders[index] = shader
@@ -1888,7 +1664,7 @@ insert_vertex_shader_by_hash :: proc(hash: Hash, shader: Shader) -> (result: Sha
 
 
 @(require_results)
-_table_insert_hash :: proc(table: ^[$N]Hash, hash: u64) -> (result: int, prev: Hash, ok: bool) {
+_table_insert_hash :: proc(table: ^[$N]u64, hash: u64) -> (result: int, prev: u64, ok: bool) {
     start_index := int(hash) %% N
 
     for offs in 0..<MAX_PROBE_DIST {
@@ -1909,7 +1685,7 @@ _table_insert_hash :: proc(table: ^[$N]Hash, hash: u64) -> (result: int, prev: H
 }
 
 @(require_results)
-_table_lookup_hash :: proc(table: ^[$N]Hash, hash: u64) -> (int, bool) {
+_table_lookup_hash :: proc(table: ^[$N]u64, hash: u64) -> (int, bool) {
     start_index := int(hash) %% N
 
     for offs in 0..<MAX_PROBE_DIST {
@@ -1947,7 +1723,7 @@ get_file_data :: proc(name: string, flush := false) -> (data: []byte, ok: bool) 
     return get_file_data_by_hash(hash_name(name), flush = flush)
 }
 
-get_file_data_by_hash :: proc(hash: Hash, flush := false) -> (data: []byte, ok: bool) {
+get_file_data_by_hash :: proc(hash: u64, flush := false) -> (data: []byte, ok: bool) {
     index :=_table_lookup_hash(&_state.files_hash, hash) or_return
 
     file := &_state.files[index]
@@ -2002,7 +1778,7 @@ register_file_data :: proc(path: string, data: []byte, flags: bit_set[File_Flag]
     return register_file_data_by_hash(hash_name(npath), data, flags = flags)
 }
 
-register_file_data_by_hash :: proc(hash: Hash, data: []byte, flags: bit_set[File_Flag]) -> bool {
+register_file_data_by_hash :: proc(hash: u64, data: []byte, flags: bit_set[File_Flag]) -> bool {
     index, _, ok := _table_insert_hash(&_state.files_hash, hash)
     if !ok {
         return false
@@ -2083,7 +1859,7 @@ watch_asset_directory :: proc(path: string) -> bool {
     return true
 }
 
-_get_file_by_hash :: proc(hash: Hash) -> (file: ^File, ok: bool) {
+_get_file_by_hash :: proc(hash: u64) -> (file: ^File, ok: bool) {
     index := _table_lookup_hash(&_state.files_hash, hash) or_return
     return &_state.files[index], true
 }
@@ -2197,14 +1973,6 @@ insert_sound_resource_by_hash :: proc(name: string, handle: Sound_Resource_Handl
 alloc_slice_non_zeroed :: proc($T: typeid, init_len: int, alignment: int = 2 * align_of(rawptr), allocator: runtime.Allocator) -> []T {
     buf := runtime.mem_alloc_non_zeroed(size_of(T) * init_len, alignment = alignment, allocator = allocator) or_else panic("Failed to allocate")
     return ([^]T)(raw_data(buf))[:len(buf) / size_of(T)]
-}
-
-hash_fnv64a :: proc "contextless" (data: []byte, seed: u64) -> u64 {
-    h: u64 = seed
-    for b in data {
-        h = (h ~ u64(b)) * 0x100000001b3
-    }
-    return h
 }
 
 // Clean up a VFS path
@@ -2518,35 +2286,6 @@ pack_vertex :: proc(
         weights = pack_unorm8(weights),
     }
 }
-
-// https://nullprogram.com/blog/2018/07/31/
-
-@(require_results)
-hash_murmurhash32_mix32 :: proc "contextless" (x: u32) -> u32 {
-    x := x
-    x ~= x >> 16
-    x *= 0x85ebca6b
-    x ~= x >> 13
-    x *= 0xc2b2ae35
-    x ~= x >> 16
-    return x
-}
-
-@(require_results)
-hash_splittable64 :: proc "contextless" (x: u64) -> u64 {
-    x := x
-    x ~= x >> 30
-    x *= 0xbf58476d1ce4e5b9
-    x ~= x >> 27
-    x *= 0x94d049bb133111eb
-    x ~= x >> 31
-    return x
-}
-
-align_up :: proc(x: u32, align: u32) -> u32 {
-    return (x + align - 1) & ~(align - 1)
-}
-
 
 // Order independent blend modes are a lot simpler on the renderer CPU side.
 is_blend_mode_order_dependent :: proc(mode: Blend_Mode) -> bool {

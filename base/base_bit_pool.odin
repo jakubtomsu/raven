@@ -9,6 +9,11 @@ Bit_Pool :: struct($N: int) where N % 64 == 0 {
     l0: [N / 64]u64,
 }
 
+bit_pool_clear :: proc "contextless" (bp: ^Bit_Pool($N)) {
+    intrinsics.mem_zero(&bp.l1, size_of(bp.l1))
+    intrinsics.mem_zero(&bp.l0, size_of(bp.l0))
+}
+
 @(require_results)
 bit_pool_alloc :: proc "contextless" (bp: ^Bit_Pool($N)) -> (result: int, ok: bool) {
     result = bit_pool_find_0(bp^) or_return
@@ -79,7 +84,7 @@ bit_pool_set_0 :: proc "contextless" (bp: ^Bit_Pool($N), #any_int index: u64) {
 
 // bit_pool_get
 @(require_results)
-bit_pool_check_1 :: proc "contextless" (bp: Bit_Pool($N), #any_int index: u64) -> bool {
+bit_pool_is_1 :: proc "contextless" (bp: Bit_Pool($N), #any_int index: u64) -> bool {
     assert_contextless(index >= 0 && index < u64(N))
 
     l0_index := index / 64

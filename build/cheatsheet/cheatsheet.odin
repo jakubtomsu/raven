@@ -3,7 +3,7 @@ Ravn markdown cheatsheet generator.
 
 Usage:
     odin doc . -all-packages -doc-format -in-source-order
-    odin run build\cheatsheet ravn.odin-doc
+    odin run build\cheatsheet -- ravn.odin-doc
 */
 package ravn_build_cheatsheet
 

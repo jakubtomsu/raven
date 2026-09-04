@@ -74,36 +74,36 @@ MAX_HASH_PROBE_DIST :: 64
 _state: ^State
 
 State :: struct #align(64) {
-    using native:           _State,
-    in_frame:               bool,
-    init_context:           runtime.Context,
-    allocator:              runtime.Allocator,
-    swapchain_res:          Resource_Handle,
+    using native:                   _State,
+    in_frame:                       bool,
+    init_context:                   runtime.Context,
+    allocator:                      runtime.Allocator,
+    swapchain_res:                  Resource_Handle,
     // On WebGPU, the initialization is async.
-    init_done:              bool,
+    init_done:                      bool,
 
-    pipeline_hash:          [MAX_PIPELINES]u64,
-    pipeline_desc:          [MAX_PIPELINES]Pipeline_Desc,
-    pipeline_data:          [MAX_PIPELINES]Pipeline_State,
-    pipeline_gen:           [MAX_PIPELINES]Handle_Gen,
+    pipeline_hash:                  [MAX_PIPELINES]u64,
+    pipeline_desc:                  [MAX_PIPELINES]Pipeline_Desc,
+    pipeline_data:                  [MAX_PIPELINES]Pipeline_State,
+    pipeline_gen:                   [MAX_PIPELINES]Handle_Gen,
 
-    compute_pipeline_hash:  [MAX_COMPUTE_PIPELINES]u64,
-    compute_pipeline_desc:  [MAX_COMPUTE_PIPELINES]Compute_Pipeline_Desc,
-    compute_pipeline_data:  [MAX_COMPUTE_PIPELINES]Compute_Pipeline_State,
-    compute_pipeline_gen:   [MAX_COMPUTE_PIPELINES]Handle_Gen,
+    compute_pipeline_hash:          [MAX_COMPUTE_PIPELINES]u64,
+    compute_pipeline_desc:          [MAX_COMPUTE_PIPELINES]Compute_Pipeline_Desc,
+    compute_pipeline_data:          [MAX_COMPUTE_PIPELINES]Compute_Pipeline_State,
+    compute_pipeline_gen:           [MAX_COMPUTE_PIPELINES]Handle_Gen,
 
-    resource_used:          base.Bit_Pool(MAX_RESOURCES),
-    resource_gen:           [MAX_RESOURCES]Handle_Gen,
-    resource_data:          [MAX_RESOURCES]Resource_State,
+    resource_used:                  base.Bit_Pool(MAX_RESOURCES),
+    resource_gen:                   [MAX_RESOURCES]Handle_Gen,
+    resource_data:                  [MAX_RESOURCES]Resource_State,
 
-    shader_used:            base.Bit_Pool(MAX_SHADERS),
-    shader_gen:             [MAX_SHADERS]Handle_Gen,
-    shader_data:            [MAX_SHADERS]Shader_State,
+    shader_used:                    base.Bit_Pool(MAX_SHADERS),
+    shader_gen:                     [MAX_SHADERS]Handle_Gen,
+    shader_data:                    [MAX_SHADERS]Shader_State,
 
-    curr_pass_desc:         Pass_Desc,
-    curr_pipeline:          Pipeline_Handle,
-    curr_pipeline_desc:     Pipeline_Desc,
-    curr_num_pip_consts:    i32,
+    curr_pass_desc:                 Pass_Desc,
+    curr_pipeline:                  Pipeline_Handle,
+    curr_pipeline_desc:             Pipeline_Desc,
+    curr_num_pip_consts:            i32,
 
     curr_compute_pass:              bool,
     curr_compute_pipeline:          Compute_Pipeline_Handle,
@@ -1499,7 +1499,7 @@ _table_destroy :: proc(table_used: ^base.Bit_Pool($N), table_gen: ^[N]Handle_Gen
         return
     }
 
-    validate(base.bit_pool_check_1(table_used^, handle.index))
+    validate(base.bit_pool_is_1(table_used^, handle.index))
 
     base.bit_pool_set_0(table_used, handle.index)
     table_gen[handle.index] += 1
@@ -1523,20 +1523,6 @@ _table_find_empty_hash :: proc(table: ^[$N]Hash, hash: u64) -> (result: int, pre
     }
 
     return 0, 0, false
-}
-
-@(require_results)
-_table_find_hash :: proc(table: ^[$N]Hash, hash: u64) -> (int, bool) {
-    start_index := int(hash) %% N
-
-    for offs in 0..<MAX_HASH_PROBE_DIST {
-        index := (start_index + offs) %% N
-        if table[index] == hash {
-            return index, true
-        }
-    }
-
-    return {}, false
 }
 
 
