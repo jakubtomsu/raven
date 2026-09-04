@@ -97,10 +97,28 @@ Shader_Handle :: distinct Handle
 Sound_Resource_Handle :: audio.Resource_Handle
 Sound_Handle :: audio.Sound_Handle
 
-App_Desc :: base.App_Desc
-App_Init_Proc :: base.App_Init_Proc
-App_Shutdown_Proc :: base.App_Shutdown_Proc
-App_Update_Proc :: base.App_Update_Proc
+// NOTE: This structure is passed between DLLs when hot-reloading.
+App_Desc :: struct {
+    init:               App_Init_Proc,
+    shutdown:           App_Shutdown_Proc,
+    update:             App_Update_Proc,
+    window_init_config: Window_Init_Config,
+}
+
+// Called after internal init is done to let the app initialize.
+App_Init_Proc ::       #type proc()
+// Called after request_shutdown() but before the engine cleans up.
+App_Shutdown_Proc ::   #type proc()
+// Called every frame.
+// Usually, hot_ptr is nil. But after a hotreload, hot_ptr is the last returned data_ptr.
+App_Update_Proc ::     #type proc(hot_ptr: rawptr) -> (data_ptr: rawptr)
+
+Window_Init_Config :: struct {
+    name:     string,
+    style:    platform.Window_Style,
+    size:     [2]f32,
+    high_dpi: bool,
+}
 
 Rect :: struct {
     min:    [2]f32,
@@ -356,8 +374,8 @@ when ODIN_OS == .JS {
     }
 
 } else when ODIN_BUILD_MODE == .Dynamic {
-    @(export) _app_hot_step :: proc "contextless" (prev_state: ^State, desc: App_Desc) -> ^State {
-        return __app_hot_step(prev_state, desc)
+    @(export) _app_hot_step :: proc "contextless" (prev_state: ^State, desc: ^App_Desc) -> ^State {
+        return __app_hot_step(prev_state, desc^)
     }
 }
 
@@ -375,12 +393,12 @@ run_main_loop :: proc(desc: App_Desc) {
 
     } else when ODIN_OS == .JS {
 
-        init_state(context.allocator)
+        init_state(context.allocator, desc.window_init_config)
         _state.app_desc = desc
 
     } else when ODIN_OS == .Windows || ODIN_OS == .Linux || ODIN_OS == .Darwin {
 
-        init_state(context.allocator)
+        init_state(context.allocator, desc.window_init_config)
         context = get_context()
 
         ensure(_state.gpu_state.init_done)
@@ -456,7 +474,7 @@ __app_hot_step :: proc "contextless" (prev_state: ^State, desc: App_Desc) -> ^St
 
         assert(_state == nil)
 
-        init_state(context.allocator)
+        init_state(context.allocator, desc.window_init_config)
         context = get_context()
         ensure(_state != nil)
         assert(gpu.is_init_done())
@@ -512,7 +530,7 @@ init_context_state :: proc(ctx: ^Context_State, allocator: runtime.Allocator) {
 }
 
 // Create state, init context, init subsystems.
-init_state :: proc(allocator: runtime.Allocator) {
+init_state :: proc(allocator: runtime.Allocator, wic: Window_Init_Config) {
     ensure(_state == nil)
 
     state_err: runtime.Allocator_Error
@@ -549,7 +567,22 @@ init_state :: proc(allocator: runtime.Allocator) {
 
     base.log_info("Creating Window...")
 
-    _state.window = platform.create_window("Ravn App", style = .Regular, high_dpi = true)
+    default_wic := wic == Window_Init_Config{}
+
+    high_dpi := true if default_wic else wic.high_dpi
+    name := wic.name if wic.name != "" else "Ravn App"
+    rect: platform.Rect
+    if wic.size.x > 0 && wic.size.y > 0 {
+        window_size := [2]i32{i32(wic.size.x), i32(wic.size.y)}
+        monitor := platform.get_main_monitor_rect()
+        offset := (monitor.size - window_size) / 2
+        rect = {
+            min  = monitor.min + [2]i32{max(offset.x, 0), max(offset.y, 0)},
+            size = window_size,
+        }
+    }
+
+    _state.window = platform.create_window(name, style = .Regular, rect = rect, high_dpi = high_dpi)
 
     base.log_info("Initializing GPU...")
     if !gpu.init(&_state.gpu_state, platform.get_native_window_ptr(_state.window)) {

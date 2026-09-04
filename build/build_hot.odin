@@ -18,9 +18,12 @@ when ODIN_OS == .Windows {
 }
 
 Hotreload_Module :: struct {
-    mod:        platform.Module,
-    desc:       base.App_Desc,
-    callback:   proc "contextless" (rawptr, base.App_Desc) -> rawptr,
+	mod:      platform.Module,
+	// Opaque pointer to the app's exported '_app_desc' global inside the DLL.
+	// The build package never inspects it, it just passes it back into the callback.
+	// TODO: we should probably add a different system for checking user state struct doesn't get corrupted
+	desc:     rawptr,
+	callback: proc "contextless" (_: rawptr, _: rawptr) -> rawptr,
 }
 
 Hotreload_File :: struct {
@@ -215,13 +218,6 @@ hotreload_run :: proc(pkg: string, pkg_path: string) -> bool {
 
             base.log_info("Hotreload: Loaded %s", new_file.path)
 
-            if new_module.desc.state_size != module.desc.state_size {
-                base.log_err(
-                    "Hotreload: State size mismatch (new %i vs old %i). You cannot change the State struct layout during hotreload.",
-                    new_module.desc.state_size, module.desc.state_size)
-                return false
-            }
-
             append(&modules_to_unload, new_module.mod)
 
             module = new_module
@@ -247,19 +243,17 @@ load_hotreload_module :: proc(path: string) -> (result: Hotreload_Module, ok: bo
         return {}, false
     }
 
-    app_desc_ptr := cast(^base.App_Desc)platform.get_module_symbol_address(module, "_app_desc")
+    result.desc = platform.get_module_symbol_address(module, "_app_desc")
 
-    if app_desc_ptr == nil {
+    if result.desc == nil {
         base.log_err("Hotreload: Failed to find _app_desc data")
         return {}, false
     }
 
-    result.desc = app_desc_ptr^
-
-    result.callback = auto_cast(platform.get_module_symbol_address(module, "_module_hot_step"))
+    result.callback = auto_cast(platform.get_module_symbol_address(module, "_app_hot_step"))
 
     if result.callback == nil {
-        base.log_err("Hotreload: Failed to find the _module_hot_step proc")
+        base.log_err("Hotreload: Failed to find the _app_hot_step proc")
         return {}, false
     }
 
