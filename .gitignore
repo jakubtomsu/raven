@@ -24,4 +24,5 @@
 
 ols.json
 odinfmt.json
+*.odin-doc
 .vscode
