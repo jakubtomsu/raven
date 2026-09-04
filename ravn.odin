@@ -46,8 +46,8 @@ MAX_TEXTURE_POOL_SLICES :: 64
 MAX_DRAW_STATE_DEPTH :: 64
 MAX_TOTAL_DRAW_BATCHES :: 4096
 
+DEFAULT_RENDER_TEXTURE :: Render_Texture_Handle{index = MAX_RENDER_TEXTURES - 1, gen = 0}
 // This is the actual swapchain used for rendering directly to screen.
-DEFAULT_RENDER_TEXTURE :: Render_Texture_Handle{MAX_RENDER_TEXTURES - 1, 0}
 
 HASH_SEED :: #config(RAVN_HASH_SEED, 0xcbf29ce484222325)
 MAX_PROBE_DIST :: #config(RAVN_MAX_TABLE_PROBE_DIST, 16)
@@ -62,10 +62,7 @@ HANDLE_INDEX_INVALID :: ~Handle_Index(0)
 Handle_Index :: u16
 Handle_Gen :: u8
 
-Handle :: struct {
-    index:  Handle_Index,
-    gen:    Handle_Gen,
-}
+Handle :: base.Handle
 
 
 Arena_Handle :: distinct Handle

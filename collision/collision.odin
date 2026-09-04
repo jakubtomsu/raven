@@ -26,10 +26,7 @@ PENETRATION_SOLVER_CORRECTION_FACTOR :: 0.1
 Handle_Index :: u16
 Handle_Gen :: u8
 
-Handle :: struct {
-    index:  Handle_Index,
-    gen:    Handle_Gen,
-}
+Handle :: base.Handle
 
 Arena_Handle :: distinct Handle
 Mesh_Handle :: distinct Handle

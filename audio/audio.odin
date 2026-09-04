@@ -45,11 +45,7 @@ SPEED_OF_SOUND :: 343 // m/s, dry air at around 20C
 Handle_Index :: u16
 Handle_Gen :: u8
 
-// Zero value means invalid handle
-Handle :: struct {
-    index:  u16,
-    gen:    u8,
-}
+Handle :: base.Handle
 
 Resource_Handle :: distinct Handle
 Sound_Handle :: distinct Handle

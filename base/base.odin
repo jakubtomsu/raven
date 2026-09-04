@@ -9,13 +9,13 @@ eprintf :: ufmt.eprintf
 eprintfln :: ufmt.eprintfln
 tprintf :: ufmt.tprintf
 
-Handle_Gen :: distinct u8
-Handle_Index :: distinct u16
+Handle_Gen :: u8
+Handle_Index :: u16
 
 Handle :: struct {
     index:  Handle_Index,
     gen:    Handle_Gen,
-    _extra: u8,
+    _:      u8,
 }
 
 
