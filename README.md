@@ -87,6 +87,8 @@ Try the [hello](examples/hello/hello_example.odin) or [Snake Planet game](exampl
 
 # Docs
 
+See [Cheatsheet](./CHEATSHEET.md) for quick API overview.
+
 ## Web builds
 
 You can run the following command to export your game to web:
@@ -107,40 +109,6 @@ This requires a ***slang compiler dynamic library*** on non-D3D11 builds. Instal
 
 - Windows: copy `slang.dll` and `slang-compiler.dll` into your project
 - Linux: copy `libslang-compiler.so.*` as `libslang.so` into your project.
-
-## Cheatsheet
-
-List of most common functions in an easily searchable way.
-
-> [!WARNING]
-> INCOMPLETE/OUTDATED
-
-### Drawing
-
-```odin
-draw_sprite(...)
-draw_mesh(...)
-draw_triangle(...)
-draw_line(...)
-draw_text(...)
-```
-
-### Utils
-```odin
-deg(degrees: f32) -> f32                    // Convert degrees to radians
-lerp(a, b: $T, t: f32) -> T                 // Linearly interpolate between A and B
-lexp(a, b: $T, rate: f32) -> T              // Exponential lerp for things like 'a = lexp(a, target, delta*10)'
-fade(alpha: f32) -> Vec4                    // Make a white color with a given alpha value
-gray(val: f32) -> Vec4                      // Value = 0 means black, = 1 means white
-vcast($T: typeid, v: [$N]$E) -> [N]T        // Cast from one type of vector to another
-rot90(v: [2]$T) -> [2]T                     // Rotate a 2D vector 90 degrees counter-clockwise
-unlerp(a, b: f32, x: f32) -> T              // Map x from range a..b to 0..1
-remap(x, a0, a1, b0, b1: f32) -> f32        // Map x from range a0..a1 to b0..b1
-smoothstep(edge0, edge1, x: f32) -> f32     // Generates a smooth curve from x in range edge0..edge1
-oklerp(a, b: Vec4, t: f32) -> Vec4          // Interpolate colors with OKLAB
-```
-
-
 
 # Contributing
 For info about bug reports and contributing, see [CONTRIBUTING](CONTRIBUTING.md)
