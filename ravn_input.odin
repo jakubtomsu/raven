@@ -130,34 +130,52 @@ get_mouse_pressed :: proc(button: Mouse_Button, buf: f32 = 0) -> bool {
 // MARK: Gamepads
 
 get_gamepad_axis :: proc(gamepad_index: int, axis: Gamepad_Axis, deadzone: f32 = 0.01) -> f32 {
+    if gamepad_index < 0 || gamepad_index >= MAX_GAMEPADS {
+        return 0
+    }
     gamepad := _state.input.gamepads[gamepad_index]
     val := gamepad.axes[axis]
     return abs(val) < deadzone ? 0 : val
 }
 
 get_gamepad_down :: proc(gamepad_index: int, button: Gamepad_Button) -> bool {
+    if gamepad_index < 0 || gamepad_index >= MAX_GAMEPADS {
+        return false
+    }
     gamepad := _state.input.gamepads[gamepad_index]
     return button in gamepad.buttons.down
 }
 
 // Down time is 0 on pressed
 get_gamepad_down_time :: proc(gamepad_index: int, button: Gamepad_Button) -> f32 {
+    if gamepad_index < 0 || gamepad_index >= MAX_GAMEPADS {
+        return 0
+    }
     gamepad := _state.input.gamepads[gamepad_index]
     return gamepad.buttons.timer[button]
 }
 
 get_gamepad_repeated :: proc(gamepad_index: int, button: Gamepad_Button) -> bool {
+    if gamepad_index < 0 || gamepad_index >= MAX_GAMEPADS {
+        return false
+    }
     gamepad := _state.input.gamepads[gamepad_index]
     return button in gamepad.buttons.repeated
 }
 
 get_gamepad_released :: proc(gamepad_index: int, button: Gamepad_Button) -> bool {
+    if gamepad_index < 0 || gamepad_index >= MAX_GAMEPADS {
+        return false
+    }
     gamepad := _state.input.gamepads[gamepad_index]
     return button in gamepad.buttons.released
 }
 
 // buf: buffering window duration in seconds
 get_gamepad_pressed :: proc(gamepad_index: int, button: Gamepad_Button, buf: f32 = 0) -> bool {
+    if gamepad_index < 0 || gamepad_index >= MAX_GAMEPADS {
+        return false
+    }
     gamepad := _state.input.gamepads[gamepad_index]
 
     if buf > 0.0001 &&
@@ -266,8 +284,11 @@ _input_gamepad_update_state :: proc(gpad: ^Input_Gamepad, state: platform.Gamepa
         }
     }
 
-    gpad.axes[.Left_Trigger] = state.axes[.Left_Trigger] > 0.1 ? clamp(gpad.axes[.Left_Trigger], 0, 1) : 0
-    gpad.axes[.Right_Trigger] = state.axes[.Right_Trigger] > 0.1 ? clamp(gpad.axes[.Right_Trigger], 0, 1) : 0
+    TRIGGER_DEADZONE :: 0.05
+    THUMB_DEADZONE :: 0.1
+
+    gpad.axes[.Left_Trigger]  = state.axes[.Left_Trigger ] > TRIGGER_DEADZONE ? clamp(state.axes[.Left_Trigger], 0, 1) : 0
+    gpad.axes[.Right_Trigger] = state.axes[.Right_Trigger] > TRIGGER_DEADZONE ? clamp(state.axes[.Right_Trigger], 0, 1) : 0
 
     l_thumb := [2]f32{
         state.axes[.Left_Thumb_X],
@@ -282,13 +303,13 @@ _input_gamepad_update_state :: proc(gpad: ^Input_Gamepad, state: platform.Gamepa
     l_len := linalg.length(l_thumb)
     r_len := linalg.length(r_thumb)
 
-    if l_len < 0.1 {
+    if l_len < THUMB_DEADZONE {
         l_thumb = 0
     } else if l_len > 1 {
         l_thumb = l_thumb / l_len
     }
 
-    if r_len < 0.1 {
+    if r_len < THUMB_DEADZONE {
         r_thumb = 0
     } else if r_len > 1 {
         r_thumb = r_thumb / r_len

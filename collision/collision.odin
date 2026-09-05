@@ -26,10 +26,7 @@ PENETRATION_SOLVER_CORRECTION_FACTOR :: 0.1
 Handle_Index :: u16
 Handle_Gen :: u8
 
-Handle :: struct {
-    index:  Handle_Index,
-    gen:    Handle_Gen,
-}
+Handle :: base.Handle
 
 Arena_Handle :: distinct Handle
 Mesh_Handle :: distinct Handle
@@ -39,16 +36,11 @@ Layer_Mask :: [4]u64
 
 ID :: u64
 
-State :: struct {
+State :: struct #align(4096) {
     init_allocator:     runtime.Allocator,
 
-    arena_data:         [MAX_ARENAS]Arena,
-    arena_gen:          [MAX_ARENAS]Handle_Gen,
-    arena_used:         base.Bit_Pool(MAX_ARENAS),
-
-    mesh_data:          [MAX_MESHES]Mesh,
-    mesh_gen:           [MAX_MESHES]Handle_Gen,
-    mesh_used:          base.Bit_Pool(MAX_MESHES),
+    arenas:             base.Pool(MAX_ARENAS, Arena, Arena_Handle),
+    meshes:             base.Pool(MAX_MESHES, Mesh, Mesh_Handle),
 
     step_read:          i32,
     step_write:         i32,
@@ -156,14 +148,14 @@ Contact :: struct {
 init :: proc(state: ^State, allocator := context.allocator) {
     _state = state
     _state.init_allocator = allocator
-    base.bit_pool_set_1(&_state.arena_used, 0)
-    base.bit_pool_set_1(&_state.mesh_used, 0)
+    base.pool_clear(&_state.arenas)
+    base.pool_clear(&_state.meshes)
 
     for &step in _state.step_data {
         bvh.init(&step.tlas,
             prims = nil,
             nodes = runtime.make_aligned([]bvh.Node, bvh.max_nodes_for_prims(MAX_SHAPES), 64, allocator),
-            indices = make([]u16, MAX_SHAPES, allocator),
+            indices = make([]u32, MAX_SHAPES, allocator),
             max_leaf_prims = 1,
         )
     }
@@ -175,7 +167,7 @@ shutdown :: proc() {
         delete(step.tlas.indices, _state.init_allocator)
     }
 
-    for arena in _state.arena_data {
+    for arena in _state.arenas.data {
         if arena.data != nil {
             delete(arena.data, arena.backing)
         }
@@ -247,13 +239,10 @@ create_arena :: proc(
     size_in_bytes:  u64,
     allocator       := context.allocator,
     loc             := #caller_location,
-) -> (Arena_Handle, bool) #optional_ok {
+) -> (result: Arena_Handle, ok: bool) #optional_ok {
     assert(_state != nil)
 
-    index, index_ok := base.bit_pool_find_0(_state.arena_used)
-    if !index_ok {
-        return {}, false
-    }
+    handle := base.pool_find_free(_state.arenas) or_return
 
     arena := Arena{
         data = runtime.make_aligned([]byte, size_in_bytes, 4096, allocator = allocator, loc = loc),
@@ -265,13 +254,8 @@ create_arena :: proc(
         return {}, false
     }
 
-    _state.arena_data[index] = arena
-    base.bit_pool_set_1(&_state.arena_used, index)
-
-    return {
-        index = Handle_Index(index),
-        gen = _state.arena_gen[index],
-    }, true
+    base.pool_insert(&_state.arenas, handle, arena) or_return
+    return handle, true
 }
 
 destroy_arena :: proc(handle: Arena_Handle) -> bool {
@@ -280,11 +264,11 @@ destroy_arena :: proc(handle: Arena_Handle) -> bool {
     delete(arena.data, arena.backing)
 
     for i in 0..<MAX_MESHES {
-        mesh := &_state.mesh_data[i]
+        mesh := &_state.meshes.data[i]
         if mesh.arena == handle {
             destroy_mesh(Mesh_Handle{
                 index = Handle_Index(i),
-                gen = _state.mesh_gen[i],
+                gen = _state.meshes.gen[i],
             })
         }
     }
@@ -357,28 +341,12 @@ _arena_allocator_proc :: proc(
 
 @(require_results)
 get_arena :: proc(handle: Arena_Handle) -> (^Arena, bool) {
-    if handle.index <= 0 || handle.index > MAX_ARENAS {
-        return nil, false
-    }
-
-    if _state.arena_gen[handle.index] != handle.gen {
-        return nil, false
-    }
-
-    return &_state.arena_data[handle.index], true
+    return base.pool_get(&_state.arenas, handle)
 }
 
 @(require_results)
 get_mesh :: proc(handle: Mesh_Handle) -> (^Mesh, bool) {
-    if handle.index <= 0 || handle.index > MAX_MESHES {
-        return nil, false
-    }
-
-    if _state.mesh_gen[handle.index] != handle.gen {
-        return nil, false
-    }
-
-    return &_state.mesh_data[handle.index], true
+    return base.pool_get(&_state.meshes, handle)
 }
 
 // NOTE: doesn't clone the data. You must allocate it yourself with the
@@ -388,18 +356,11 @@ create_mesh :: proc(
     arena_handle:   Arena_Handle,
     verts:          [][3]f32,
     triangles:      [][3]u16,
-) -> (Mesh_Handle, bool) #optional_ok {
+) -> (result: Mesh_Handle, ok: bool) #optional_ok {
     assert(_state != nil)
 
-    _, arena_ok := get_arena(arena_handle)
-    if !arena_ok {
-        return {}, false
-    }
-
-    index, index_ok := base.bit_pool_find_0(_state.mesh_used)
-    if !index_ok {
-        return {}, false
-    }
+    _ = get_arena(arena_handle) or_return
+    handle := base.pool_find_free(_state.meshes) or_return
 
     allocator := arena_allocator(arena_handle)
 
@@ -431,7 +392,7 @@ create_mesh :: proc(
     bvh.init(&mesh.blas,
         prims = tri_bbs,
         nodes = runtime.make_aligned([]bvh.Node, bvh.max_nodes_for_prims(len(triangles)), 64, allocator),
-        indices = make([]u16, len(triangles), allocator),
+        indices = make([]u32, len(triangles), allocator),
         max_leaf_prims = 4,
     )
 
@@ -442,18 +403,13 @@ create_mesh :: proc(
         mesh.bounds_max = linalg.max(mesh.bounds_max, vert)
     }
 
-    _state.mesh_data[index] = mesh
-    base.bit_pool_set_1(&_state.mesh_used, index)
-
-    return {
-        index = Handle_Index(index),
-        gen = _state.arena_gen[index],
-    }, true
+    base.pool_insert(&_state.meshes, handle, mesh) or_return
+    return handle, true
 }
 
 
 destroy_mesh :: proc(handle: Mesh_Handle) -> bool {
-    unimplemented()
+    return base.pool_remove(&_state.meshes, handle)
 }
 
 
@@ -1028,7 +984,7 @@ find_contacts_sphere_buf :: proc(
                 )
 
                 contacts := out_contacts[num_contacts:][:num_new_contacts]
-                tris := out_triangles[:num_triangles][:num_new_triangles]
+                tris := out_triangles[num_triangles:][:num_new_triangles]
 
                 for &c in contacts {
                     c.shape = i32(index)
@@ -1152,6 +1108,9 @@ generate_filtered_sphere_vs_triangle_contacts :: proc(
             }
         }
 
+        if int(num_contacts) >= len(out_contacts) {
+            break
+        }
 
         dist := intrinsics.sqrt(sort.dist_sq)
         out_contacts[num_contacts] = Contact{
@@ -1214,7 +1173,7 @@ get_mesh_triangle :: proc(handle: Mesh_Handle, #any_int tri_index: int) -> (vert
     return {
         mesh.verts[tri[0]],
         mesh.verts[tri[1]],
-        mesh.verts[tri[1]],
+        mesh.verts[tri[2]],
     }, true
 }
 

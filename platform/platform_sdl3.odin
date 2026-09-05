@@ -34,7 +34,6 @@ when BACKEND == BACKEND_SDL3 {
         path: string, // SDL3 dosnt have a way to get state from the handle so we have to store the path
     }
 
-    _File_Watcher :: struct { _: u8 }
     _Directory_Iter :: struct {
         index: i32,
         count: i32,
@@ -677,19 +676,6 @@ when BACKEND == BACKEND_SDL3 {
         iter.index += 1
 
         return strings.clone(ufmt.tprintf("%s/%s", dir, entry), allocator), true
-    }
-
-    @(require_results)
-    _init_file_watcher :: proc(watcher: ^File_Watcher, path: string, recursive := false) -> bool {
-        return false
-    }
-
-    @(require_results)
-    _poll_file_watcher :: proc(watcher: ^File_Watcher) -> []string {
-        return nil
-    }
-
-    _destroy_file_watcher :: proc(watcher: ^File_Watcher) {
     }
 
     @(require_results)

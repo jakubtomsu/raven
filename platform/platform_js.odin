@@ -25,7 +25,6 @@ _State :: struct {
 }
 
 _File_Handle :: struct { _: u8 }
-_File_Watcher :: struct { _: u8 }
 _Directory_Iter :: struct { _: u8 }
 _Thread :: struct { _: u8 }
 _Window :: struct { _: u8 }
@@ -115,7 +114,7 @@ _get_gamepad_state :: proc(#any_int index: int) -> (result: Gamepad_State, ok: b
     if state.buttons[10].pressed do result.buttons += {.Left_Thumb}
     if state.buttons[11].pressed do result.buttons += {.Right_Thumb}
     if state.buttons[4].pressed do result.buttons += {.Left_Shoulder}
-    if state.buttons[4].pressed do result.buttons += {.Right_Shoulder}
+    if state.buttons[5].pressed do result.buttons += {.Right_Shoulder}
     if state.buttons[0].pressed do result.buttons += {.A}
     if state.buttons[1].pressed do result.buttons += {.B}
     if state.buttons[2].pressed do result.buttons += {.X}
@@ -130,7 +129,7 @@ _get_gamepad_state :: proc(#any_int index: int) -> (result: Gamepad_State, ok: b
         .Right_Thumb_Y = -f32(state.axes[3]),
     }
 
-    return {}, false
+    return result, true
 }
 
 @(require_results)
@@ -368,19 +367,6 @@ _is_directory :: proc(path: string) -> bool {
 @(require_results)
 _iter_directory :: proc(iter: ^Directory_Iter, pattern: string, allocator := context.temp_allocator) -> (result: string, ok: bool) {
     return "", false
-}
-
-@(require_results)
-_init_file_watcher :: proc(watcher: ^File_Watcher, path: string, recursive := false) -> bool {
-    return false
-}
-
-@(require_results)
-_poll_file_watcher :: proc(watcher: ^File_Watcher) -> []string {
-    return nil
-}
-
-_destroy_file_watcher :: proc(watcher: ^File_Watcher) {
 }
 
 @(require_results)

@@ -454,7 +454,7 @@ when BACKEND == BACKEND_WGPU {
                 } else if res.size.z > 1 {
                     dim = ._2DArray
                 } else {
-                    dim = ._2DArray
+                    dim = ._2D
                 }
 
                 layout_entries[num_entries].texture = wgpu.TextureBindingLayout{
@@ -703,7 +703,7 @@ when BACKEND == BACKEND_WGPU {
                 entryPoint = "ps_main",
                 constantCount = 0,
                 constants = nil,
-                targetCount = 1, // len(color_targets),
+                targetCount = uint(color_targets_num),
                 targets = &color_targets[0],
             },
             depthStencil = depth_stencil,
@@ -752,7 +752,7 @@ when BACKEND == BACKEND_WGPU {
             _state.device,
             &wgpu.ComputePipelineDescriptor{
                 label = name,
-                layout = nil,
+                layout = pip_layout,
                 compute = wgpu.ComputeState{
                     module = cs.module,
                     entryPoint = "cs_main",
@@ -762,7 +762,11 @@ when BACKEND == BACKEND_WGPU {
             },
         )
 
-        return {}, true
+        if result.pip == nil {
+            return {}, false
+        }
+
+        return result, true
     }
 
     _update_swapchain :: proc(_: ^_Resource, _: rawptr, size: [2]i32) -> (ok: bool) {
@@ -848,6 +852,10 @@ when BACKEND == BACKEND_WGPU {
             usage += {.CopyDst}
         }
 
+        if rw_resource {
+            usage += {.StorageBinding}
+        }
+
         formats := [?]wgpu.TextureFormat{
             _wgpu_texture_format(format),
         }
@@ -913,7 +921,7 @@ when BACKEND == BACKEND_WGPU {
 	        usage = usage,
         })
 
-        if result.tex == nil {
+        if result.tex_view == nil {
             return {}, false
         }
 
@@ -1068,7 +1076,7 @@ when BACKEND == BACKEND_WGPU {
             &wgpu.RenderPassDescriptor{
                 label = name,
                 colorAttachmentCount = uint(num_color_atts),
-                colorAttachments = &color_atts[0],
+                colorAttachments = num_color_atts == 0 ? nil : &color_atts[0],
                 depthStencilAttachment = depth_stencil,
             },
         )

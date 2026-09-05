@@ -7,7 +7,6 @@ import "core:math/linalg"
 SIZE :: [2]i32{100, 100}
 
 @export _app_desc := rv.App_Desc{
-    state_size = size_of(State),
     update = _update,
     init = _init,
     shutdown = _shutdown,

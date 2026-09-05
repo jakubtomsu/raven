@@ -8,7 +8,7 @@ MAX_BINS :: 32
 
 BVH :: struct {
     nodes:          []Node,
-    indices:        []u16, // Indexes prims
+    indices:        []u32, // Indexes prims
     prims:          [][2][3]f32,
     nodes_used:     i32,
     max_leaf_prims: i32,
@@ -29,18 +29,17 @@ Node_SIMD4 :: struct #align(32) {
 
 @(require_results)
 max_nodes_for_prims :: proc "contextless" (#any_int num_prims: int) -> int {
-    return max(1, 2 * num_prims - 1)
+    return max(4, 2 * num_prims)
 }
 
 init :: proc(
     bvh:                    ^BVH,
     nodes:                  []Node,
-    indices:                []u16,
+    indices:                []u32,
     prims:                  [][2][3]f32 = nil,
     #any_int max_leaf_prims := 3,
 ) {
     assert(max_leaf_prims > 0)
-    assert(len(nodes) < int(max(u16)))
 
     bvh^ = {
         nodes = nodes,
@@ -57,14 +56,13 @@ init :: proc(
 
 // Re-initialize the primitive buffer only and clears the existing nodes.
 init_prims :: proc(bvh: ^BVH, prims: [][2][3]f32) {
-    assert(len(prims) < int(max(u16)))
     assert(len(bvh.nodes) >= len(prims))
     assert(len(bvh.indices) >= len(prims))
 
     bvh.prims = prims
 
     for i in 0..<len(prims) {
-        bvh.indices[i] = u16(i)
+        bvh.indices[i] = u32(i)
     }
 
     if len(prims) > 0 {
@@ -401,7 +399,7 @@ for {
 Iter :: struct {
     bvh:        ^BVH,
     using node: ^Node,
-    stack:      [64 * 2]u16,
+    stack:      [64 * 2]u32,
     stack_len:  i32,
 }
 
@@ -439,7 +437,7 @@ iter_next :: proc(iter: ^Iter, t0, t1: f32) -> bool {
         iter_pop(iter) or_return
     } else {
         if t1 != max(f32) {
-            iter.stack[iter.stack_len] = u16(child1)
+            iter.stack[iter.stack_len] = u32(child1)
             iter.stack_len += 1
         }
         iter.node = &iter.bvh.nodes[child0]
@@ -456,7 +454,7 @@ iter_unordered_next :: proc(iter: ^Iter, hit0, hit1: bool) -> bool {
 
     if hit0 {
         if hit1 {
-            iter.stack[iter.stack_len] = u16(child1)
+            iter.stack[iter.stack_len] = u32(child1)
             iter.stack_len += 1
             iter.node = &iter.bvh.nodes[child0]
         } else {

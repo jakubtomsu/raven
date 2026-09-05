@@ -23,7 +23,7 @@ For small stupid things like typos, prefer posting it on Discord over a PR.
 
 If you implement a large feature, consider the **maintenance cost**.
 
-Before submitting the PR, please run `check_all.cmd` script (Windows only).
+Before submitting the PR, please run `odin run build/check`.
 
 ### Bug Fixes
 

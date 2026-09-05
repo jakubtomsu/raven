@@ -9,6 +9,16 @@ eprintf :: ufmt.eprintf
 eprintfln :: ufmt.eprintfln
 tprintf :: ufmt.tprintf
 
+Handle_Gen :: u8
+Handle_Index :: u16
+
+Handle :: struct {
+    index:  Handle_Index,
+    gen:    Handle_Gen,
+    _:      u8,
+}
+
+
 // MARK: Log
 
 Log_Level :: runtime.Logger_Level
@@ -109,34 +119,12 @@ _logger_proc :: proc(
 
 @(rodata)
 _logger_prefix := [?]string{
-	 0..<10 = "DBG:  ",
-	10..<20 = "INFO: ",
-	20..<30 = "WARN: ",
-	30..<40 = "ERR:  ",
-	40..<50 = "FATAL: ",
+     0..<10 = "DBG:  ",
+    10..<20 = "INFO: ",
+    20..<30 = "WARN: ",
+    30..<40 = "ERR:  ",
+    40..<50 = "FATAL: ",
 }
-
-
-// MARK: Module
-
-// NOTE: This structure is passed between DLLs when hot-reloading.
-App_Desc :: struct {
-    state_size: i64,
-    init:       App_Init_Proc,
-    shutdown:   App_Shutdown_Proc,
-    update:     App_Update_Proc,
-}
-
-// Called after internal init is done to let the app initialize.
-App_Init_Proc ::       #type proc()
-// Called after request_shutdown() but before the engine cleans up.
-App_Shutdown_Proc ::   #type proc()
-// Called every frame.
-// Usually, hot_ptr is nil. But after a hotreload, hot_ptr is the last returned data_ptr.
-// This way you can
-App_Update_Proc ::     #type proc(hot_ptr: rawptr) -> (data_ptr: rawptr)
-
-
 
 
 @(require_results)
@@ -172,4 +160,37 @@ is_finite_vec :: #force_inline proc(v: [$N]f32) -> bool {
         res &= is_finite_f32(x)
     }
     return res
+}
+
+@(require_results)
+hash_fnv64a :: proc "contextless" (data: []byte, seed: u64) -> u64 {
+    h: u64 = seed
+    for b in data {
+        h = (h ~ u64(b)) * 0x100000001b3
+    }
+    return h
+}
+
+// https://nullprogram.com/blog/2018/07/31/
+
+@(require_results)
+hash_murmurhash32_mix32 :: proc "contextless" (x: u32) -> u32 {
+    x := x
+    x ~= x >> 16
+    x *= 0x85ebca6b
+    x ~= x >> 13
+    x *= 0xc2b2ae35
+    x ~= x >> 16
+    return x
+}
+
+@(require_results)
+hash_splittable64 :: proc "contextless" (x: u64) -> u64 {
+    x := x
+    x ~= x >> 30
+    x *= 0xbf58476d1ce4e5b9
+    x ~= x >> 27
+    x *= 0x94d049bb133111eb
+    x ~= x >> 31
+    return x
 }

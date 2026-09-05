@@ -52,10 +52,6 @@ File_Handle :: struct {
     using native: _File_Handle,
 }
 
-File_Watcher :: struct {
-    using native:   _File_Watcher,
-}
-
 Directory_Iter :: struct {
     using native:   _Directory_Iter,
 }
@@ -476,8 +472,8 @@ create_window :: proc(name: string, style: Window_Style = .Regular, rect: Rect =
 
         case .Regular:
             rect = {
-                min = monitor.min + monitor.size / 6,
-                size = (monitor.size * 2) / 3,
+                min = monitor.min + monitor.size / 4,
+                size = monitor.size / 2,
             }
         }
     }
@@ -632,19 +628,6 @@ is_directory :: proc(path: string) -> bool {
 @(require_results)
 iter_directory :: proc(iter: ^Directory_Iter, pattern: string, allocator := context.temp_allocator) -> (result: string, ok: bool) {
     return _iter_directory(iter, pattern, allocator)
-}
-
-// IMPORTANT NOTE: the watcher structure must stay in the same place in memory for it's entire lifetime.
-init_file_watcher :: proc(watcher: ^File_Watcher, path: string, recursive := false) -> bool {
-    return _init_file_watcher(watcher, path, recursive = recursive)
-}
-
-poll_file_watcher :: proc(watcher: ^File_Watcher) -> []string {
-    return _poll_file_watcher(watcher)
-}
-
-destroy_file_watcher :: proc(watcher: ^File_Watcher) {
-    _destroy_file_watcher(watcher)
 }
 
 file_dialog :: proc(mode: File_Dialog_Mode, default_path: string, patterns: []File_Pattern, title := "") -> (string, bool) {

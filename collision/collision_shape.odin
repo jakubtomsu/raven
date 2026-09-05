@@ -310,7 +310,7 @@ test_sphere_vs_mesh_local :: proc(
     rad:        f32,
     handle:     Mesh_Handle,
     scale:      [3]f32 = 1,
-) -> (prim: i32, ok: bool) #no_bounds_check {
+) -> (i32, bool) #no_bounds_check {
     mesh, mesh_ok := get_mesh(handle)
     if !mesh_ok {
         return -1, false
@@ -331,7 +331,7 @@ test_sphere_vs_mesh_local :: proc(
                 }
 
                 if geometry.test_sphere_vs_triangle(pos, rad, verts) {
-                    return i32(prim), true
+                    return i32(index), true
                 }
             }
 

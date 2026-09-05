@@ -30,7 +30,7 @@ jobs:
         shell: cmd
         run: |
           set "PATH=%CD%\Odin;%PATH%"
-          call examples\check_all.cmd
+          odin run build/check
   build_linux:
     name: Linux Build and Check
     runs-on: ubuntu-slim
@@ -50,12 +50,12 @@ jobs:
             ./odin report
         - name: Install Ravn dependencies
           run: |
-            make -C "$GITHUB_WORKSPACE/Odin/vendor/miniaudio/src"
-            make -C "$GITHUB_WORKSPACE/Odin/vendor/stb/src"
-            curl -L https://github.com/gfx-rs/wgpu-native/releases/download/v29.0.0.0/wgpu-linux-x86_64-release.zip -o wgpu.zip
+            "$GITHUB_WORKSPACE/Odin/vendor/miniaudio/src/build_miniaudio.sh"
+            "$GITHUB_WORKSPACE/Odin/vendor/stb/src/build_stb.sh"
+            curl -L https://github.com/gfx-rs/wgpu-native/releases/download/v29.0.1.1/wgpu-linux-x86_64-release.zip -o wgpu.zip
             unzip wgpu.zip -d "$GITHUB_WORKSPACE/Odin/vendor/wgpu/lib/wgpu-linux-x86_64-release"
         - name: Check All
           run: |
             # Why "$GITHUB_WORKSPACE"? To be able to call odin from anywhere in the container's file system
             export PATH="$GITHUB_WORKSPACE/Odin/:$PATH"
-            bash examples/check_all.sh
+            odin run build/check

@@ -29,7 +29,6 @@ Particle :: struct {
 }
 
 @export _app_desc := rv.App_Desc {
-    state_size = size_of(State),
     init = _init,
     shutdown = _shutdown,
     update = _update,
@@ -79,7 +78,7 @@ _update :: proc(hot_state: rawptr) -> rawptr {
 
     delta := rv.get_delta_time()
 
-    rv.update_draw_layer(0, rv.make_screen_camera())
+    rv.update_draw_layer(0, rv.make_screen_camera(rv.get_screen_size()))
     rv.set_draw_texture(rv.get_builtin_texture(.CGA8x8thick))
     rv.set_draw_blend(.Alpha)
 

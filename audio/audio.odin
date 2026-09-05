@@ -39,24 +39,20 @@ SINGLE_THREAD :: #config(AUDIO_SINGLE_THREAD, false)
 MAX_SOUNDS :: #config(AUDIO_MAX_SOUNDS, 512)
 MAX_RESOURCES :: #config(AUDIO_MAX_RESOURCE, 512)
 NUM_GROUPS :: 8
-SCRATCH_FRAMES :: 1024 * 2
+SCRATCH_FRAMES :: 1024 * 8
 SPEED_OF_SOUND :: 343 // m/s, dry air at around 20C
 
 Handle_Index :: u16
 Handle_Gen :: u8
 
-// Zero value means invalid handle
-Handle :: struct {
-    index:  u16,
-    gen:    u8,
-}
+Handle :: base.Handle
 
 Resource_Handle :: distinct Handle
 Sound_Handle :: distinct Handle
 
 _state: ^State
 
-State :: struct #align(64) {
+State :: struct #align(4096) {
     using native:       _State,
     running:            bool,
     init_context:       runtime.Context,
@@ -369,12 +365,11 @@ create_resource :: proc(
 
     case .Raw_I16:
         assert(frame_rate != 0)
-        assert(len(data) % size_of(f32) == 0)
+        assert(len(data) % size_of(i16) == 0)
         resource.frame_num = u32(len(data)) / (num_channels * size_of(i16))
 
     case .Raw_U8:
         assert(frame_rate != 0)
-        assert(len(data) % size_of(f32) == 0)
         resource.frame_num = u32(len(data)) / (num_channels * size_of(u8))
 
     case .WAV:
@@ -432,7 +427,8 @@ destroy_resource :: proc(handle: Resource_Handle) -> bool {
     if !is_resource_valid(handle) {
         return false
     }
-    intrinsics.atomic_store(&_state.resources_state[handle.index], .Request_Free)
+    _state.resources_gen[handle.index] += 1
+    intrinsics.atomic_store(&_state.resources_state[handle.index], .Free)
     return true
 }
 
@@ -452,6 +448,7 @@ create_sound :: proc(
     pos:                    [3]f32 = 0,
     vel:                    [3]f32 = 0,
     #any_int group_index:   int = 0,
+    loc                     := #caller_location,
 ) -> (result: Sound_Handle, ok: bool) #optional_ok {
     pitch := pitch
     source := source
@@ -461,7 +458,7 @@ create_sound :: proc(
 
     index, index_ok := base.spsc_pop(&_state.sounds_free)
     if !index_ok {
-        // base.log_err("No free sound slots")
+        base.log_err("No free sound slots", loc = loc)
         return {}, false
     }
 
@@ -473,14 +470,13 @@ create_sound :: proc(
     case Resource_Handle:
         res, res_ok := _get_resource(s)
         if !res_ok {
-            base.log_err("Attempting to play sound with invalid resource handle %v", s)
+            base.log_err("Attempting to play sound with invalid resource handle %v", s, loc = loc)
             return {}, false
         }
 
         frame_rate = res.frame_rate
         frame_num = res.frame_num
-
-        expected_dur = f32(frame_num) * f32(frame_rate)
+        expected_dur = f32(frame_num) / f32(frame_rate)
 
     case Wave:
         expected_dur = s.dur
@@ -571,7 +567,7 @@ get_sound_time :: proc(handle: Sound_Handle, unit: Unit = .Seconds) -> f32 {
 
     switch unit {
     case .Seconds:
-        return f32(sound.frame) * f32(_get_sound_frame_rate(sound))
+        return f32(sound.frame) / f32(_get_sound_frame_rate(sound))
 
     case .Frames:
         return f32(sound.frame) + f32(sound.frame_range[0])
@@ -709,7 +705,7 @@ default_master_mixer :: proc(out_buf: [][2]f32, frame_rate: int) {
     assert(_state.frame_rate <= 192000)
 
     _scratch: [SCRATCH_FRAMES][2]f32
-    scratch := _scratch[:len(out_buf)]
+    scratch := _scratch[:min(len(out_buf), len(_scratch))]
 
     listener_prev := _state.listener_prev
 
@@ -1026,6 +1022,7 @@ default_master_mixer :: proc(out_buf: [][2]f32, frame_rate: int) {
     return
 
     _free_sound :: proc(sound_index: int) {
+        _state.sounds_gen[sound_index] += 1
         intrinsics.atomic_store(&_state.sounds_state[sound_index], .Free)
         base.spsc_push(&_state.sounds_free, Handle_Index(sound_index))
     }
@@ -1268,7 +1265,7 @@ unpack_frame :: proc {
 }
 
 unpack_frame_mono_u8 :: proc(v: u8) -> [2]f32 {
-    return (f32(v) - 128.0) * (1.0 / 255.0)
+    return (f32(v) - 128.0) * (1.0 / 127.5)
 }
 
 unpack_frame_mono_i16 :: proc(v: i16) -> [2]f32 {

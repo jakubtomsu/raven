@@ -4,7 +4,7 @@ import "core:math"
 import rv "../.."
 
 main :: proc() {
-    rv.init_state(context.allocator)
+    rv.init_state(context.allocator, {})
 
     context = rv.get_context()
 

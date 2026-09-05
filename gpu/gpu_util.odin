@@ -42,7 +42,7 @@ bucket_find_or_create :: proc(
     result = create_proc(key)
 
     bucket.keys[index] = key
-    bucket.vals = result
+    bucket.vals[index] = result
     bucket.len += 1
 
     return result

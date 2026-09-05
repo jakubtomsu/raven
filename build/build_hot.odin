@@ -18,9 +18,9 @@ when ODIN_OS == .Windows {
 }
 
 Hotreload_Module :: struct {
-    mod:        platform.Module,
-    desc:       base.App_Desc,
-    callback:   proc "contextless" (rawptr, base.App_Desc) -> rawptr,
+	mod:      platform.Module,
+	desc:     rawptr, // Opaque pointer to _app_desc export
+	callback: proc "contextless" (_: rawptr, _: rawptr) -> rawptr, // _app_hot_step
 }
 
 Hotreload_File :: struct {
@@ -77,22 +77,11 @@ when ODIN_OS == .Linux || ODIN_OS == .Darwin{
     }
 
 
-    /// Taken from  Odin/core/os/path.odin
-    /*
-    Gets the file name and extension from a path.
-
-    e.g.
-        'path/to/name.tar.gz' -> 'name.tar.gz'
-        'path/to/name.txt'    -> 'name.txt'
-        'path/to/name'        -> 'name'
-
-    Returns "." if the path is an empty string.
-    */
+    // Based on Odin/core/os/path.odin
     filepath_base :: proc(path: string) -> string {
         if path == "" {
             return "."
         }
-
         _, file := split_path(path)
         return file
     }
@@ -166,11 +155,6 @@ hotreload_run :: proc(pkg: string, pkg_path: string) -> bool {
 
     prev_data: rawptr
 
-    watcher: platform.File_Watcher
-    platform.init_file_watcher(&watcher, pkg_path)
-
-    any_changes := false
-
     for {
         assert(module.callback != nil)
 
@@ -178,26 +162,6 @@ hotreload_run :: proc(pkg: string, pkg_path: string) -> bool {
 
         if prev_data == nil {
             break
-        }
-
-        prev_any_changes := any_changes
-
-        changes := platform.poll_file_watcher(&watcher)
-        for change in changes {
-            // base.log_info("Hotreload: file changed:", change)
-            if strings.ends_with(change, ".odin") {
-                any_changes = true
-            }
-        }
-
-        if prev_any_changes && any_changes {
-            any_changes = false
-
-            // EXPERIMENTAL
-            // Sometimes fails with:
-            // Syntax Error: Failed to parse file: something.odin; invalid file or cannot be found
-            // base.log_info("HOTRELOADAUTO RECOMPILING")
-            // compile_hot(pkg_path, pkg, curr_index + 1)
         }
 
         new_file, new_ok := hotreload_find_latest_dll(pkg)
@@ -214,13 +178,6 @@ hotreload_run :: proc(pkg: string, pkg_path: string) -> bool {
             }
 
             base.log_info("Hotreload: Loaded %s", new_file.path)
-
-            if new_module.desc.state_size != module.desc.state_size {
-                base.log_err(
-                    "Hotreload: State size mismatch (new %i vs old %i). You cannot change the State struct layout during hotreload.",
-                    new_module.desc.state_size, module.desc.state_size)
-                return false
-            }
 
             append(&modules_to_unload, new_module.mod)
 
@@ -247,19 +204,17 @@ load_hotreload_module :: proc(path: string) -> (result: Hotreload_Module, ok: bo
         return {}, false
     }
 
-    app_desc_ptr := cast(^base.App_Desc)platform.get_module_symbol_address(module, "_app_desc")
+    result.desc = platform.get_module_symbol_address(module, "_app_desc")
 
-    if app_desc_ptr == nil {
+    if result.desc == nil {
         base.log_err("Hotreload: Failed to find _app_desc data")
         return {}, false
     }
 
-    result.desc = app_desc_ptr^
-
-    result.callback = auto_cast(platform.get_module_symbol_address(module, "_module_hot_step"))
+    result.callback = auto_cast(platform.get_module_symbol_address(module, "_app_hot_step"))
 
     if result.callback == nil {
-        base.log_err("Hotreload: Failed to find the _module_hot_step proc")
+        base.log_err("Hotreload: Failed to find the _app_hot_step proc")
         return {}, false
     }
 

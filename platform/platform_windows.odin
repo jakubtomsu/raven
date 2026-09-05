@@ -349,7 +349,7 @@ when BACKEND == BACKEND_WINDOWS {
             }
             arg_list[i] = string(buf[:n])
         }
-
+        windows.LocalFree(arg_list_ptr)
         return arg_list
     }
 
@@ -519,7 +519,7 @@ when BACKEND == BACKEND_WINDOWS {
         windows.GlobalUnlock(memory_handle)
 
         windows.SetClipboardData(
-            windows.CF_TEXT,
+            windows.CF_UNICODETEXT,
             cast(windows.HANDLE)memory_handle,
         )
 
@@ -540,7 +540,7 @@ when BACKEND == BACKEND_WINDOWS {
 
         defer windows.CloseClipboard()
 
-        memory_handle := windows.GetClipboardData(windows.CF_TEXT)
+        memory_handle := windows.GetClipboardData(windows.CF_UNICODETEXT)
 
         if memory_handle == nil {
             return {}, false
@@ -731,7 +731,8 @@ when BACKEND == BACKEND_WINDOWS {
             windows.utf8_to_wstring_buf(buf[:], path),
         )
 
-        return (attribs & windows.FILE_ATTRIBUTE_DIRECTORY) != 0
+        return attribs != windows.INVALID_FILE_ATTRIBUTES &&
+            (attribs & windows.FILE_ATTRIBUTE_DIRECTORY) != 0
     }
 
     _iter_directory :: proc(iter: ^Directory_Iter, path: string, allocator := context.temp_allocator) -> (result: string, ok: bool) {
@@ -763,105 +764,6 @@ when BACKEND == BACKEND_WINDOWS {
         }
 
         return res, true
-    }
-
-    _init_file_watcher :: proc(watcher: ^File_Watcher, path: string, recursive := false) -> bool {
-        buf: [256]u16
-
-        watcher.recursive = recursive
-
-        watcher.handle = windows.CreateFileW(
-            lpFileName            = windows.utf8_to_wstring_buf(buf[:], path),
-            dwDesiredAccess       = windows.FILE_LIST_DIRECTORY,
-            dwShareMode           = windows.FILE_SHARE_READ | windows.FILE_SHARE_WRITE | windows.FILE_SHARE_DELETE,
-            lpSecurityAttributes  = nil,
-            dwCreationDisposition = windows.OPEN_EXISTING,
-            dwFlagsAndAttributes  = windows.FILE_FLAG_BACKUP_SEMANTICS | windows.FILE_FLAG_OVERLAPPED,
-            hTemplateFile         = nil,
-        )
-
-        if watcher.handle == windows.INVALID_HANDLE_VALUE {
-            base.log_err("Failed to initialize file watcher with path '%s", path)
-            _win32_log_last_error("CreateFileW")
-            watcher.handle = {}
-            return false
-        }
-
-        watcher.overlapped = {
-            hEvent = windows.CreateEventW(
-                nil,
-                bManualReset = true,
-                bInitialState = false,
-                lpName = nil,
-            ),
-        }
-
-        _win32_file_watcher_begin_read(watcher)
-
-        // TODO: more error checking!
-        return true
-    }
-
-    _poll_file_watcher :: proc(watcher: ^File_Watcher) -> []string {
-        assert(watcher.handle != {})
-
-        result := make([dynamic]string, 0, 0, context.temp_allocator)
-
-        res := windows.WaitForSingleObject(watcher.overlapped.hEvent, 0)
-        if res == windows.WAIT_OBJECT_0 {
-            info := cast(^windows.FILE_NOTIFY_INFORMATION)&watcher.buffer[0]
-
-            for {
-                if info.action == windows.FILE_ACTION_MODIFIED || info.action == windows.FILE_ACTION_ADDED {
-                    data := cast([^]u16)&info.file_name[0]
-                    num_chars := info.file_name_length / 2 // file_name_length is in num bytes, excluding null terminator
-
-                    str, _ := windows.wstring_to_utf8_alloc(cstring16(data), int(num_chars), context.temp_allocator)
-
-                    append(&result, str)
-                }
-
-                if info.next_entry_offset == 0 {
-                    break
-                }
-
-                info = cast(^windows.FILE_NOTIFY_INFORMATION)(cast(uintptr)info + cast(uintptr)info.next_entry_offset)
-            }
-
-            windows.ResetEvent(watcher.overlapped.hEvent)
-
-            _win32_file_watcher_begin_read(watcher)
-        }
-
-        return result[:]
-    }
-
-    _destroy_file_watcher :: proc(watcher: ^File_Watcher) {
-        if watcher.handle == {} {
-            return
-        }
-
-        windows.CancelIo(watcher.handle)
-        windows.CloseHandle(watcher.overlapped.hEvent)
-        windows.CloseHandle(watcher.handle)
-
-        intrinsics.mem_zero(watcher, size_of(File_Watcher))
-    }
-
-    _win32_file_watcher_begin_read :: proc(watcher: ^File_Watcher) {
-        windows.ReadDirectoryChangesW(
-            hDirectory          = watcher.handle,
-            lpBuffer            = &watcher.buffer[0],
-            nBufferLength       = size_of(watcher.buffer),
-            bWatchSubtree       = windows.BOOL(watcher.recursive),
-            dwNotifyFilter      =
-                // windows.FILE_NOTIFY_CHANGE_FILE_NAME |
-                // windows.FILE_NOTIFY_CHANGE_DIR_NAME |
-                windows.FILE_NOTIFY_CHANGE_LAST_WRITE,
-            lpBytesReturned     = &watcher.bytes_returned,
-            lpOverlapped        = &watcher.overlapped,
-            lpCompletionRoutine = nil,
-        )
     }
 
 
@@ -1053,7 +955,7 @@ when BACKEND == BACKEND_WINDOWS {
                     case .Left_Alt: key = .Right_Alt
                     case .Left_Control: key = .Right_Control
                     case .Slash: key = .Keypad_Divide
-                    case .Capslock: key = .Keypad_Add
+                    case .Capslock: key = .Capslock
                     }
                 } else {
                     #partial switch key  {
@@ -1564,7 +1466,7 @@ when BACKEND == BACKEND_WINDOWS {
             defer windows.LocalFree(rawptr(msg_buf))
 
             str, _ := windows.wstring_to_utf8_alloc(msg_buf, int(num_msg_chars), context.temp_allocator)
-            if str[len(str)-1] == '\n' {
+            if len(str) > 1 && str[len(str)-1] == '\n' {
                 str = str[:len(str)-1]
             }
             base.log_err("%s : %s", text, str, loc = loc)

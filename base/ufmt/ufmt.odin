@@ -1,25 +1,20 @@
-/*
-Micro-fmt
-
-Extremely stripped down `core:fmt` replacement.
+/* Micro-fmt: a stripped down `core:fmt` replacement.
 
 Supports only the following qualifiers:
-- %s: strings
-- %f: floats with 3 decimal places
-- %i: integers
-- %x: integers, pointers or floats
-- %%: literal percentage sign
-- %v: any value, RTTI will be used for printing.
+    %s: strings
+    %f: floats with 3 decimal places
+    %i: integers
+    %x: integers, pointers or floats
+    %%: literal percentage sign
+    %v: any value, RTTI will be used for printing.
 
 NOTE: curly braces don't need to be doubled ({{ and }}) like in `core:fmt`
 
-By Jakub Tomšů
 Read https://jakubtomsu.github.io/posts/odin_comp_speed/ for more info.
 */
 #+no-instrumentation
 package ufmt
 
-import "base:intrinsics"
 import "base:runtime"
 
 INDENT :: "  "
@@ -155,7 +150,7 @@ tprintf :: proc(format: string, args: ..any) -> string {
             curr_arg += 1
         }
     }
-    
+
     append_elem(&buf, 0)
 
     return string(buf[:len(buf) - 1])
@@ -590,7 +585,7 @@ _append_any :: proc(buf: ^[dynamic]byte, value: any, pretty := false, depth := 0
             variant_index -= 1
         }
 
-        if variant_index > len(v.variants) {
+        if variant_index < 0 || variant_index >= len(v.variants) {
             _append_string(buf, "INVALID UNION TAG")
             return
         }

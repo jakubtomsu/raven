@@ -7,11 +7,19 @@ import "core:log"
 import "core:testing"
 
 @(test)
-_strip_path_name_test :: proc(t: ^testing.T) {
-    testing.expect(t, strip_path_name("bar.txt") == "bar")
-    testing.expect(t, strip_path_name("foo/bar.txt") == "bar")
-    testing.expect(t, strip_path_name("foo\\bar.txt") == "bar")
-    testing.expect(t, strip_path_name("foo/foo2/bar.txt.bin") == "bar")
+_asset_name_from_path_test :: proc(t: ^testing.T) {
+    testing.expect(t, asset_name_from_path("bar.txt") == "bar")
+    testing.expect(t, asset_name_from_path("foo/bar.txt") == "bar")
+    testing.expect(t, asset_name_from_path("foo\\bar.txt") == "bar")
+    testing.expect(t, asset_name_from_path("foo/foo2/bar.txt.bin") == "bar.txt")
+}
+
+@(test)
+_file_name_from_path_test :: proc(t: ^testing.T) {
+    testing.expect(t, file_name_from_path("bar.txt") == "bar.txt")
+    testing.expect(t, file_name_from_path("foo/bar.txt") == "bar.txt")
+    testing.expect(t, file_name_from_path("foo\\bar.txt") == "bar.txt")
+    testing.expect(t, file_name_from_path("foo/foo2/bar.txt.bin") == "bar.txt.bin")
 }
 
 @(test)
@@ -20,6 +28,13 @@ _normalize_path_test :: proc(t: ^testing.T) {
     testing.expect(t, normalize_path("Foo") == "foo")
     testing.expect(t, normalize_path("Hello\\World") == "hello/world")
     testing.expect(t, normalize_path("_123_!@+你好!") == "_123_!@+你好!")
+}
+
+@(test)
+_cp437_rune_char_table :: proc(t: ^testing.T) {
+    for ch in 0..<max(u8) {
+        testing.expectf(t, ch == rune_to_char(char_to_rune(ch)), "%v : %v", ch, char_to_rune(ch))
+    }
 }
 
 @(test)

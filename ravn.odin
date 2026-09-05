@@ -1,6 +1,7 @@
 #+vet explicit-allocators shadowing style
 package ravn
 
+import "core:strings"
 import "base"
 import "base/ufmt"
 import "gpu"
@@ -18,89 +19,80 @@ import "core:math"
 import "base:runtime"
 import debug_trace "core:debug/trace"
 
-// TODO: objects in scene data
-// TODO: asset_load and reload
-// TODO: consistent get_* and no get API!
-// TODO: font state
-// TODO: try core:image?
-// TODO: separate hash table size from backing array size?
-// TODO: default module init/shutdown procs
-// TODO: load_* vs create_*, insert_* naming convention, and resource management naming in general
-// TODO: DXT texture compression
-// TODO: figure out file flushing and custom file data loop
-// TODO: all resources should return a handle if an identifier exists already
-// TODO: fix scene mesh normals
-
 RELEASE :: #config(RAVN_RELEASE, base.RELEASE)
 VALIDATION :: #config(RAVN_VALIDATION, !RELEASE)
 DEBUG_TRACE_ENABLED :: ODIN_DEBUG && #config(RAVN_DEBUG_TRACE, !RELEASE) // Debug symbols are required
 SHADER_COMPILER_ENABLED :: #config(RAVN_SHADER_COMPILER, !RELEASE)
 
-MAX_ARENAS :: 64
-MAX_TEXTURES :: 256 // Use texture pools if you hit this limit.
-MAX_MESHES :: 1024
-MAX_OBJECTS :: 1024
-MAX_SPLINES :: 1024
+MAX_ARENAS                  :: #config(MAX_ARENAS, 64)
+MAX_TEXTURES                :: #config(MAX_TEXTURES, 256) // Use texture pools if you hit this limit.
+MAX_MESHES                  :: #config(MAX_MESHES, 1024)
+MAX_OBJECTS                 :: #config(MAX_OBJECTS, 1024)
+MAX_SPLINES                 :: #config(MAX_SPLINES, 1024)
+MAX_DRAW_LAYERS             :: #config(MAX_DRAW_LAYERS, 16)
+MAX_RENDER_TEXTURES         :: #config(MAX_RENDER_TEXTURES, 64)
+MAX_TEXTURE_RESOURCES       :: #config(MAX_TEXTURE_RESOURCES, 64)
+MAX_SHADERS                 :: #config(MAX_SHADERS, 64)
+MAX_FILES                   :: #config(MAX_FILES, 1024)
+MAX_SOUND_RESOURCES         :: #config(MAX_SOUND_RESOURCES, 1024)
+MAX_TOTAL_SPRITE_INSTANCES  :: #config(MAX_TOTAL_SPRITE_INSTANCES, 1024) * 64
+MAX_TOTAL_MESH_INSTANCES    :: #config(MAX_TOTAL_MESH_INSTANCES, 1024) * 64 // Shared between meshes, lines and triangles
+MAX_TOTAL_DYNAMIC_VERTS     :: #config(MAX_TOTAL_DYNAMIC_VERTS, 1024) * 64 // Shared between triangles and lines
+MAX_TEXTURE_POOLS           :: #config(MAX_TEXTURE_POOLS, 64)
+MAX_TEXTURE_POOL_SLICES     :: #config(MAX_TEXTURE_POOL_SLICES, 64)
+MAX_DRAW_STATE_DEPTH        :: #config(MAX_DRAW_STATE_DEPTH, 64)
+MAX_TOTAL_DRAW_BATCHES      :: #config(MAX_TOTAL_DRAW_BATCHES, 4096)
 
-MAX_WATCHED_DIRS :: 8
-MAX_DRAW_LAYERS :: 16
-MAX_RENDER_TEXTURES :: 64
-MAX_TEXTURE_RESOURCES :: 64
-MAX_SHADERS :: 64
-MAX_FILES :: 1024
-MAX_SOUNDS :: 1024
-
-MAX_TOTAL_SPRITE_INSTANCES :: 1024 * 64
-MAX_TOTAL_MESH_INSTANCES :: 1024 * 64 // Shared between meshes, lines and triangles
-MAX_TOTAL_DYNAMIC_VERTS :: 1024 * 64 // Shared between triangles and lines
-
-MAX_TEXTURE_POOLS :: 8
-MAX_TEXTURE_POOL_SLICES :: 64
-
-MAX_DRAW_STATE_DEPTH :: 64
-
-MAX_TOTAL_DRAW_BATCHES :: 4096
-
+DEFAULT_RENDER_TEXTURE :: Render_Texture_Handle{index = 1, gen = 0}
 // This is the actual swapchain used for rendering directly to screen.
-DEFAULT_RENDER_TEXTURE :: Render_Texture_Handle{MAX_RENDER_TEXTURES - 1, 0}
 
 HASH_SEED :: #config(RAVN_HASH_SEED, 0xcbf29ce484222325)
-MAX_PROBE_DIST :: #config(RAVN_MAX_TABLE_PROBE_DIST, 16)
-
 HASH_ALG :: "fnv64a"
 
 UV_EPS :: (1.0 / 2048.0)
 
 LANES :: 8
 
-Hash :: u64
-
 HANDLE_INDEX_INVALID :: ~Handle_Index(0)
 
 Handle_Index :: u16
 Handle_Gen :: u8
 
-Handle :: struct {
-    index:  Handle_Index,
-    gen:    Handle_Gen,
-}
-
+Handle :: base.Handle
 
 Arena_Handle :: distinct Handle
 Object_Handle :: distinct Handle
 Mesh_Handle :: distinct Handle
 Texture_Handle :: distinct Handle
 Texture_Resource_Handle :: distinct Handle
+Texture_Pool_Handle :: distinct Handle
 Spline_Handle :: distinct Handle
 Render_Texture_Handle :: distinct Handle
 Shader_Handle :: distinct Handle
-Sound_Resource_Handle :: audio.Resource_Handle
+File_Handle :: distinct Handle
+Sound_Resource_Handle :: distinct Handle
 Sound_Handle :: audio.Sound_Handle
 
-App_Desc :: base.App_Desc
-App_Init_Proc :: base.App_Init_Proc
-App_Shutdown_Proc :: base.App_Shutdown_Proc
-App_Update_Proc :: base.App_Update_Proc
+// NOTE: This structure is passed between DLLs when hot-reloading.
+App_Desc :: struct {
+    name:               string,
+
+    init:               App_Init_Proc,
+    shutdown:           App_Shutdown_Proc,
+    update:             App_Update_Proc,
+
+    window_style:       platform.Window_Style,
+    window_size:        [2]i32,
+    window_high_dpi:    bool,
+}
+
+// Called after internal init is done to let the app initialize.
+App_Init_Proc ::       #type proc()
+// Called after request_shutdown() but before the engine cleans up.
+App_Shutdown_Proc ::   #type proc()
+// Called every frame.
+// Usually, hot_ptr is nil. But after a hotreload, hot_ptr is the last returned data_ptr.
+App_Update_Proc ::     #type proc(hot_ptr: rawptr) -> (data_ptr: rawptr)
 
 Rect :: struct {
     min:    [2]f32,
@@ -109,7 +101,7 @@ Rect :: struct {
 
 _state: ^State
 
-State :: struct #align(64) {
+State :: struct #align(4096) {
     initialized:                bool,
     start_time:                 u64,
     curr_time:                  u64,
@@ -158,51 +150,18 @@ State :: struct #align(64) {
 
     perf_counters:              [Perf_Counter_Kind]Perf_Counter_State,
 
-    watched_dirs_num:           i32,
-    watched_dirs:               [MAX_WATCHED_DIRS]Watched_Dir,
-
     draw_layers:                [MAX_DRAW_LAYERS]Draw_Layer,
 
-    arenas_used:                bit_set[0..<MAX_ARENAS],
-    arenas_gen:                 [MAX_ARENAS]Handle_Gen,
-    arenas:                     [MAX_ARENAS]Arena,
+    arenas:                     base.Pool(MAX_ARENAS, Arena, Arena_Handle),
+    render_textures:            base.Pool(MAX_RENDER_TEXTURES, Render_Texture, Render_Texture_Handle),
+    texture_pools:              base.Pool(MAX_TEXTURE_POOLS, Texture_Pool, Texture_Pool_Handle),
 
-    render_textures_used:       bit_set[0..<MAX_RENDER_TEXTURES],
-    render_textures_gen:        [MAX_RENDER_TEXTURES]Handle_Gen,
-    render_textures:            [MAX_RENDER_TEXTURES]Render_Texture,
-
-    objects_hash:               [MAX_OBJECTS]Hash,
-    objects_gen:                [MAX_OBJECTS]Handle_Gen,
-    objects:                    [MAX_OBJECTS]Object,
-
-    meshes_hash:                [MAX_MESHES]Hash,
-    meshes_gen:                 [MAX_MESHES]Handle_Gen,
-    meshes:                     [MAX_MESHES]Mesh,
-
-    splines_hash:               [MAX_SPLINES]Hash,
-    splines_gen:                [MAX_SPLINES]Handle_Gen,
-    splines:                    [MAX_SPLINES]Spline,
-
-    textures_hash:              [MAX_TEXTURES]Hash,
-    textures_gen:               [MAX_TEXTURES]Handle_Gen,
-    textures:                   [MAX_TEXTURES]Texture,
-
-    // Texture pools are append only. Destroying is not allowed.
-    texture_pools:              [MAX_TEXTURE_POOLS]Texture_Pool,
-    texture_pools_len:          i32,
-
-    shaders_hash:               [MAX_SHADERS]Hash,
-    shaders_gen:                [MAX_SHADERS]Handle_Gen,
-    shaders:                    [MAX_SHADERS]Shader,
-
-    files_hash:                 [MAX_FILES]Hash,
-    files:                      [MAX_FILES]File,
-
-    // NOTE: currently, sound resource handles are direct handles into the audio package.
-    // This means there is not necessarily an indirection, which simplifies things.
-    // The name tracking is only important for hotreloads and name lookups.
-    sound_resources_hash:       [MAX_SOUNDS]Hash,
-    sound_resources:            [MAX_SOUNDS]Sound_Resource_Handle,
+    meshes:                     base.Hash_Pool(MAX_MESHES, Mesh, Mesh_Handle),
+    splines:                    base.Hash_Pool(MAX_SPLINES, Spline, Spline_Handle),
+    textures:                   base.Hash_Pool(MAX_TEXTURES, Texture, Texture_Handle),
+    shaders:                    base.Hash_Pool(MAX_SHADERS, Shader, Shader_Handle),
+    files:                      base.Hash_Pool(MAX_FILES, File, File_Handle),
+    sound_resources:            base.Hash_Pool(MAX_SOUND_RESOURCES, Sound_Resource_State, Sound_Resource_Handle),
 
     shader_compiler_state:      (shader_compiler.State when SHADER_COMPILER_ENABLED else struct {}),
     shader_compiler_target:     shader_compiler.Target,
@@ -217,29 +176,22 @@ Context_State :: struct {
     tracking:   mem.Tracking_Allocator,
 }
 
-// VFS file
-File :: struct {
-    flags:          bit_set[File_Flag],
-    data:           []byte,
+File :: struct #all_or_none {
+    data:       []byte,
+    flags:      bit_set[File_Flag],
 }
 
 File_Flag :: enum u8 {
-    Dirty,
-    Changed, // Waiting to get loaded
-    Dynamically_Allocated, // must use _state.allocator
-}
-
-Watched_Dir :: struct {
-    path_len:   i32,
-    path:       [256]byte,
-    watcher:    platform.File_Watcher,
+    Temp,
 }
 
 Shader :: struct #all_or_none {
-    shader: gpu.Shader_Handle,
-    hash:   Hash,
+    shader:     gpu.Shader_Handle,
 }
 
+Sound_Resource_State :: struct #all_or_none {
+    resource:   audio.Resource_Handle,
+}
 
 // Data Scope
 // Collection of data with one lifetime.
@@ -249,8 +201,6 @@ Arena :: struct #all_or_none {
     spline_vert_num:    i32,
     object_child_num:   i32,
 
-    object_buf:         []Object,
-    object_child_buf:   []Object_Handle,
     spline_vert_buf:    []Spline_Vertex,
 
     collision_arena:    collision.Arena_Handle,
@@ -272,34 +222,6 @@ Arena_Usage :: enum u8 {
     // For scenes and long lived data.
     // All GPU buffers will be re-created on data flush.
     Static,
-}
-
-Object_Kind :: rscn.Object_Kind
-
-// TODO: objects in general are totally unfinished
-Object :: struct {
-    kind:               Object_Kind,
-
-    // TODO
-    // Format like "Enemy:Foo0"?
-    name_prefix:        Hash,
-    name:               [16]u8,
-
-    arena:              Arena_Handle,
-
-    // Depends on 'kind' - either mesh or spline handle.
-    data_handle:        Handle,
-    texture:            Texture_Handle,
-
-    parent:             Object_Handle,
-    child_offset:       i32,
-    child_num:          i32,
-
-    param:              u64, // user param
-
-    local_pos:          [3]f32,
-    local_rot:          matrix[3, 3]f32,
-    local_scale:        [3]f32,
 }
 
 Mesh :: struct #all_or_none {
@@ -356,13 +278,12 @@ when ODIN_OS == .JS {
     }
 
 } else when ODIN_BUILD_MODE == .Dynamic {
-    @(export) _app_hot_step :: proc "contextless" (prev_state: ^State, desc: App_Desc) -> ^State {
-        return __app_hot_step(prev_state, desc)
+    @(export) _app_hot_step :: proc "contextless" (prev_state: ^State, desc: ^App_Desc) -> ^State {
+        return __app_hot_step(prev_state, desc^)
     }
 }
 
 // Default runner for a ravn app.
-//
 // Calling this does nothing when compiling as a DLL, it's the responsibility
 // of whoever loaded the DLL (e.g. hotreload runner) to call the app.
 // NOTE: Things like reload never get called in this mode.
@@ -375,12 +296,11 @@ run_main_loop :: proc(desc: App_Desc) {
 
     } else when ODIN_OS == .JS {
 
-        init_state(context.allocator)
-        _state.app_desc = desc
+        init_state(context.allocator, desc)
 
     } else when ODIN_OS == .Windows || ODIN_OS == .Linux || ODIN_OS == .Darwin {
 
-        init_state(context.allocator)
+        init_state(context.allocator, desc)
         context = get_context()
 
         ensure(_state.gpu_state.init_done)
@@ -456,7 +376,7 @@ __app_hot_step :: proc "contextless" (prev_state: ^State, desc: App_Desc) -> ^St
 
         assert(_state == nil)
 
-        init_state(context.allocator)
+        init_state(context.allocator, desc)
         context = get_context()
         ensure(_state != nil)
         assert(gpu.is_init_done())
@@ -512,7 +432,7 @@ init_context_state :: proc(ctx: ^Context_State, allocator: runtime.Allocator) {
 }
 
 // Create state, init context, init subsystems.
-init_state :: proc(allocator: runtime.Allocator) {
+init_state :: proc(allocator: runtime.Allocator, desc: App_Desc) {
     ensure(_state == nil)
 
     state_err: runtime.Allocator_Error
@@ -522,6 +442,7 @@ init_state :: proc(allocator: runtime.Allocator) {
         panic("Failed to allocate Ravn State")
     }
 
+    _state.app_desc = desc
     _state.init_allocator = allocator
 
     init_context_state(&_state.context_state, allocator)
@@ -530,6 +451,10 @@ init_state :: proc(allocator: runtime.Allocator) {
     _state.allocator = context.allocator
 
     base.log_info("Ravn context initialized")
+
+    base.pool_clear(&_state.arenas)
+    base.pool_clear(&_state.render_textures)
+    base.pool_clear(&_state.texture_pools)
 
     base.log_info("Initializing platform...")
     platform.init(&_state.platform_state)
@@ -549,7 +474,21 @@ init_state :: proc(allocator: runtime.Allocator) {
 
     base.log_info("Creating Window...")
 
-    _state.window = platform.create_window("Ravn App", style = .Regular, high_dpi = true)
+    window_title := desc.name == "" ? "RAVN App" : desc.name
+    rect: platform.Rect
+    if desc.window_size != 0 {
+        monitor := platform.get_main_monitor_rect()
+        size := [2]i32{
+            min(monitor.size.x, desc.window_size.x),
+            min(monitor.size.y, desc.window_size.y),
+        }
+        rect = {
+            min  = monitor.min + monitor.size / 2 - size / 2,
+            size = size,
+        }
+    }
+
+    _state.window = platform.create_window(window_title, style = desc.window_style, rect = rect, high_dpi = desc.window_high_dpi)
 
     base.log_info("Initializing GPU...")
     if !gpu.init(&_state.gpu_state, platform.get_native_window_ptr(_state.window)) {
@@ -581,17 +520,17 @@ _post_gpu_init :: proc() {
     _state.screen_size = platform.get_window_rect(_state.window).size
     _state.screen_dirty = true
 
-    pool128_ok := create_texture_pool(128, 64)
-    assert(pool128_ok)
-
     // Swapchain
-    _state.render_textures_used += {int(DEFAULT_RENDER_TEXTURE.index)}
-    _state.render_textures_gen[DEFAULT_RENDER_TEXTURE.index] = DEFAULT_RENDER_TEXTURE.gen
-    _state.render_textures[DEFAULT_RENDER_TEXTURE.index] = Render_Texture{
+    default_rtex_handle, default_rtex_ok := base.pool_find_free(_state.render_textures)
+    assert(default_rtex_ok)
+    assert(default_rtex_handle == DEFAULT_RENDER_TEXTURE)
+    default_rtex_ok = base.pool_insert(&_state.render_textures, DEFAULT_RENDER_TEXTURE, Render_Texture{
         size = _state.screen_size,
         color = {},
-        depth = gpu.create_texture_2d("rv-def-rentex-depth", .D_F32, _state.screen_size, render_texture = true) or_else panic("gpu"),
-    }
+        depth = gpu.create_texture_2d("rv-def-rentex-depth", .D_F32, _state.screen_size, render_texture = true) or_else panic("Failed to create a depth buffer"),
+        loc = #location(),
+    })
+    assert(default_rtex_ok)
 
     _state.sprite_inst_buf = gpu.create_buffer("rv-sprite-inst-buf",
         stride = size_of(Sprite_Inst),
@@ -663,22 +602,8 @@ shutdown_state :: proc() {
     }
 
     delete(_state.dynamic_vert_upload_buf, _state.allocator)
-    for &arena, i in _state.arenas {
-        if i not_in _state.arenas_used {
-            continue
-        }
-        _delete_arena_buffers(&arena)
-    }
-
-    for file, i in _state.files {
-        if _state.files_hash[i] == 0 {
-            continue
-        }
-
-        if .Dynamically_Allocated in file.flags {
-            // FIXME
-            // delete(file.data, _state.allocator)
-        }
+    for iter := base.pool_iter(&_state.arenas); handle, arena in base.pool_next(&iter) {
+        _delete_arena_buffers(arena)
     }
 
     collision.shutdown()
@@ -796,6 +721,8 @@ begin_frame :: proc() -> (keep_running: bool) {
     }
 
     free_all(context.temp_allocator)
+    _state.frame_index += 1
+    evict_all_temp_files()
 
     keep_running = true
 
@@ -811,23 +738,23 @@ begin_frame :: proc() -> (keep_running: bool) {
         _state.screen_dirty = true
     }
 
+    default_rt, default_rt_ok := base.pool_get(&_state.render_textures, DEFAULT_RENDER_TEXTURE)
+    assert(default_rt_ok)
+
     if _state.screen_dirty {
         _state.screen_dirty = false
-        assert(_state.render_textures_gen[DEFAULT_RENDER_TEXTURE.index] == DEFAULT_RENDER_TEXTURE.gen)
-        rt := &_state.render_textures[DEFAULT_RENDER_TEXTURE.index]
-        gpu.destroy_resource(rt.depth)
-        rt.size = _state.screen_size
-        rt.depth = gpu.create_texture_2d("rv-def-rentex-depth", .D_F32, _state.screen_size, render_texture = true) or_else panic("gpu")
-        rt.color = gpu.update_swapchain(platform.get_native_window_ptr(_state.window), _state.screen_size) or_else panic("gpu")
+        gpu.destroy_resource(default_rt.depth)
+        default_rt.size = _state.screen_size
+        default_rt.depth = gpu.create_texture_2d("rv-def-rentex-depth", .D_F32, _state.screen_size, render_texture = true) or_else panic("gpu")
+        default_rt.color = gpu.update_swapchain(platform.get_native_window_ptr(_state.window), _state.screen_size) or_else panic("gpu")
     }
 
-    assert(_state.render_textures[DEFAULT_RENDER_TEXTURE.index].color != {})
+    assert(default_rt.color != {})
 
     for &counter in _state.perf_counters {
         _perf_counter_flush(&counter)
     }
 
-    _state.frame_index += 1
     _state.submitted_layers = false
 
     time_ns := platform.get_time_ns()
@@ -876,55 +803,10 @@ begin_frame :: proc() -> (keep_running: bool) {
 
     _clear_draw_layers()
 
-    changed_files := make([dynamic]string, 0, 64, context.temp_allocator)
-
-    for i in 0..<_state.watched_dirs_num {
-        dir := &_state.watched_dirs[i]
-
-        path := string(dir.path[:dir.path_len])
-
-        changes := platform.poll_file_watcher(&dir.watcher)
-
-        for change in changes {
-            base.log_info("changed file:", change)
-
-            file_path := strings_join(path, platform.SEPARATOR, change, allocator = context.temp_allocator)
-
-            data, ok := platform.read_file_by_path(file_path, allocator = _state.allocator)
-
-            if !ok {
-                log_err("Failed to hotreload file {}", file_path)
-                continue
-            }
-
-            if file, file_ok := _get_file_by_hash(hash_name(change)); file_ok {
-                append(&changed_files, change)
-
-                if .Dynamically_Allocated in file.flags {
-                    delete(file.data, _state.allocator)
-                }
-
-                file.flags += {.Dirty, .Dynamically_Allocated}
-                file.data = data
-            } else {
-                register_file_data(change, data, flags = {.Dynamically_Allocated})
-            }
-        }
-    }
-
-    for change in changed_files {
-        load_asset(change, {})
-    }
-
     for i in 0..<MAX_ARENAS {
-        if i not_in _state.arenas_used {
-            continue
-        }
-        arena := &_state.arenas[i]
-        flush_arena_gpu_buffers({
-            index = Handle_Index(i),
-            gen = _state.arenas_gen[i],
-        })
+        handle := Arena_Handle{index = Handle_Index(i), gen = _state.arenas.gen[i]}
+        arena := base.pool_get(&_state.arenas, handle) or_continue
+        flush_arena_gpu_buffers(handle)
     }
 
     _state.draw_states_len = 0
@@ -958,6 +840,69 @@ _clear_draw_layers :: proc() {
         _draw_batch_table_init(&layer.meshes)
         _draw_batch_table_init(&layer.triangles)
         _draw_batch_table_init(&layer.lines)
+    }
+}
+
+@(require_results)
+read_file :: proc(path: string, temp := true) -> ([]byte, bool) {
+    hash := hash_name(normalize_path(path, context.temp_allocator))
+    handle, existing, existing_ok := base.hash_pool_find(&_state.files, hash)
+
+    if existing_ok {
+        if existing.data != nil {
+            return existing.data, true
+        }
+    }
+
+    when ODIN_OS == .JS {
+        return nil, false
+    } else {
+        data, data_ok := platform.read_file_by_path(path, temp ? context.temp_allocator : _state.allocator)
+        if !data_ok {
+            return nil, false
+        }
+
+        flags: bit_set[File_Flag]
+        if temp {
+            flags += {.Temp}
+        }
+
+        file: File = {
+            flags = flags,
+            data = data,
+        }
+
+        if !_register_file(hash, file) {
+            base.log_err("Failed to register file: %s", path)
+        }
+
+        return data, true
+    }
+}
+
+register_file_data :: proc(path: string, data: []byte, flags: bit_set[File_Flag] = {}) -> bool {
+    hash := hash_name(normalize_path(path, context.temp_allocator))
+    file := File{
+        data = data,
+        flags = flags,
+    }
+    return _register_file(hash, file)
+}
+
+_register_file :: proc(hash: u64, file: File) -> bool {
+    handle, exists := base.hash_pool_find_free(_state.files, hash) or_return
+    if exists {
+        return false
+    }
+    base.hash_pool_insert(&_state.files, hash, handle, file) or_return
+    return true
+}
+
+evict_all_temp_files :: proc() {
+    for iter := base.hash_pool_iter(&_state.files); handle, file in base.hash_pool_next(&iter) {
+        if .Temp in file.flags {
+            file.data = {}
+        }
     }
 }
 
@@ -1016,12 +961,24 @@ get_builtin_shader :: proc(id: Builtin_Shader) -> Shader_Handle {
 }
 
 _load_builtin_assets :: proc() {
-    register_const_directory(#load_directory("data"))
+    register_file_data("CGA8x8thick.png",    #load("data/CGA8x8thick.png"))
+    register_file_data("CGA8x8thin.png",     #load("data/CGA8x8thin.png"))
+    register_file_data("default.png",        #load("data/default.png"))
+    register_file_data("error.png",          #load("data/error.png"))
+    register_file_data("white.png",          #load("data/white.png"))
+
+    default_pool, default_pool_ok := create_texture_pool(128, 64)
+    assert(default_pool_ok)
+    assert(default_pool != {})
+    _h, _ok := base.pool_get(&_state.texture_pools, default_pool)
+    log_dump(default_pool)
+    log_dump(base.pool_has(_state.texture_pools, default_pool))
+    log_dump(_h)
+    assert(_h != {})
+    assert(_ok)
 
     for &tex, id in _state.builtin_texture {
-        tex = load_texture(
-            ufmt.tprintf("%s.png", enum_to_string(id)),
-        ) or_else panic("Failed to load builtin texture")
+        tex = load_texture(ufmt.tprintf("%s.png", enum_to_string(id)), pool_handle = default_pool) or_else panic("Failed to load builtin texture")
     }
 
     default_sprite_vs: []byte
@@ -1051,7 +1008,7 @@ _load_builtin_assets :: proc() {
     ) or_else panic("Failed to load default scene")
 
     for &handle, id in _state.builtin_mesh {
-        handle = get_mesh_by_name(enum_to_string(id)) or_else panic("Failed to get builtin mesh")
+        handle = find_mesh_by_name(enum_to_string(id)) or_else panic("Failed to get builtin mesh")
     }
 }
 
@@ -1135,15 +1092,15 @@ font_slot :: proc(#any_int index: i32) -> Rect {
 }
 
 @(require_results)
-hash_name :: #force_inline proc "contextless" (name: string) -> Hash {
-    hash := hash_fnv64a(transmute([]byte)name, seed = HASH_SEED)
-    return Hash(hash == 0 ? 1 : hash)
+hash_name :: #force_inline proc "contextless" (name: string) -> u64 {
+    hash := base.hash_fnv64a(transmute([]byte)name, seed = HASH_SEED)
+    return hash == 0 ? 1 : hash
 }
 
 @(require_results)
-hash_const_name :: #force_inline proc "contextless" ($Name: string) -> Hash {
+hash_const_name :: #force_inline proc "contextless" ($Name: string) -> u64 {
     hash: u64 = #hash(Name, HASH_ALG)
-    return Hash(hash == 0 ? 1 : hash)
+    return u64(hash == 0 ? 1 : hash)
 }
 
 @(require_results)
@@ -1159,32 +1116,21 @@ get_screen_size :: proc() -> [2]f32 {
 
 @(require_results)
 _get_arena :: proc(handle: Arena_Handle) -> (result: ^Arena, ok: bool) {
-    return _table_get(&_state.arenas, _state.arenas_gen, handle)
+    return base.pool_get(&_state.arenas, handle)
 }
 
 @(require_results)
 create_arena :: proc(
     usage:                          Arena_Usage,
-    #any_int max_mesh_verts:         i32 = 1024 * 1024,
-    #any_int max_mesh_indices:       i32 = 1024 * 1024,
-    #any_int max_spline_verts:       i32 = 1024 * 8,
-    #any_int max_total_children:     i32 = 1024 * 8,
-    #any_int collision_arena_size:   u64 = 1024 * 1024,
+    #any_int max_mesh_verts:        i32 = 1024 * 1024,
+    #any_int max_mesh_indices:      i32 = 1024 * 1024,
+    #any_int max_spline_verts:      i32 = 1024 * 8,
+    #any_int collision_arena_size:  u64 = 1024 * 1024,
 ) -> (result: Arena_Handle, ok: bool) #optional_ok {
-    used_set := (transmute(u64)_state.arenas_used) | 1
-    index := intrinsics.count_trailing_zeros(~used_set)
-    if index == 64 {
-        base.log_err("Failed to create arena: There is already max number of arenas")
-        return {}, false
-    }
+    handle := base.pool_find_free(_state.arenas) or_return
 
-    arena := &_state.arenas[index]
-
-    _state.arenas_used += {int(index)}
-
-    arena^ = Arena{
+    arena := Arena{
         usage = usage,
-        object_child_buf    = runtime.make_aligned([]Object_Handle, max_total_children, 4096, _state.allocator),
         spline_vert_buf     = runtime.make_aligned([]Spline_Vertex, max_spline_verts, 4096, _state.allocator),
         vert_upload_buf     = runtime.make_aligned([]Vertex, max_mesh_verts, 4096, _state.allocator),
         index_upload_buf    = runtime.make_aligned([]Vertex_Index, max_mesh_indices, 4096, _state.allocator),
@@ -1193,7 +1139,6 @@ create_arena :: proc(
         object_child_num    = 0,
         ibuf                = {},
         vbuf                = {},
-        object_buf          = {},
         vert_upload_offs    = 0,
         index_upload_offs   = 0,
         dirty               = false,
@@ -1222,12 +1167,7 @@ create_arena :: proc(
         // GPU buffers will be created later
     }
 
-
-    handle := Arena_Handle{
-        index = Handle_Index(index),
-        gen = _state.arenas_gen[index],
-    }
-
+    base.pool_insert(&_state.arenas, handle, arena) or_else panic("Failed to insert arena")
     return handle, true
 }
 
@@ -1301,58 +1241,41 @@ flush_arena_gpu_buffers :: proc(handle: Arena_Handle) {
     assert(arena.ibuf != {})
 }
 
-destroy_arena :: proc(handle: Arena_Handle) {
-    arena, arena_ok := _get_arena(handle)
-    if !arena_ok {
-        return
-    }
+destroy_arena :: proc(handle: Arena_Handle) -> bool {
+    arena := _get_arena(handle) or_return
 
-    gpu.destroy_resource(arena.vbuf)
-    gpu.destroy_resource(arena.ibuf)
+    gpu.destroy_resource(arena.vbuf) or_return
+    gpu.destroy_resource(arena.ibuf) or_return
 
-    for i in 0..<MAX_MESHES {
-        mesh := &_state.meshes[i]
-        if mesh.arena != handle {
-            continue
-        }
+    // for i in 0..<MAX_MESHES {
+    //     mesh := &_state.meshes[i]
+    //     if mesh.arena != handle {
+    //         continue
+    //     }
 
-        mesh^ = {}
-        _state.meshes_hash[i] = 0
-        _state.meshes_gen[i] += 1
-    }
+    //     mesh^ = {}
+    //     _state.meshes_hash[i] = 0
+    //     _state.meshes_gen[i] += 1
+    // }
 
-    for i in 0..<MAX_OBJECTS {
-        object := &_state.objects[i]
-        if object.arena != handle {
-            continue
-        }
+    // for i in 0..<MAX_SPLINES {
+    //     spline := &_state.splines[i]
+    //     if spline.arena != handle {
+    //         continue
+    //     }
 
-        object^ = {}
-        _state.objects_hash[i] = 0
-        _state.objects_gen[i] += 1
-    }
-
-    for i in 0..<MAX_SPLINES {
-        spline := &_state.splines[i]
-        if spline.arena != handle {
-            continue
-        }
-
-        spline^ = {}
-        _state.splines_hash[i] = 0
-        _state.splines_gen[i] += 1
-    }
+    //     spline^ = {}
+    //     _state.splines_hash[i] = 0
+    //     _state.splines_gen[i] += 1
+    // }
 
     _delete_arena_buffers(arena)
-
-    _state.arenas[handle.index] = {}
-    _state.arenas_gen[handle.index] += 1
-    _state.arenas_used -= {int(handle.index)}
+    base.pool_remove(&_state.arenas, handle) or_return
+    return true
 }
 
 _delete_arena_buffers :: proc(arena: ^Arena) {
     delete(arena.spline_vert_buf, _state.allocator)
-    delete(arena.object_child_buf, _state.allocator)
     delete(arena.vert_upload_buf, _state.allocator)
     delete(arena.index_upload_buf, _state.allocator)
 }
@@ -1362,18 +1285,18 @@ _delete_arena_buffers :: proc(arena: ^Arena) {
 // MARK: Scene
 //
 
-load_scene :: proc(name: string, arena_handle: Arena_Handle = {}) -> (result_arena: Arena_Handle, ok: bool) {
-    bin_name := strings_join(name, ".bin", allocator = context.temp_allocator)
-    txt_data, txt_ok := get_file_data(name)
-    bin_data, bin_ok := get_file_data(bin_name)
+load_scene :: proc(path: string, arena_handle: Arena_Handle = {}) -> (result_arena: Arena_Handle, ok: bool) {
+    bin_path := strings_join(path, ".bin", allocator = context.temp_allocator)
+    txt_data, txt_ok := read_file(path)
+    bin_data, bin_ok := read_file(bin_path)
 
     if !txt_ok {
-        base.log_err("Failed to load scene, '%s' is missing", name)
+        base.log_err("Failed to load scene, '%s' is missing", path)
         return {}, false
     }
 
     if !bin_ok {
-        base.log_err("Failed to load scene, '%s.bin' is missing", name)
+        base.log_err("Failed to load scene, '%s' is missing", bin_path)
         return {}, false
     }
 
@@ -1405,7 +1328,6 @@ load_scene_from_data :: proc(txt: string, bin: []byte, arena_handle: Arena_Handl
             max_mesh_verts = len(vert_buf),
             max_mesh_indices = len(index_buf),
             max_spline_verts = len(spline_vert_buf),
-            max_total_children = header.object_num,
         )
     }
 
@@ -1433,11 +1355,9 @@ load_scene_from_data :: proc(txt: string, bin: []byte, arena_handle: Arena_Handl
         return {}, false
     }
 
-    object_list := make([]Object_Handle, header.object_num, context.temp_allocator)
     mesh_list := make([]Mesh_Handle, header.object_num, context.temp_allocator)
     spline_list := make([]Spline_Handle, header.object_num, context.temp_allocator)
 
-    object_counter := 0
     mesh_counter := 0
     spline_counter := 0
 
@@ -1458,14 +1378,11 @@ load_scene_from_data :: proc(txt: string, bin: []byte, arena_handle: Arena_Handl
         case rscn.Comment:
 
         case rscn.Image:
-            _, ok = get_texture_by_name(v.path)
-            if ok {
+            _, ok = find_texture_by_name(v.path)
+            if !ok {
                 continue
             }
-
-            if !load_asset(v.path, {}) {
-                base.log_err("Failed to load scene texture")
-            }
+            load_texture(v.path)
 
         case rscn.Mesh:
 
@@ -1483,137 +1400,12 @@ load_scene_from_data :: proc(txt: string, bin: []byte, arena_handle: Arena_Handl
             )
 
         case rscn.Spline:
-            base.log_debug("Loading Spline: %s", v.name)
-
-            index := spline_counter
-            spline_counter += 1
-
-            spline: Spline
-            spline.arena = arena_handle
-
-            spline.vert_num = i32(v.vert_num)
-            spline.vert_offs = arena.spline_vert_num + i32(v.vert_start)
-
-            verts := spline_vert_buf[v.vert_start:][:v.vert_num]
-
-            if v.vert_num > (len(arena.spline_vert_buf) - int(arena.spline_vert_num)) {
-                base.log_err("Failed to create spline, spline vertex buffer can't fit the data")
-                continue
-            }
-
-            // NOTE: consider vert radius?
-            spline.bounds_min = max(f32)
-            spline.bounds_max = min(f32)
-            for vert, i in verts {
-                spline.bounds_min = linalg.min(spline.bounds_min, vert.pos)
-                spline.bounds_max = linalg.max(spline.bounds_max, vert.pos)
-
-                arena.spline_vert_buf[arena.spline_vert_num + i32(i)] = vert
-            }
-
-            handle, handle_ok := insert_spline_by_name(v.name, spline)
-            if !handle_ok {
-                base.log_err("Failed to insert spline, table is full")
-                return {}, false
-            }
-
-            arena.spline_vert_num += i32(len(verts))
-
-            spline_list[index] = handle
+            base.log_debug("Skipping Spline: %s", v.name)
 
         case rscn.Object:
-            base.log_debug("Loading Object: %s", v.name)
-
-            index := object_counter
-            object_counter += 1
-
-            object: Object
-            object.arena = arena_handle
-
-            object.kind = v.kind
-            object.parent.index = v.parent == -1 ? HANDLE_INDEX_INVALID : Handle_Index(v.parent) // TEMP
-
-            switch v.kind {
-            case .Empty:
-                object.data_handle = {}
-
-            case .Mesh:
-                object.data_handle.index = v.mesh_index == -1 ? HANDLE_INDEX_INVALID : Handle_Index(v.mesh_index) // TEMP
-
-            case .Spline:
-                object.data_handle.index = v.spline_index == -1 ? HANDLE_INDEX_INVALID : Handle_Index(v.spline_index) // TEMP
-            }
-
-            handle, handle_ok := insert_object_by_name(v.name, object)
-            if !handle_ok {
-                base.log_err("Failed to insert object, table is full")
-                return {}, false
-            }
-
-            object_list[index] = handle
+            // Not supported yet
+            base.log_debug("Skipping Object: %s", v.name)
         }
-    }
-
-    // Resolve indices -> handles
-
-    // NOTE: the 2nd pass might be unnecessary if the data is ordered the right way? enforce it in rscn?
-    for handle in object_list {
-        obj := _get_object(handle) or_continue
-
-        if obj.parent.index == HANDLE_INDEX_INVALID {
-            continue
-        }
-
-        obj.parent = object_list[obj.parent.index]
-
-        if parent, parent_ok := _get_object(obj.parent); parent_ok {
-            parent.child_num += 1
-        }
-
-        switch obj.kind {
-        case .Empty:
-
-        case .Mesh:
-            obj.data_handle = Handle(mesh_list[obj.data_handle.index])
-
-        case .Spline:
-            obj.data_handle = Handle(spline_list[obj.data_handle.index])
-        }
-    }
-
-
-    // Reserve child array space
-    child_offset := arena.object_child_num
-    for handle in object_list {
-        obj := _get_object(handle) or_continue
-
-        obj.child_offset = child_offset
-
-        if child_offset + obj.child_num > i32(len(arena.object_child_buf)) {
-            base.log_err("Arena child buffer is too small to contain all children")
-            obj.child_num = 0
-            continue
-        }
-
-        child_offset += obj.child_num
-    }
-
-    arena.object_child_num = child_offset
-
-    // Fill child array
-    for handle in object_list {
-        obj := _get_object(handle) or_continue
-
-        parent := _get_object(obj.parent) or_continue
-
-        arena.object_child_buf[parent.child_offset] = handle
-        parent.child_offset += 1
-    }
-
-    // Reset child offsets (this is a bit weird, be careful)
-    for handle in object_list {
-        obj := _get_object(handle) or_continue
-        obj.child_offset -= obj.child_num
     }
 
     return arena_handle, true
@@ -1625,146 +1417,49 @@ load_scene_from_data :: proc(txt: string, bin: []byte, arena_handle: Arena_Handl
 // MARK: Lookups
 //
 
-get_children :: proc(handle: Object_Handle, loc := #caller_location) -> ([]Object_Handle, bool) #optional_ok {
-    obj, obj_ok := _get_object(handle)
-    if !obj_ok {
-        base.log_err("Failed to get object's children: invalid handle", loc = loc)
-        return nil, false
-    }
-
-    arena, arena_ok := _get_arena(obj.arena)
-    if !arena_ok {
-        base.log_err("Failed to get object's children: object's arena handle is invalid")
-        return nil, false
-    }
-
-    return arena.object_child_buf[obj.child_offset:][:obj.child_num], true
-}
-
-get_child_by_name :: proc(handle: Object_Handle, name: string) -> (result: Object_Handle, ok: bool) #optional_ok {
-    children := get_children(handle) or_return
-
-    hash := hash_name(name)
-
-    for ch in children {
-        if _state.objects_hash[ch.index] != hash {
-            continue
-        }
-
-        if _state.objects_gen[ch.index] != ch.gen {
-            continue
-        }
-
-        return ch, true
-    }
-
-    return {}, false
-}
-
-
 @(require_results)
-get_mesh :: proc($Name: string) -> (result: Mesh_Handle, ok: bool) #optional_ok {
-    return get_mesh_by_hash(hash_const_name(Name))
+find_mesh_by_name :: proc(name: string) -> (result: Mesh_Handle, ok: bool) #optional_ok {
+    return find_mesh_by_hash(hash_name(name))
 }
 
 @(require_results)
-get_mesh_by_name :: proc(name: string) -> (result: Mesh_Handle, ok: bool) #optional_ok {
-    return get_mesh_by_hash(hash_name(name))
+find_mesh_by_hash :: proc(hash: u64) -> (result: Mesh_Handle, ok: bool) #optional_ok {
+    result, _, ok = base.hash_pool_find(&_state.meshes, hash)
+    return
 }
 
 @(require_results)
-get_mesh_by_hash :: proc(hash: Hash) -> (result: Mesh_Handle, ok: bool) #optional_ok {
-    index := _table_lookup_hash(&_state.meshes_hash, hash) or_return
-    return {
-        index = Handle_Index(index),
-        gen = _state.meshes_gen[index],
-    }, true
-}
-
-
-@(require_results)
-get_object :: proc($Name: string) -> (result: Object_Handle, ok: bool) #optional_ok {
-    return get_object_by_hash(hash_const_name(Name))
+find_texture_by_name :: proc(name: string) -> (result: Texture_Handle, ok: bool) #optional_ok {
+    return find_texture_by_hash(hash_name(name))
 }
 
 @(require_results)
-get_object_by_name :: proc(name: string) -> (result: Object_Handle, ok: bool) #optional_ok {
-    return get_object_by_hash(hash_name(name))
+find_texture_by_hash :: proc(hash: u64) -> (result: Texture_Handle, ok: bool) #optional_ok {
+    result, _, ok = base.hash_pool_find(&_state.textures, hash)
+    return
 }
 
 @(require_results)
-get_object_by_hash :: proc(hash: Hash) -> (result: Object_Handle, ok: bool) #optional_ok {
-    index := _table_lookup_hash(&_state.objects_hash, hash) or_return
-    return {
-        index = Handle_Index(index),
-        gen = _state.objects_gen[index],
-    }, true
-}
-
-
-
-@(require_results)
-get_texture :: proc($Name: string) -> (result: Texture_Handle, ok: bool) #optional_ok {
-    return get_texture_by_hash(hash_const_name(Name))
+find_spline_by_name :: proc(name: string) -> (result: Spline_Handle, ok: bool) #optional_ok {
+    return find_spline_by_hash(hash_name(name))
 }
 
 @(require_results)
-get_texture_by_name :: proc(name: string) -> (result: Texture_Handle, ok: bool) #optional_ok {
-    return get_texture_by_hash(hash_name(name))
+find_spline_by_hash :: proc(hash: u64) -> (result: Spline_Handle, ok: bool) #optional_ok {
+    result, _, ok = base.hash_pool_find(&_state.splines, hash)
+    return
 }
 
 @(require_results)
-get_texture_by_hash :: proc(hash: Hash) -> (result: Texture_Handle, ok: bool) #optional_ok {
-    index := _table_lookup_hash(&_state.textures_hash, hash) or_return
-    return {
-        index = Handle_Index(index),
-        gen = _state.textures_gen[index],
-    }, true
-}
-
-
-
-@(require_results)
-get_spline :: proc($Name: string) -> (result: Spline_Handle, ok: bool) #optional_ok {
-    return get_spline_by_hash(hash_const_name(Name))
+find_shader_by_name :: proc(name: string) -> (result: Shader_Handle, ok: bool) #optional_ok {
+    return find_shader_by_hash(hash_name(name))
 }
 
 @(require_results)
-get_spline_by_name :: proc(name: string) -> (result: Spline_Handle, ok: bool) #optional_ok {
-    return get_spline_by_hash(hash_name(name))
+find_shader_by_hash :: proc(hash: u64) -> (result: Shader_Handle, ok: bool) #optional_ok {
+    result, _, ok = base.hash_pool_find(&_state.shaders, hash)
+    return
 }
-
-@(require_results)
-get_spline_by_hash :: proc(hash: Hash) -> (result: Spline_Handle, ok: bool) #optional_ok {
-    index := _table_lookup_hash(&_state.splines_hash, hash) or_return
-    return {
-        index = Handle_Index(index),
-        gen = _state.splines_gen[index],
-    }, true
-}
-
-
-
-@(require_results)
-get_shader :: proc($Name: string) -> (result: Shader_Handle, ok: bool) #optional_ok {
-    return get_shader_by_hash(hash_const_name(Name))
-}
-
-@(require_results)
-get_shader_by_name :: proc(name: string) -> (result: Shader_Handle, ok: bool) #optional_ok {
-    return get_shader_by_hash(hash_name(name))
-}
-
-@(require_results)
-get_shader_by_hash :: proc(hash: Hash) -> (result: Shader_Handle, ok: bool) #optional_ok {
-    index := _table_lookup_hash(&_state.shaders_hash, hash) or_return
-    return {
-        index = Handle_Index(index),
-        gen = _state.shaders_gen[index],
-    }, true
-}
-
-
 
 @(require_results)
 _get_draw_layer :: proc(#any_int index: i32) -> (result: ^Draw_Layer, ok: bool) {
@@ -1776,303 +1471,17 @@ _get_draw_layer :: proc(#any_int index: i32) -> (result: ^Draw_Layer, ok: bool) 
 
 @(require_results)
 _get_mesh :: proc(handle: Mesh_Handle) -> (result: ^Mesh, ok: bool) {
-    return _table_get(&_state.meshes, _state.meshes_gen, handle)
-}
-
-@(require_results)
-_get_object :: proc(handle: Object_Handle) -> (result: ^Object, ok: bool) {
-    return _table_get(&_state.objects, _state.objects_gen, handle)
+    return base.hash_pool_get(&_state.meshes, handle)
 }
 
 @(require_results)
 _get_spline :: proc(handle: Spline_Handle) -> (result: ^Spline, ok: bool) {
-    return _table_get(&_state.splines, _state.splines_gen, handle)
+    return base.hash_pool_get(&_state.splines, handle)
 }
 
 @(require_results)
 _get_shader :: proc(handle: Shader_Handle) -> (result: ^Shader, ok: bool) {
-    return _table_get(&_state.shaders, _state.shaders_gen, handle)
-}
-
-
-
-@(require_results)
-insert_mesh_by_name :: proc(name: string, mesh: Mesh) -> (result: Mesh_Handle, ok: bool) {
-    return insert_mesh_by_hash(hash_name(name), mesh)
-}
-
-@(require_results)
-insert_object_by_name :: proc(name: string, object: Object) -> (result: Object_Handle, ok: bool) {
-    return insert_object_by_hash(hash_name(name), object)
-}
-
-@(require_results)
-insert_spline_by_name :: proc(name: string, spline: Spline) -> (result: Spline_Handle, ok: bool) {
-    return insert_spline_by_hash(hash_name(name), spline)
-}
-
-@(require_results)
-insert_shader_by_name :: proc(name: string, shader: Shader) -> (result: Shader_Handle, ok: bool) {
-    return insert_vertex_shader_by_hash(hash_name(name), shader)
-}
-
-
-@(require_results)
-insert_mesh_by_hash :: proc(hash: Hash, mesh: Mesh) -> (result: Mesh_Handle, ok: bool) {
-    index, _ := _table_insert_hash(&_state.meshes_hash, hash) or_return
-
-    _state.meshes[index] = mesh
-
-    result = {
-        index = Handle_Index(index),
-        gen = _state.meshes_gen[index],
-    }
-
-    return result, true
-}
-
-@(require_results)
-insert_object_by_hash :: proc(hash: Hash, object: Object) -> (result: Object_Handle, ok: bool) {
-    index, _ := _table_insert_hash(&_state.objects_hash, hash) or_return
-
-    _state.objects[index] = object
-
-    result = {
-        index = Handle_Index(index),
-        gen = _state.objects_gen[index],
-    }
-
-    return result, true
-}
-
-@(require_results)
-insert_spline_by_hash :: proc(hash: Hash, spline: Spline) -> (result: Spline_Handle, ok: bool) {
-    index, _ := _table_insert_hash(&_state.splines_hash, hash) or_return
-
-    _state.splines[index] = spline
-
-    result = {
-        index = Handle_Index(index),
-        gen = _state.splines_gen[index],
-    }
-
-    return result, true
-}
-
-@(require_results)
-insert_vertex_shader_by_hash :: proc(hash: Hash, shader: Shader) -> (result: Shader_Handle, ok: bool) {
-    index, _ := _table_insert_hash(&_state.shaders_hash, hash) or_return
-
-    _state.shaders[index] = shader
-
-    result = {
-        index = Handle_Index(index),
-        gen = _state.shaders_gen[index],
-    }
-
-    return result, true
-}
-
-
-@(require_results)
-_table_insert_hash :: proc(table: ^[$N]Hash, hash: u64) -> (result: int, prev: Hash, ok: bool) {
-    start_index := int(hash) %% N
-
-    for offs in 0..<MAX_PROBE_DIST {
-        index := (start_index + offs) %% N
-        if index == 0 {
-            continue
-        }
-
-        h := table[index]
-
-        if h == 0 || h == hash {
-            table[index] = hash
-            return index, h, true
-        }
-    }
-
-    return 0, 0, false
-}
-
-@(require_results)
-_table_lookup_hash :: proc(table: ^[$N]Hash, hash: u64) -> (int, bool) {
-    start_index := int(hash) %% N
-
-    for offs in 0..<MAX_PROBE_DIST {
-        index := (start_index + offs) %% N
-        if table[index] == hash {
-            return index, true
-        }
-    }
-
-    return {}, false
-}
-
-@(require_results)
-_table_get :: proc(table: ^[$N]$T, table_gen: [N]Handle_Gen, handle: $H/Handle) -> (^T, bool) #no_bounds_check {
-    if handle.index <= 0 || handle.index >= N {
-        return nil, false
-    }
-
-    if handle.gen != table_gen[handle.index] {
-        return nil, false
-    }
-
-    return &table[handle.index], true
-}
-
-
-
-
-/////////////////////////////////////////////////////////////////////////////////////////////////////////////
-// MARK: VFS
-// Virtual file system
-//
-
-get_file_data :: proc(name: string, flush := false) -> (data: []byte, ok: bool) {
-    return get_file_data_by_hash(hash_name(name), flush = flush)
-}
-
-get_file_data_by_hash :: proc(hash: Hash, flush := false) -> (data: []byte, ok: bool) {
-    index :=_table_lookup_hash(&_state.files_hash, hash) or_return
-
-    file := &_state.files[index]
-
-    if flush {
-        if .Dirty in file.flags {
-            file.flags -= {.Dirty}
-            return file.data, true
-        } else {
-            return {}, false
-        }
-    }
-
-    return file.data, true
-}
-
-load_asset :: proc(name: string, arena_handle: Arena_Handle) -> bool {
-    if string_has_suffix(name, ".png") {
-        data, data_ok := get_file_data(name)
-        if !data_ok {
-            base.log_err("Failed to load texture '%s', file not found", name)
-            return false
-        }
-        _, ok := create_texture_from_encoded_data(name[:len(name) - 4], data)
-        return ok
-    } else if string_has_suffix(name, ".rscn") {
-        _, ok := load_scene(name, arena_handle = arena_handle)
-        return ok
-    }
-    // TODO
-    // else if string_has_suffix(name, ".wav") {
-    // } else if string_has_suffix(name, ".hlsl") {
-    // }
-
-    return true
-}
-
-register_file :: proc(path: string) -> bool {
-    npath := normalize_path(path, context.temp_allocator)
-    base.log_info("VFS registering file '%s'", npath)
-    data, ok := platform.read_file_by_path(npath, _state.allocator)
-    if !ok {
-        base.log_err("VFS failed to register '%s', couldn't read file data", npath)
-        return false
-    }
-    return register_file_data_by_hash(hash_name(npath), data, flags = {.Dynamically_Allocated})
-}
-
-register_file_data :: proc(path: string, data: []byte, flags: bit_set[File_Flag] = {}) -> bool {
-    npath := normalize_path(path, context.temp_allocator)
-    base.log_info("VFS registering file data '%s'", npath)
-    return register_file_data_by_hash(hash_name(npath), data, flags = flags)
-}
-
-register_file_data_by_hash :: proc(hash: Hash, data: []byte, flags: bit_set[File_Flag]) -> bool {
-    index, _, ok := _table_insert_hash(&_state.files_hash, hash)
-    if !ok {
-        return false
-    }
-
-    _state.files[index] = File{
-        data = data,
-        flags = flags + {.Dirty},
-    }
-
-    return true
-}
-
-register_const_directory :: proc(files: []runtime.Load_Directory_File) -> (ok: bool) {
-    ok = true
-    for file in files {
-        if !register_file_data(file.name, file.data) {
-            base.log_err("Failed to register file '%s' from a constant directory", file.name)
-            ok = false
-        }
-    }
-    return ok
-}
-
-// TODO: allow path patterns, just like platform dir iterator?
-register_directory :: proc(path: string) {
-    iter: platform.Directory_Iter
-
-    if !platform.is_directory(path) {
-        base.log_err("Cannot load data, '%s' is not a valid directory path", path)
-    }
-
-    pattern := strings_join(path, "\\*", allocator = context.temp_allocator)
-
-    files := make([dynamic]string, 0, 64, context.temp_allocator)
-
-    for name in platform.iter_directory(&iter, pattern, context.temp_allocator) {
-        full := strings_join(path, platform.SEPARATOR, name, allocator = context.temp_allocator)
-
-        if !platform.is_file(full) {
-            continue
-        }
-
-        data, data_ok := platform.read_file_by_path(
-            full,
-            allocator = _state.allocator,
-        )
-
-        if !data_ok {
-            base.log_err("VFS failed to register file '%s' from directory '%s', couldn't read file data", name, path)
-            continue
-        }
-
-        register_file_data(name, data, flags = {.Dynamically_Allocated})
-
-        append(&files, name)
-    }
-}
-
-watch_asset_directory :: proc(path: string) -> bool {
-    if _state.watched_dirs_num > MAX_WATCHED_DIRS {
-        base.log_err("Failed to watch asset directory, too many watched directories")
-        return false
-    }
-
-    index := _state.watched_dirs_num
-    dir := &_state.watched_dirs[index]
-
-    if !platform.init_file_watcher(&dir.watcher, path, recursive = false) {
-        intrinsics.mem_zero(dir, size_of(Watched_Dir))
-        return false
-    }
-
-    dir.path_len = i32(copy(dir.path[:], path))
-
-    _state.watched_dirs_num += 1
-
-    return true
-}
-
-_get_file_by_hash :: proc(hash: Hash) -> (file: ^File, ok: bool) {
-    index := _table_lookup_hash(&_state.files_hash, hash) or_return
-    return &_state.files[index], true
+    return base.hash_pool_get(&_state.shaders, handle)
 }
 
 
@@ -2131,49 +1540,44 @@ get_or_create_collision_mesh :: proc(mesh_handle: Mesh_Handle) -> (result: colli
 // MARK: Sounds
 //
 
-// play sound
-create_sound :: audio.create_sound
-destroy_sound :: audio.destroy_sound
+get_sound_resource :: proc(handle: Sound_Resource_Handle) -> (result: audio.Resource_Handle, ok: bool) #optional_ok {
+    res := base.hash_pool_get(&_state.sound_resources, handle) or_return
+    return res.resource, true
+}
 
 load_sound_resource :: proc(path: string) -> (result: Sound_Resource_Handle, ok: bool) #optional_ok {
     name := asset_name_from_path(path)
-    // TODO: register the resource internally for hot-reload
-    data, data_ok := get_file_data(path)
+    data, data_ok := read_file(path)
     if !data_ok {
         base.log_err("Failed to load sound resource '%s' from '%s', VFS file not found", name, path)
+        return {}, false
     }
-
     return create_sound_resource_encoded(name, data)
 }
 
 create_sound_resource_encoded :: proc(name: string, data: []byte) -> (result: Sound_Resource_Handle, ok: bool) #optional_ok {
     base.log_info("Creating sound resource '%s' with size %i bytes", name, len(data))
 
+    hash := hash_name(name)
+    handle, exists := base.hash_pool_find_free(_state.sound_resources, hash) or_return
+    assert(!exists)
+
     res := audio.create_resource(.WAV, data) or_return
 
-    if !insert_sound_resource_by_hash(name, res) {
-        // NOTE: currently this can continue running somewhat correctly, the result is valid.
-        // But the resource won't be tracked properly internally.
-        base.log_err("Failed to insert named sound resource '%s'")
+    state := Sound_Resource_State {
+        resource = res,
     }
 
-    return res, true
+    base.hash_pool_insert(&_state.sound_resources, hash, handle, state) or_return
+    return handle, true
 }
 
-get_sound_resource :: proc(name: string) -> (result: Sound_Resource_Handle, ok: bool) #optional_ok {
-    hash := hash_name(name)
-    index := _table_lookup_hash(&_state.meshes_hash, hash) or_return
-    return _state.sound_resources[index], true
-}
-
-@(require_results)
-insert_sound_resource_by_hash :: proc(name: string, handle: Sound_Resource_Handle) -> bool {
-    hash := hash_name(name)
-    index, _ := _table_insert_hash(&_state.sound_resources_hash, hash) or_return
-    _state.sound_resources[index] = handle
+destroy_sound_resource :: proc(handle: Sound_Resource_Handle) -> bool {
+    res := get_sound_resource(handle) or_return
+    audio.destroy_resource(res) or_return
+    base.hash_pool_remove(&_state.sound_resources, handle) or_return
     return true
 }
-
 
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -2184,14 +1588,6 @@ insert_sound_resource_by_hash :: proc(name: string, handle: Sound_Resource_Handl
 alloc_slice_non_zeroed :: proc($T: typeid, init_len: int, alignment: int = 2 * align_of(rawptr), allocator: runtime.Allocator) -> []T {
     buf := runtime.mem_alloc_non_zeroed(size_of(T) * init_len, alignment = alignment, allocator = allocator) or_else panic("Failed to allocate")
     return ([^]T)(raw_data(buf))[:len(buf) / size_of(T)]
-}
-
-hash_fnv64a :: proc "contextless" (data: []byte, seed: u64) -> u64 {
-    h: u64 = seed
-    for b in data {
-        h = (h ~ u64(b)) * 0x100000001b3
-    }
-    return h
 }
 
 // Clean up a VFS path
@@ -2506,35 +1902,6 @@ pack_vertex :: proc(
     }
 }
 
-// https://nullprogram.com/blog/2018/07/31/
-
-@(require_results)
-hash_murmurhash32_mix32 :: proc "contextless" (x: u32) -> u32 {
-    x := x
-    x ~= x >> 16
-    x *= 0x85ebca6b
-    x ~= x >> 13
-    x *= 0xc2b2ae35
-    x ~= x >> 16
-    return x
-}
-
-@(require_results)
-hash_splittable64 :: proc "contextless" (x: u64) -> u64 {
-    x := x
-    x ~= x >> 30
-    x *= 0xbf58476d1ce4e5b9
-    x ~= x >> 27
-    x *= 0x94d049bb133111eb
-    x ~= x >> 31
-    return x
-}
-
-align_up :: proc(x: u32, align: u32) -> u32 {
-    return (x + align - 1) & ~(align - 1)
-}
-
-
 // Order independent blend modes are a lot simpler on the renderer CPU side.
 is_blend_mode_order_dependent :: proc(mode: Blend_Mode) -> bool {
     switch mode {
@@ -2714,17 +2081,18 @@ draw_perf_scopes :: proc(pos: [3]f32 = {10, 40, 0.1}, scale: f32 = 1) {
         FRAME_TIME :: 1.0 / 60.0
 
         cycles_to_ms := f64(_state.frame_dur_ns) / (f64(_state.frame_dur_cycles) * 1e6)
+        shadow_offs := max(1, math.round(scale))
 
         for scope, i in scopes {
-            p := pos + [3]f32{0, f32(i) * 16, 0}
+            p := pos + [3]f32{0, f32(i) * 16 * scale, 0}
 
             ms := f32(f64(scope.cycles) * cycles_to_ms)
-            width := max(1, clamp(ms, 0, 16) * 10)
+            width := max(1, clamp(ms, 0, 16) * 10) * scale
 
             text := base.tprintf("%s: %f ms", scope.name, ms)
-            draw_text(text, p)
-            draw_text(text, p + {1, 1, 0.001}, col = BLACK)
-            draw_sprite(p + {-5, 5, 0.01}, rect, {width, 16}, anchor = {-1, 0},
+            draw_text(text, p, scale = {scale, scale})
+            draw_text(text, p + {shadow_offs, shadow_offs, 0.001}, col = BLACK, scale = {scale, scale})
+            draw_sprite(p + {-5 * scale, 5 * scale, 0.01}, rect, {width, 16 * scale}, anchor = {-1, 0},
                 col = ms > 16.1 ? RED : (ms < 1 ? GREEN : ORANGE),
             )
         }
@@ -2957,6 +2325,7 @@ char_to_rune :: proc(ch: u8) -> rune {
     case 29: return '↔'
     case 30: return '▲'
     case 31: return '▼'
+    case 32: return ' '
     case 127: return '⌂'
     case 128: return 'Ç'
     case 129: return 'ü'

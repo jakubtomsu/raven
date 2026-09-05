@@ -18,7 +18,6 @@ State :: struct {
 }
 
 @export _app_desc := rv.App_Desc {
-    state_size = size_of(State),
     init = _init,
     shutdown = _shutdown,
     update = _update,
@@ -96,10 +95,10 @@ _update :: proc(hot_state: rawptr) -> rawptr {
 
 
         tex := [?]rv.Texture_Handle{
-            rv.get_texture("default"),
-            rv.get_texture("white"),
-            rv.get_texture("error"),
-            rv.get_texture("uv_tex"),
+            rv.get_builtin_texture(.Default),
+            rv.get_builtin_texture(.White),
+            rv.get_builtin_texture(.Error),
+            rv.get_builtin_texture(.CGA8x8thick),
         }
 
         offs: [3]f32
@@ -123,7 +122,6 @@ _update :: proc(hot_state: rawptr) -> rawptr {
                     rv.set_draw_texture(texh)
 
                     anim := [3]f32{0, rv.nsin(rv.get_time() + (offs.x + offs.y + offs.z) * 0.03), 0}
-
 
                     stress_draw(rv.get_builtin_mesh(.Cylinder_1), offs + anim)
                     offs += {5, 0, 0}

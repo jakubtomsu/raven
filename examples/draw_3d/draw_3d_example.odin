@@ -15,7 +15,6 @@ State :: struct {
 }
 
 @export _app_desc := rv.App_Desc {
-    state_size = size_of(State),
     init = _init,
     shutdown = _shutdown,
     update = _update,
@@ -32,9 +31,7 @@ _init :: proc() {
     platform.set_mouse_relative(rv.get_window(), true)
     platform.set_mouse_visible(false)
 
-    rv.register_file_data("test_shader.ps.hlsl", #load("../data/test_shader.ps.hlsl"))
-
-    state.shader = rv.load_shader("test_shader.ps.hlsl")
+    state.shader = rv.create_shader_from_source("test_shader", #load("../data/test_shader.ps.hlsl", string))
 
     state.cam_pos = {1.5, 3, -8}
     state.cam_ang = {0.3, 0, 0}
@@ -130,7 +127,7 @@ _update :: proc(hot_state: rawptr) -> rawptr {
         rv.draw_line_mat3({-2, 0, 5})
         rv.draw_line_box({1, 0, 5}, 1, rv.GRAY)
         rv.draw_line_circle({4, 0, 5}, col = rv.ORANGE)
-        rv.draw_line_cylinder({{6, -1, 5}, {6, 1, 5}}, rad = 0.5)
+        rv.draw_line_cylinder({6, -1, 5}, {6, 1, 5}, rad = 0.5)
         rv.draw_line_sphere({8, 0, 5}, mat = 0.7, col = rv.RED)
 
         rv.set_draw_shader(state.shader)

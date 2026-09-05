@@ -52,6 +52,7 @@ decode :: proc(data: []byte, allocator := context.allocator) -> (header: Header,
     header, sample_bytes, ok = decode_header(data)
     if !ok {
         log(.Error, "WAV: Failed to decode header")
+        return {}, nil, false
     }
 
     samples = decode_samples(header.format, sample_bytes, allocator = allocator)
@@ -95,7 +96,13 @@ decode_header :: proc(data: []byte) -> (result: Header, result_data: []byte, ok:
                 return result, nil, false
             }
 
-            result_data = data[offset + size_of(Chunk):][:result.data.size]
+            result_data = data[offset + size_of(Chunk):]
+            
+            if len(result_data) < int(result.data.size) {
+                return result, nil, false
+            }
+
+            result_data = result_data[:result.data.size]
             ok = true
 
         case:
@@ -121,7 +128,7 @@ decode_samples :: proc(format: Format_Chunk, data: []byte, allocator := context.
             result = make([]f32, len(data), allocator)
 
             for i in 0..<len(result) {
-                result[i] = (f32(data[i]) - 128.0) * (1.0 / 255.0)
+                result[i] = (f32(data[i]) - 128.0) * (1.0 / 127.5)
             }
 
         case 16: // i16, -32768..32767 with 0 as center
@@ -171,7 +178,7 @@ init_header :: proc(header: ^Header, sample_rate: u32, num_channels: u16, sample
         riff = RIFF_Chunk{
             chunk = {
                 id = RIFF_CHUNK_ID,
-                size = u32(len(data)) - size_of(Chunk),
+                size = u32(len(data)) + size_of(Header) - size_of(Chunk),
             },
             file_format_id = FILE_FORMAT_ID,
         },

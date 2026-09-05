@@ -21,7 +21,6 @@ State :: struct {
 }
 
 @export _app_desc := rv.App_Desc {
-    state_size = size_of(State),
     init = _init,
     shutdown = _shutdown,
     update = _update,
@@ -45,7 +44,7 @@ _init :: proc() {
 
     state.res0 = rv.create_sound_resource_encoded("sound", #load("../data/snake_death_sound.wav"))
     state.res1 = rv.create_sound_resource_encoded("sound", #load("../data/snake_powerup_sound.wav"))
-    state.sound = rv.create_sound(state.res1,
+    state.sound = audio.create_sound(rv.get_sound_resource(state.res1),
         flags = {.Loop, .Spatial},
         attenuation_range = ATTENUATION_RANGE,
     )
@@ -109,7 +108,7 @@ _update :: proc(hot_state: rawptr) -> rawptr {
     audio.set_sound_transform(state.sound, sound_pos, {sound_vel, 0, 0})
 
     if rv.get_key_pressed(.Space) {
-        sound := rv.create_sound(state.res0, pitch = 2)
+        sound := audio.create_sound(rv.get_sound_resource(state.res0), pitch = 2)
         audio.set_sound_param(sound, .Pitch, 0.1, 3.0)
     }
 

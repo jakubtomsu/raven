@@ -23,7 +23,6 @@ State :: struct {
 }
 
 @export _app_desc := rv.App_Desc {
-    state_size = size_of(State),
     init = _init,
     shutdown = _shutdown,
     update = _update,
@@ -56,7 +55,8 @@ _init :: proc() {
         // t = rv.create_texture_from_data("grid", data) or_else panic("tex")
         name := ufmt.tprintf("grid%i", i)
         res := gpu.create_texture_2d(name, .RGBA_U8_Norm, SIZE, rw_resource = true, data = gpu.slice_bytes(pixels)) or_else panic("tex")
-        t = rv.create_texture_from_resource(name, res) or_else panic("tex")
+        t = rv.
+        create_texture_from_resource(name, res) or_else panic("tex")
     }
 }
 
