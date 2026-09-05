@@ -10,7 +10,6 @@ when BACKEND == BACKEND_DUMMY {
     _State :: struct { _: u8 }
 
     _File_Handle :: struct { _: u8 }
-    _File_Watcher :: struct { _: u8 }
     _Directory_Iter :: struct { _: u8 }
     _Thread :: struct { _: u8 }
     _Window :: struct { _: u8 }
@@ -99,8 +98,5 @@ when BACKEND == BACKEND_DUMMY {
     @(require_results) _is_file :: proc(path: string) -> bool { dummy() }
     @(require_results) _is_directory :: proc(path: string) -> bool { dummy() }
     @(require_results) _iter_directory :: proc(iter: ^Directory_Iter, pattern: string, allocator := context.temp_allocator) -> (result: string, ok: bool) { dummy() }
-    @(require_results) _init_file_watcher :: proc(watcher: ^File_Watcher, path: string, recursive := false) -> bool { dummy() }
-    @(require_results) _poll_file_watcher :: proc(watcher: ^File_Watcher) -> []string { dummy() }
-    _destroy_file_watcher :: proc(watcher: ^File_Watcher) { dummy() }
     @(require_results) _file_dialog :: proc(mode: File_Dialog_Mode, default_path: string, patterns: []File_Pattern, title := "") -> (string, bool) { dummy() }
 }

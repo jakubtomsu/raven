@@ -28,27 +28,37 @@ hash_pool_find_free :: proc "contextless" (pool: $T/Hash_Pool($N, $D, $H), hash:
     if hash == 0 {
         return {}, false, false
     }
+    hole := -1
     for offs in 0..<u64(HASH_POOL_MAX_PROBE_DIST) {
         slot := (hash + offs) %% u64(N)
-        if slot != 0 && pool.hash[slot] == 0 || pool.hash[slot] == hash {
-            return {index = Handle_Index(slot), gen = pool.gen[slot]}, pool.hash[slot] == hash, true
+        if slot == 0 {
+            continue
         }
+        if pool.hash[slot] == hash {
+            return {index = Handle_Index(slot), gen = pool.gen[slot]}, true, true
+        }
+        if pool.hash[slot] == 0 {
+            hole = int(slot)
+        }
+    }
+    if hole != -1 {
+        return {index = Handle_Index(hole), gen = pool.gen[hole]}, false, true
     }
     return {}, false, false
 }
 
 @(require_results)
-hash_pool_find :: proc "contextless" (pool: $T/Hash_Pool($N, $D, $H), hash: u64) -> (H, bool) {
+hash_pool_find :: proc "contextless" (pool: ^$T/Hash_Pool($N, $D, $H), hash: u64) -> (H, ^D, bool) {
     if hash == 0 {
-        return {}, false
+        return {}, nil, false
     }
     for offs in 0..<u64(HASH_POOL_MAX_PROBE_DIST) {
         slot := (hash + offs) %% u64(N)
         if pool.hash[slot] == hash {
-            return {index = Handle_Index(slot), gen = pool.gen[slot]}, true
+            return {index = Handle_Index(slot), gen = pool.gen[slot]}, &pool.data[slot], true
         }
     }
-    return {}, false
+    return {}, nil, false
 }
 
 @(require_results)
@@ -78,4 +88,31 @@ hash_pool_get :: proc(pool: ^$T/Hash_Pool($N, $D, $H), handle: H) -> (^D, bool) 
     }
     assert(pool.hash[handle.index] != 0, "Corrupted state")
     return &pool.data[handle.index], true
+}
+
+
+Hash_Pool_Iter :: struct($N: int, $D: typeid, $H: typeid) where
+    intrinsics.type_has_field(H, "index"),
+    intrinsics.type_has_field(H, "gen")
+{
+    pool:       ^Hash_Pool(N, D, H),
+    index:      int,
+}
+
+@(require_results)
+hash_pool_iter :: proc(pool: ^$T/Hash_Pool($N, $D, $H)) -> Hash_Pool_Iter(N, D, H) {
+    return {
+        pool = pool,
+    }
+}
+
+@(require_results)
+hash_pool_next :: proc(iter: ^$T/Hash_Pool_Iter($N, $D, $H)) -> (handle: H, data: ^D, ok: bool) {
+    for iter.index < N {
+        defer iter.index += 1
+        if iter.pool.hash[iter.index] != 0 {
+            return {index = Handle_Index(iter.index), gen = iter.pool.gen[iter.index]}, &iter.pool.data[iter.index], true
+        }
+    }
+    return {}, nil, false
 }

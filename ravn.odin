@@ -154,9 +154,6 @@ State :: struct #align(4096) {
 
     perf_counters:              [Perf_Counter_Kind]Perf_Counter_State,
 
-    watched_dirs_num:           i32,
-    watched_dirs:               [MAX_WATCHED_DIRS]Watched_Dir,
-
     draw_layers:                [MAX_DRAW_LAYERS]Draw_Layer,
 
     arenas:                     base.Pool(MAX_ARENAS, Arena, Arena_Handle),
@@ -183,22 +180,13 @@ Context_State :: struct {
     tracking:   mem.Tracking_Allocator,
 }
 
-// VFS file
 File :: struct {
-    flags:          bit_set[File_Flag],
-    data:           []byte,
+    data:   []byte,
+    flags:  bit_set[File_Flag],
 }
 
 File_Flag :: enum u8 {
-    Dirty,
-    Changed, // Waiting to get loaded
-    Dynamically_Allocated, // must use _state.allocator
-}
-
-Watched_Dir :: struct {
-    path_len:   i32,
-    path:       [256]byte,
-    watcher:    platform.File_Watcher,
+    Temp,
 }
 
 Shader :: struct #all_or_none {
@@ -737,6 +725,8 @@ begin_frame :: proc() -> (keep_running: bool) {
     }
 
     free_all(context.temp_allocator)
+    _state.frame_index += 1
+    evict_all_temp_files()
 
     keep_running = true
 
@@ -769,7 +759,6 @@ begin_frame :: proc() -> (keep_running: bool) {
         _perf_counter_flush(&counter)
     }
 
-    _state.frame_index += 1
     _state.submitted_layers = false
 
     time_ns := platform.get_time_ns()
@@ -818,46 +807,6 @@ begin_frame :: proc() -> (keep_running: bool) {
 
     _clear_draw_layers()
 
-    changed_files := make([dynamic]string, 0, 64, context.temp_allocator)
-
-    for i in 0..<_state.watched_dirs_num {
-        dir := &_state.watched_dirs[i]
-
-        path := string(dir.path[:dir.path_len])
-
-        changes := platform.poll_file_watcher(&dir.watcher)
-
-        for change in changes {
-            base.log_info("changed file:", change)
-
-            file_path := strings_join(path, platform.SEPARATOR, change, allocator = context.temp_allocator)
-
-            data, ok := platform.read_file_by_path(file_path, allocator = _state.allocator)
-
-            if !ok {
-                log_err("Failed to hotreload file {}", file_path)
-                continue
-            }
-
-            if file, file_ok := _get_file_by_hash(hash_name(change)); file_ok {
-                append(&changed_files, change)
-
-                if .Dynamically_Allocated in file.flags {
-                    delete(file.data, _state.allocator)
-                }
-
-                file.flags += {.Dirty, .Dynamically_Allocated}
-                file.data = data
-            } else {
-                register_file_data(change, data, flags = {.Dynamically_Allocated})
-            }
-        }
-    }
-
-    for change in changed_files {
-        load_asset(change, {})
-    }
-
     for i in 0..<MAX_ARENAS {
         handle := Arena_Handle{index = Handle_Index(i), gen = _state.arenas.gen[i]}
         arena := base.pool_get(&_state.arenas, handle) or_continue
@@ -895,6 +844,57 @@ _clear_draw_layers :: proc() {
         _draw_batch_table_init(&layer.meshes)
         _draw_batch_table_init(&layer.triangles)
         _draw_batch_table_init(&layer.lines)
+    }
+}
+
+@(require_results)
+read_file :: proc(path: string, temp := true) -> ([]byte, bool) {
+    hash := hash_name(normalize_path(path, context.temp_allocator))
+    handle, existing, existing_ok := base.hash_pool_find(&_state.files, hash)
+
+    if existing_ok {
+        if existing.data != nil {
+            return existing.data, true
+        }
+    }
+
+    when ODIN_OS == .JS {
+        return nil, false
+    } else {
+        data, data_ok := platform.read_file_by_path(path, temp ? context.temp_allocator : _state.allocator)
+        if !data_ok {
+            return nil, false
+        }
+
+        flags: bit_set[File_Flag]
+        if temp {
+            flags += {.Temp}
+        }
+        register_file(path, data, flags)
+
+        return data, true
+    }
+}
+
+register_file :: proc(path: string, data: []byte, flags: bit_set[File_Flag] = {}) -> bool {
+    hash := hash_name(normalize_path(path, context.temp_allocator))
+    handle, exists := base.hash_pool_find_free(_state.files, hash) or_return
+    if exists {
+        return false
+    }
+    file := File{
+        data = data,
+        flags = flags,
+    }
+    base.hash_pool_insert(&_state.files, hash, handle, file) or_return
+    return true
+}
+
+evict_all_temp_files :: proc() {
+    for iter := base.hash_pool_iter(&_state.files); handle, file in base.hash_pool_next(&iter) {
+        if .Temp in file.flags {
+            file.data = {}
+        }
     }
 }
 
@@ -953,7 +953,11 @@ get_builtin_shader :: proc(id: Builtin_Shader) -> Shader_Handle {
 }
 
 _load_builtin_assets :: proc() {
-    register_const_directory(#load_directory("data"))
+    register_file("CGA8x8thick.png",    #load("data/CGA8x8thick.png"))
+    register_file("CGA8x8thin.png",     #load("data/CGA8x8thin.png"))
+    register_file("default.png",        #load("data/default.png"))
+    register_file("error.png",          #load("data/error.png"))
+    register_file("white.png",          #load("data/white.png"))
 
     default_pool, default_pool_ok := create_texture_pool(128, 64)
     assert(default_pool_ok)
@@ -966,10 +970,7 @@ _load_builtin_assets :: proc() {
     assert(_ok)
 
     for &tex, id in _state.builtin_texture {
-        tex = load_texture(
-            ufmt.tprintf("%s.png", enum_to_string(id)),
-            pool_handle = default_pool,
-        ) or_else panic("Failed to load builtin texture")
+        tex = load_texture(ufmt.tprintf("%s.png", enum_to_string(id)), pool_handle = default_pool) or_else panic("Failed to load builtin texture")
     }
 
     default_sprite_vs: []byte
@@ -1113,10 +1114,10 @@ _get_arena :: proc(handle: Arena_Handle) -> (result: ^Arena, ok: bool) {
 @(require_results)
 create_arena :: proc(
     usage:                          Arena_Usage,
-    #any_int max_mesh_verts:         i32 = 1024 * 1024,
-    #any_int max_mesh_indices:       i32 = 1024 * 1024,
-    #any_int max_spline_verts:       i32 = 1024 * 8,
-    #any_int collision_arena_size:   u64 = 1024 * 1024,
+    #any_int max_mesh_verts:        i32 = 1024 * 1024,
+    #any_int max_mesh_indices:      i32 = 1024 * 1024,
+    #any_int max_spline_verts:      i32 = 1024 * 8,
+    #any_int collision_arena_size:  u64 = 1024 * 1024,
 ) -> (result: Arena_Handle, ok: bool) #optional_ok {
     handle := base.pool_find_free(_state.arenas) or_return
 
@@ -1276,18 +1277,18 @@ _delete_arena_buffers :: proc(arena: ^Arena) {
 // MARK: Scene
 //
 
-load_scene :: proc(name: string, arena_handle: Arena_Handle = {}) -> (result_arena: Arena_Handle, ok: bool) {
-    bin_name := strings_join(name, ".bin", allocator = context.temp_allocator)
-    txt_data, txt_ok := get_file_data(name)
-    bin_data, bin_ok := get_file_data(bin_name)
+load_scene :: proc(path: string, arena_handle: Arena_Handle = {}) -> (result_arena: Arena_Handle, ok: bool) {
+    bin_path := strings_join(path, ".bin", allocator = context.temp_allocator)
+    txt_data, txt_ok := read_file(path)
+    bin_data, bin_ok := read_file(bin_path)
 
     if !txt_ok {
-        base.log_err("Failed to load scene, '%s' is missing", name)
+        base.log_err("Failed to load scene, '%s' is missing", path)
         return {}, false
     }
 
     if !bin_ok {
-        base.log_err("Failed to load scene, '%s.bin' is missing", name)
+        base.log_err("Failed to load scene, '%s' is missing", bin_path)
         return {}, false
     }
 
@@ -1370,13 +1371,10 @@ load_scene_from_data :: proc(txt: string, bin: []byte, arena_handle: Arena_Handl
 
         case rscn.Image:
             _, ok = find_texture_by_name(v.path)
-            if ok {
+            if !ok {
                 continue
             }
-
-            if !load_asset(v.path, {}) {
-                base.log_err("Failed to load scene texture")
-            }
+            load_texture(v.path)
 
         case rscn.Mesh:
 
@@ -1418,7 +1416,8 @@ find_mesh_by_name :: proc(name: string) -> (result: Mesh_Handle, ok: bool) #opti
 
 @(require_results)
 find_mesh_by_hash :: proc(hash: u64) -> (result: Mesh_Handle, ok: bool) #optional_ok {
-    return base.hash_pool_find(_state.meshes, hash)
+    result, _, ok = base.hash_pool_find(&_state.meshes, hash)
+    return
 }
 
 @(require_results)
@@ -1428,7 +1427,8 @@ find_texture_by_name :: proc(name: string) -> (result: Texture_Handle, ok: bool)
 
 @(require_results)
 find_texture_by_hash :: proc(hash: u64) -> (result: Texture_Handle, ok: bool) #optional_ok {
-    return base.hash_pool_find(_state.textures, hash)
+    result, _, ok = base.hash_pool_find(&_state.textures, hash)
+    return
 }
 
 @(require_results)
@@ -1438,7 +1438,8 @@ find_spline_by_name :: proc(name: string) -> (result: Spline_Handle, ok: bool) #
 
 @(require_results)
 find_spline_by_hash :: proc(hash: u64) -> (result: Spline_Handle, ok: bool) #optional_ok {
-    return base.hash_pool_find(_state.splines, hash)
+    result, _, ok = base.hash_pool_find(&_state.splines, hash)
+    return
 }
 
 @(require_results)
@@ -1448,7 +1449,8 @@ find_shader_by_name :: proc(name: string) -> (result: Shader_Handle, ok: bool) #
 
 @(require_results)
 find_shader_by_hash :: proc(hash: u64) -> (result: Shader_Handle, ok: bool) #optional_ok {
-    return base.hash_pool_find(_state.shaders, hash)
+    result, _, ok = base.hash_pool_find(&_state.shaders, hash)
+    return
 }
 
 @(require_results)
@@ -1472,148 +1474,6 @@ _get_spline :: proc(handle: Spline_Handle) -> (result: ^Spline, ok: bool) {
 @(require_results)
 _get_shader :: proc(handle: Shader_Handle) -> (result: ^Shader, ok: bool) {
     return base.hash_pool_get(&_state.shaders, handle)
-}
-
-
-
-/////////////////////////////////////////////////////////////////////////////////////////////////////////////
-// MARK: VFS
-// Virtual file system
-//
-
-get_file_data :: proc(name: string, flush := false) -> (data: []byte, ok: bool) {
-    return get_file_data_by_hash(hash_name(name), flush = flush)
-}
-
-get_file_data_by_hash :: proc(hash: u64, flush := false) -> (data: []byte, ok: bool) {
-    handle := base.hash_pool_find(_state.files, hash) or_return
-    file := base.hash_pool_get(&_state.files, handle) or_return
-
-    if flush {
-        if .Dirty in file.flags {
-            file.flags -= {.Dirty}
-            return file.data, true
-        } else {
-            return {}, false
-        }
-    }
-
-    return file.data, true
-}
-
-load_asset :: proc(name: string, arena_handle: Arena_Handle) -> bool {
-    if string_has_suffix(name, ".png") {
-        data, data_ok := get_file_data(name)
-        if !data_ok {
-            base.log_err("Failed to load texture '%s', file not found", name)
-            return false
-        }
-        _, ok := create_texture_from_encoded_data(name[:len(name) - 4], data)
-        return ok
-    } else if string_has_suffix(name, ".rscn") {
-        _, ok := load_scene(name, arena_handle = arena_handle)
-        return ok
-    }
-    return true
-}
-
-register_file :: proc(path: string) -> bool {
-    npath := normalize_path(path, context.temp_allocator)
-    base.log_info("VFS registering file '%s'", npath)
-    data, ok := platform.read_file_by_path(npath, _state.allocator)
-    if !ok {
-        base.log_err("VFS failed to register '%s', couldn't read file data", npath)
-        return false
-    }
-    return register_file_data_by_hash(hash_name(npath), data, flags = {.Dynamically_Allocated})
-}
-
-register_file_data :: proc(path: string, data: []byte, flags: bit_set[File_Flag] = {}) -> bool {
-    npath := normalize_path(path, context.temp_allocator)
-    base.log_info("VFS registering file data '%s'", npath)
-    return register_file_data_by_hash(hash_name(npath), data, flags = flags)
-}
-
-register_file_data_by_hash :: proc(hash: u64, data: []byte, flags: bit_set[File_Flag]) -> bool {
-    handle, exists := base.hash_pool_find_free(_state.files, hash) or_return
-    file := File{
-        data = data,
-        flags = flags + {.Dirty},
-    }
-    base.hash_pool_insert(&_state.files, hash, handle, file) or_return
-    return false
-}
-
-register_const_directory :: proc(files: []runtime.Load_Directory_File) -> (ok: bool) {
-    ok = true
-    for file in files {
-        if !register_file_data(file.name, file.data) {
-            base.log_err("Failed to register file '%s' from a constant directory", file.name)
-            ok = false
-        }
-    }
-    return ok
-}
-
-// TODO: allow path patterns, just like platform dir iterator?
-register_directory :: proc(path: string) {
-    iter: platform.Directory_Iter
-
-    if !platform.is_directory(path) {
-        base.log_err("Cannot load data, '%s' is not a valid directory path", path)
-    }
-
-    pattern := strings_join(path, "\\*", allocator = context.temp_allocator)
-
-    files := make([dynamic]string, 0, 64, context.temp_allocator)
-
-    for name in platform.iter_directory(&iter, pattern, context.temp_allocator) {
-        full := strings_join(path, platform.SEPARATOR, name, allocator = context.temp_allocator)
-
-        if !platform.is_file(full) {
-            continue
-        }
-
-        data, data_ok := platform.read_file_by_path(
-            full,
-            allocator = _state.allocator,
-        )
-
-        if !data_ok {
-            base.log_err("VFS failed to register file '%s' from directory '%s', couldn't read file data", name, path)
-            continue
-        }
-
-        register_file_data(name, data, flags = {.Dynamically_Allocated})
-
-        append(&files, name)
-    }
-}
-
-watch_asset_directory :: proc(path: string) -> bool {
-    if _state.watched_dirs_num > MAX_WATCHED_DIRS {
-        base.log_err("Failed to watch asset directory, too many watched directories")
-        return false
-    }
-
-    index := _state.watched_dirs_num
-    dir := &_state.watched_dirs[index]
-
-    if !platform.init_file_watcher(&dir.watcher, path, recursive = false) {
-        intrinsics.mem_zero(dir, size_of(Watched_Dir))
-        return false
-    }
-
-    dir.path_len = i32(copy(dir.path[:], path))
-
-    _state.watched_dirs_num += 1
-
-    return true
-}
-
-_get_file_by_hash :: proc(hash: u64) -> (file: ^File, ok: bool) {
-    handle := base.hash_pool_find(_state.files, hash) or_return
-    return base.hash_pool_get(&_state.files, handle)
 }
 
 
@@ -1679,12 +1539,11 @@ get_sound_resource :: proc(handle: Sound_Resource_Handle) -> (result: audio.Reso
 
 load_sound_resource :: proc(path: string) -> (result: Sound_Resource_Handle, ok: bool) #optional_ok {
     name := asset_name_from_path(path)
-    // TODO: register the resource internally for hot-reload
-    data, data_ok := get_file_data(path)
+    data, data_ok := read_file(path)
     if !data_ok {
         base.log_err("Failed to load sound resource '%s' from '%s', VFS file not found", name, path)
+        return {}, false
     }
-
     return create_sound_resource_encoded(name, data)
 }
 

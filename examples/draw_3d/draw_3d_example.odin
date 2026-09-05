@@ -31,9 +31,7 @@ _init :: proc() {
     platform.set_mouse_relative(rv.get_window(), true)
     platform.set_mouse_visible(false)
 
-    rv.register_file_data("test_shader.ps.hlsl", #load("../data/test_shader.ps.hlsl"))
-
-    state.shader = rv.load_shader("test_shader.ps.hlsl")
+    state.shader = rv.create_shader_from_source("test_shader", #load("../data/test_shader.ps.hlsl", string))
 
     state.cam_pos = {1.5, 3, -8}
     state.cam_ang = {0.3, 0, 0}

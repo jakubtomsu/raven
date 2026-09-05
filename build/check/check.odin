@@ -84,7 +84,7 @@ _tasks := []Task {
 }
 
 main :: proc() {
-    num_ok := 0
+    failed: [dynamic]Task
     for task in _tasks {
         if ODIN_OS not_in task.platforms {
             continue
@@ -97,12 +97,20 @@ main :: proc() {
             ok = execute_odin(task.args, os.TIMEOUT_INFINITE)
         }
 
-        if ok {
-            num_ok += 1
+        if !ok {
+            append(&failed, task)
         }
     }
 
-    fmt.printfln("%i/%i tasks passed", num_ok, len(_tasks))
+    fmt.printfln("\nDone, %i/%i tasks finished successfully.", len(_tasks) - len(failed), len(_tasks))
+
+    if len(failed) != len(_tasks) {
+        fmt.eprintln("Failed tasks:")
+        for task in failed {
+            fmt.printfln("\t%s", strings.join(task.args, " "))
+        }
+        os.exit(1)
+    }
 }
 
 execute_odin :: proc(args: []string, timeout: time.Duration) -> bool {
@@ -115,7 +123,7 @@ execute_odin :: proc(args: []string, timeout: time.Duration) -> bool {
     process, start_err := os.process_start(os.Process_Desc{
         command = cmd[:],
         stdout  = nil,
-        stderr  = os.stderr,
+        stderr  = nil,
         stdin   = nil,
     })
 
@@ -156,12 +164,12 @@ execute_odin_run :: proc(task: Task) -> bool {
     process, start_err := os.process_start(os.Process_Desc{
         command = {EXE},
         stdout  = nil,
-        stderr  = os.stderr,
+        stderr  = nil,
         stdin   = nil,
     })
 
     if start_err != nil {
-        fmt.eprintln("Process failed to start", start_err)
+        fmt.eprintln("\tProcess failed to start", start_err)
         return false
     }
 
@@ -176,11 +184,11 @@ wait_process :: proc(process: os.Process, timeout: time.Duration) -> bool {
         return true
     }
     if wait_err != nil {
-        fmt.eprintln("Process wait failed:", wait_err)
+        fmt.eprintln("\tProcess wait failed:", wait_err)
         return false
     }
     if state.exit_code != 0 {
-        fmt.eprintln("Process failed with exit code:", state.exit_code)
+        fmt.eprintln("\tProcess failed with exit code:", state.exit_code)
         return false
     }
     return true

@@ -371,15 +371,13 @@ _get_texture :: proc(handle: Texture_Handle) -> (result: ^Texture, ok: bool) #op
 }
 
 load_texture :: proc(path: string, pool_handle: Texture_Pool_Handle = {}) -> (result: Texture_Handle, ok: bool) #optional_ok {
-    npath := normalize_path(path, context.temp_allocator)
-    name := asset_name_from_path(npath)
-    base.log_info("Loading texture '%s' from path '%s'", name, npath)
-    data, data_ok := get_file_data(npath)
+    base.log_info("Loading texture from '%s'", path)
+    data, data_ok := read_file(path)
     if !data_ok {
-        base.log_err("Failed to load texture '%s', couldn't get file data", name)
+        base.log_err("Failed to load texture '%s', couldn't get file data", path)
         return {}, false
     }
-    return create_texture_from_encoded_data(name, data, pool_handle)
+    return create_texture_from_encoded_data(path, data, pool_handle)
 }
 
 create_texture_from_encoded_data :: proc(name: string, data: []byte, pool_handle: Texture_Pool_Handle = {}) -> (result: Texture_Handle, ok: bool) {
@@ -559,28 +557,24 @@ find_available_texture_pool :: proc(size: [2]i32) -> (Texture_Pool_Handle, bool)
 
 
 
-
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // MARK: Shaders
 //
 
 @(require_results)
 load_shader :: proc(path: string) -> (result: Shader_Handle, ok: bool) #optional_ok {
-    npath := normalize_path(path, context.temp_allocator)
-
     when SHADER_COMPILER_ENABLED {
-        source, source_ok := get_file_data(npath)
+        source, source_ok := read_file(path)
 
         if source_ok {
-            name := asset_name_from_path(npath)
-            return create_shader_from_source(name, cast(string)source)
+            return create_shader_from_source(path, cast(string)source)
         }
     }
 
-    bin, bin_ok := get_file_data(strings_join(npath, ".bin", allocator = context.temp_allocator))
+    bin, bin_ok := read_file(strings_join(path, ".bin", allocator = context.temp_allocator))
 
     if bin_ok {
-        name := asset_name_from_path(npath)
+        name := asset_name_from_path(path)
         return create_shader_from_bin(name, bin)
     }
 
@@ -668,8 +662,7 @@ _shader_kind_to_shader_compiler_stage :: proc(kind: gpu.Shader_Kind) -> shader_c
 }
 
 _shader_include_proc :: proc(path: string, user: rawptr) -> (result: string, ok: bool) {
-    npath := normalize_path(path, context.temp_allocator)
-    data := get_file_data(npath, flush = false) or_return
+    data := read_file(path) or_return
     return string(data), true
 }
 

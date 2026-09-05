@@ -155,11 +155,6 @@ hotreload_run :: proc(pkg: string, pkg_path: string) -> bool {
 
     prev_data: rawptr
 
-    watcher: platform.File_Watcher
-    platform.init_file_watcher(&watcher, pkg_path)
-
-    any_changes := false
-
     for {
         assert(module.callback != nil)
 
@@ -167,26 +162,6 @@ hotreload_run :: proc(pkg: string, pkg_path: string) -> bool {
 
         if prev_data == nil {
             break
-        }
-
-        prev_any_changes := any_changes
-
-        changes := platform.poll_file_watcher(&watcher)
-        for change in changes {
-            // base.log_info("Hotreload: file changed:", change)
-            if strings.ends_with(change, ".odin") {
-                any_changes = true
-            }
-        }
-
-        if prev_any_changes && any_changes {
-            any_changes = false
-
-            // EXPERIMENTAL
-            // Sometimes fails with:
-            // Syntax Error: Failed to parse file: something.odin; invalid file or cannot be found
-            // base.log_info("HOTRELOADAUTO RECOMPILING")
-            // compile_hot(pkg_path, pkg, curr_index + 1)
         }
 
         new_file, new_ok := hotreload_find_latest_dll(pkg)
