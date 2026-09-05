@@ -1,6 +1,7 @@
 #+vet explicit-allocators shadowing style
 package ravn
 
+import "core:strings"
 import "base"
 import "base/ufmt"
 import "gpu"
@@ -23,34 +24,29 @@ VALIDATION :: #config(RAVN_VALIDATION, !RELEASE)
 DEBUG_TRACE_ENABLED :: ODIN_DEBUG && #config(RAVN_DEBUG_TRACE, !RELEASE) // Debug symbols are required
 SHADER_COMPILER_ENABLED :: #config(RAVN_SHADER_COMPILER, !RELEASE)
 
-MAX_ARENAS :: 64
-MAX_TEXTURES :: 256 // Use texture pools if you hit this limit.
-MAX_MESHES :: 1024
-MAX_OBJECTS :: 1024
-MAX_SPLINES :: 1024
-
-MAX_WATCHED_DIRS :: 8
-MAX_DRAW_LAYERS :: 16
-MAX_RENDER_TEXTURES :: 64
-MAX_TEXTURE_RESOURCES :: 64
-MAX_SHADERS :: 64
-MAX_FILES :: 1024
-MAX_SOUND_RESOURCES :: 1024
-
-MAX_TOTAL_SPRITE_INSTANCES :: 1024 * 64
-MAX_TOTAL_MESH_INSTANCES :: 1024 * 64 // Shared between meshes, lines and triangles
-MAX_TOTAL_DYNAMIC_VERTS :: 1024 * 64 // Shared between triangles and lines
-
-MAX_TEXTURE_POOLS :: 64
-MAX_TEXTURE_POOL_SLICES :: 64
-MAX_DRAW_STATE_DEPTH :: 64
-MAX_TOTAL_DRAW_BATCHES :: 4096
+MAX_ARENAS                  :: #config(MAX_ARENAS, 64)
+MAX_TEXTURES                :: #config(MAX_TEXTURES, 256) // Use texture pools if you hit this limit.
+MAX_MESHES                  :: #config(MAX_MESHES, 1024)
+MAX_OBJECTS                 :: #config(MAX_OBJECTS, 1024)
+MAX_SPLINES                 :: #config(MAX_SPLINES, 1024)
+MAX_DRAW_LAYERS             :: #config(MAX_DRAW_LAYERS, 16)
+MAX_RENDER_TEXTURES         :: #config(MAX_RENDER_TEXTURES, 64)
+MAX_TEXTURE_RESOURCES       :: #config(MAX_TEXTURE_RESOURCES, 64)
+MAX_SHADERS                 :: #config(MAX_SHADERS, 64)
+MAX_FILES                   :: #config(MAX_FILES, 1024)
+MAX_SOUND_RESOURCES         :: #config(MAX_SOUND_RESOURCES, 1024)
+MAX_TOTAL_SPRITE_INSTANCES  :: #config(MAX_TOTAL_SPRITE_INSTANCES, 1024) * 64
+MAX_TOTAL_MESH_INSTANCES    :: #config(MAX_TOTAL_MESH_INSTANCES, 1024) * 64 // Shared between meshes, lines and triangles
+MAX_TOTAL_DYNAMIC_VERTS     :: #config(MAX_TOTAL_DYNAMIC_VERTS, 1024) * 64 // Shared between triangles and lines
+MAX_TEXTURE_POOLS           :: #config(MAX_TEXTURE_POOLS, 64)
+MAX_TEXTURE_POOL_SLICES     :: #config(MAX_TEXTURE_POOL_SLICES, 64)
+MAX_DRAW_STATE_DEPTH        :: #config(MAX_DRAW_STATE_DEPTH, 64)
+MAX_TOTAL_DRAW_BATCHES      :: #config(MAX_TOTAL_DRAW_BATCHES, 4096)
 
 DEFAULT_RENDER_TEXTURE :: Render_Texture_Handle{index = 1, gen = 0}
 // This is the actual swapchain used for rendering directly to screen.
 
 HASH_SEED :: #config(RAVN_HASH_SEED, 0xcbf29ce484222325)
-MAX_PROBE_DIST :: #config(RAVN_MAX_TABLE_PROBE_DIST, 16)
 HASH_ALG :: "fnv64a"
 
 UV_EPS :: (1.0 / 2048.0)
@@ -180,9 +176,9 @@ Context_State :: struct {
     tracking:   mem.Tracking_Allocator,
 }
 
-File :: struct {
-    data:   []byte,
-    flags:  bit_set[File_Flag],
+File :: struct #all_or_none {
+    data:       []byte,
+    flags:      bit_set[File_Flag],
 }
 
 File_Flag :: enum u8 {
@@ -870,21 +866,33 @@ read_file :: proc(path: string, temp := true) -> ([]byte, bool) {
         if temp {
             flags += {.Temp}
         }
-        register_file(path, data, flags)
+
+        file: File = {
+            flags = flags,
+            data = data,
+        }
+
+        if !_register_file(hash, file) {
+            base.log_err("Failed to register file: %s", path)
+        }
 
         return data, true
     }
 }
 
-register_file :: proc(path: string, data: []byte, flags: bit_set[File_Flag] = {}) -> bool {
+register_file_data :: proc(path: string, data: []byte, flags: bit_set[File_Flag] = {}) -> bool {
     hash := hash_name(normalize_path(path, context.temp_allocator))
-    handle, exists := base.hash_pool_find_free(_state.files, hash) or_return
-    if exists {
-        return false
-    }
     file := File{
         data = data,
         flags = flags,
+    }
+    return _register_file(hash, file)
+}
+
+_register_file :: proc(hash: u64, file: File) -> bool {
+    handle, exists := base.hash_pool_find_free(_state.files, hash) or_return
+    if exists {
+        return false
     }
     base.hash_pool_insert(&_state.files, hash, handle, file) or_return
     return true
@@ -953,11 +961,11 @@ get_builtin_shader :: proc(id: Builtin_Shader) -> Shader_Handle {
 }
 
 _load_builtin_assets :: proc() {
-    register_file("CGA8x8thick.png",    #load("data/CGA8x8thick.png"))
-    register_file("CGA8x8thin.png",     #load("data/CGA8x8thin.png"))
-    register_file("default.png",        #load("data/default.png"))
-    register_file("error.png",          #load("data/error.png"))
-    register_file("white.png",          #load("data/white.png"))
+    register_file_data("CGA8x8thick.png",    #load("data/CGA8x8thick.png"))
+    register_file_data("CGA8x8thin.png",     #load("data/CGA8x8thin.png"))
+    register_file_data("default.png",        #load("data/default.png"))
+    register_file_data("error.png",          #load("data/error.png"))
+    register_file_data("white.png",          #load("data/white.png"))
 
     default_pool, default_pool_ok := create_texture_pool(128, 64)
     assert(default_pool_ok)

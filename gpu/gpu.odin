@@ -1070,19 +1070,19 @@ set_compute_pipeline :: proc(handle: Compute_Pipeline_Handle) {
 }
 
 // WARNING: currently 'data' is not internally copied before use, make sure to keep it alive and valid for the whole pass.
-update_constants :: proc(handle: Resource_Handle, data: []byte) {
-    assert(_state.curr_pass_desc == {}, "You must do all constant updates before rendering")
+update_constants :: proc(handle: Resource_Handle, data: []byte, loc := #caller_location) {
+    assert(_state.curr_pass_desc == {}, "You must do all constant updates before rendering", loc = loc)
 
     res, res_ok := _get_resource(handle)
     if !res_ok {
         return
     }
 
-    assert(res.kind == .Constants)
-    assert(len(data) <= int(res.size.x) * int(res.size.y))
-    assert(len(data) % int(res.size.x) == 0)
-    assert(res.size.y >= 1)
-    assert(res.size.z == 1)
+    assert(res.kind == .Constants, loc = loc)
+    assert(len(data) <= int(res.size.x) * int(res.size.y), loc = loc)
+    assert(len(data) % int(res.size.x) == 0, loc = loc)
+    assert(res.size.y >= 1, loc = loc)
+    assert(res.size.z == 1, loc = loc)
 
     _update_constants(res, data)
 }
@@ -1091,15 +1091,15 @@ update_constants :: proc(handle: Resource_Handle, data: []byte) {
 // Written range is [offset : offset + sum_of_all_buffer_sizes].
 // This way the backend can sometimes more efficiently copy the data to the native buffer,
 // compared to always allocating a temp buffer to combine the writes.
-update_buffer :: proc(handle: Resource_Handle, offset: int, buffers: ..[]byte) {
-    assert(_state.curr_pass_desc == {}, "You must do all buffer updates before rendering")
+update_buffer :: proc(handle: Resource_Handle, offset: int, buffers: ..[]byte, loc := #caller_location) {
+    assert(_state.curr_pass_desc == {}, "You must do all buffer updates before rendering", loc = loc)
 
     if len(buffers) == 0 {
         return
     }
 
     res, res_ok := _get_resource(handle)
-    assert(res_ok)
+    assert(res_ok, loc = loc)
     if !res_ok {
         return
     }
@@ -1109,10 +1109,10 @@ update_buffer :: proc(handle: Resource_Handle, offset: int, buffers: ..[]byte) {
         total_len += len(buf)
     }
 
-    assert(res.kind == .Buffer || res.kind == .Index_Buffer)
-    assert(total_len <= int(res.size.x))
-    assert(res.size.y == 1 && res.size.z == 1)
-    assert(res.usage != .Immutable)
+    assert(res.kind == .Buffer || res.kind == .Index_Buffer, loc = loc)
+    assert(total_len <= int(res.size.x), loc = loc)
+    assert(res.size.y == 1 && res.size.z == 1, loc = loc)
+    assert(res.usage != .Immutable, loc = loc)
 
     _update_buffer(res, offset, buffers)
 }
@@ -1405,66 +1405,6 @@ _get_resource :: proc(handle: Resource_Handle) -> (^Resource_State, bool) {
 @(require_results)
 _get_shader :: proc(handle: Shader_Handle) -> (^Shader_State, bool) {
     return base.pool_get(&_state.shaders, handle)
-}
-
-@(require_results)
-_table_find_slot :: proc(table_used: base.Bit_Pool($N)) -> (index: int, ok: bool) {
-    return base.bit_pool_find_0(table_used)
-}
-
-@(require_results)
-_table_insert :: proc(table_used: ^base.Bit_Pool($N), table_gen: [N]Handle_Gen, #any_int index: int) -> (result: Handle) {
-    base.bit_pool_set_1(table_used, index)
-    result = {
-        index = Handle_Index(index),
-        gen = table_gen[index],
-    }
-    return result
-}
-
-_table_destroy :: proc(table_used: ^base.Bit_Pool($N), table_gen: ^[N]Handle_Gen, handle: $H/Handle) {
-    if table_gen[handle.index] != handle.gen {
-        return
-    }
-
-    assert(base.bit_pool_is_1(table_used^, handle.index))
-
-    base.bit_pool_set_0(table_used, handle.index)
-    table_gen[handle.index] += 1
-}
-
-@(require_results)
-_table_find_empty_hash :: proc(table: ^[$N]Hash, hash: u64) -> (result: int, prev: Hash, ok: bool) {
-    start_index := int(hash) %% N
-
-    for offs in 0..<MAX_HASH_PROBE_DIST {
-        index := (start_index + offs) %% N
-        if index == 0 {
-            continue
-        }
-
-        h := table[index]
-
-        if h == 0 || h == hash {
-            return index, h, true
-        }
-    }
-
-    return 0, 0, false
-}
-
-
-@(require_results)
-_table_get :: proc(table: ^[$N]$T, table_gen: [N]Handle_Gen, handle: $H/Handle) -> (^T, bool) #no_bounds_check {
-    if handle.index <= 0 || handle.index >= N {
-        return nil, false
-    }
-
-    if handle.gen != table_gen[handle.index] {
-        return nil, false
-    }
-
-    return &table[handle.index], true
 }
 
 @(require_results)

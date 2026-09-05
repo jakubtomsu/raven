@@ -399,7 +399,7 @@ for {
 Iter :: struct {
     bvh:        ^BVH,
     using node: ^Node,
-    stack:      [64 * 2]u16,
+    stack:      [64 * 2]u32,
     stack_len:  i32,
 }
 
@@ -437,7 +437,7 @@ iter_next :: proc(iter: ^Iter, t0, t1: f32) -> bool {
         iter_pop(iter) or_return
     } else {
         if t1 != max(f32) {
-            iter.stack[iter.stack_len] = u16(child1)
+            iter.stack[iter.stack_len] = u32(child1)
             iter.stack_len += 1
         }
         iter.node = &iter.bvh.nodes[child0]
@@ -454,7 +454,7 @@ iter_unordered_next :: proc(iter: ^Iter, hit0, hit1: bool) -> bool {
 
     if hit0 {
         if hit1 {
-            iter.stack[iter.stack_len] = u16(child1)
+            iter.stack[iter.stack_len] = u32(child1)
             iter.stack_len += 1
             iter.node = &iter.bvh.nodes[child0]
         } else {

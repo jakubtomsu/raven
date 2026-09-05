@@ -58,6 +58,7 @@ when BACKEND == BACKEND_WASAPI {
 
         format := (cast(^wasapi.WAVEFORMATEXTENSIBLE)device_format)^
         format.Samples.wValidBitsPerSample = 32
+        format.Format.nChannels = 2
         format.dwChannelMask = {.FRONT_LEFT, .FRONT_RIGHT}
         format.SubFormat = wasapi.KSDATAFORMAT_SUBTYPE_IEEE_FLOAT
 
@@ -69,6 +70,12 @@ when BACKEND == BACKEND_WASAPI {
         client_flags: u32
         if !SINGLE_THREAD {
             client_flags |= u32(wasapi.AUDCLNT_FLAG.STREAM_EVENTCALLBACK)
+        }
+
+        closest: ^wasapi.WAVEFORMATEX
+        if _state.audio_client->IsFormatSupported(.SHARED, cast(^wasapi.WAVEFORMATEX)&format, &closest) != windows.S_OK {
+            base.log_err("WASAPI: stereo f32 not supported.")
+            return false
         }
 
         _wasapi_check(_state.audio_client->Initialize(

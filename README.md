@@ -26,7 +26,6 @@ Something *simple* you can prototype in, but also *stable* enough to make polish
 - Batteries-included
 - Simple and hackable
 - Minimal dependencies
-- Code and Asset hotreloading
 - Zero hidden internal state
 - Modular architecture
 
@@ -46,7 +45,7 @@ main :: proc() {
 _update :: proc(_: rawptr) -> rawptr {
     if rv.key_pressed(.Escape) { rv.request_shutdown() }
     // Initialize camera for layer 0
-    rv.set_layer_params(0, rv.make_screen_camera(rv.get_screen_size()))
+    rv.update_draw_layer(0, rv.make_screen_camera(rv.get_screen_size()))
     // Set up draw state
     rv.set_draw_texture(rv.get_builtin_texture(.CGA8x8thick))
     rv.draw_text_2d("Hello World! ☺", {100, 100}, scale = 4, spacing = 1)

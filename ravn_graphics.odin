@@ -800,7 +800,7 @@ get_default_draw_state :: proc() -> (result: Draw_State) {
 }
 
 set_draw_layer :: proc(#any_int layer: i32) {
-    assert(layer >= 0 && layer <= MAX_DRAW_LAYERS)
+    assert(layer >= 0 && layer < MAX_DRAW_LAYERS)
     _state.draw_state.draw_layer = u8(layer)
 }
 
@@ -1315,7 +1315,7 @@ draw_triangle :: proc(
         )
     }
 
-    draw_triangles(..verts[:])
+    draw_triangles(..verts[:], add_col = add_col)
 }
 
 draw_triangle_2d :: proc(
@@ -1334,7 +1334,7 @@ draw_triangle_2d :: proc(
             col = col[i],
         )
     }
-    draw_triangles(..verts[:])
+    draw_triangles(..verts[:], add_col = add_col)
 }
 
 // Prefer draw_lines if you need to efficiently draw many lines.
@@ -1364,7 +1364,7 @@ draw_line :: proc(
         )
     }
 
-    draw_lines(..verts[:])
+    draw_lines(..verts[:], add_col = add_col)
 }
 
 draw_line_2d :: proc(
@@ -1384,7 +1384,7 @@ draw_line_2d :: proc(
             col = col[i],
         )
     }
-    draw_lines(..verts[:])
+    draw_lines(..verts[:], add_col = add_col)
 }
 
 _init_draw_array :: #force_inline proc(arr: ^$T/#soa[dynamic]$V, #any_int last_len: int) {
@@ -1887,10 +1887,6 @@ _draw_batch_table_find_or_create :: proc(table: ^$T/Draw_Batch_Table($Inst), key
     table.len += 1
 
     return index, true
-}
-
-ceil_div :: proc(a, b: $T) -> T where intrinsics.type_is_integer(T) {
-    return (a + b) / b
 }
 
 _draw_batch_push :: proc(batch: ^Draw_Batch($Inst), inst: Inst) #no_bounds_check {

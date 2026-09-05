@@ -428,7 +428,7 @@ destroy_resource :: proc(handle: Resource_Handle) -> bool {
         return false
     }
     _state.resources_gen[handle.index] += 1
-    intrinsics.atomic_store(&_state.resources_state[handle.index], .Request_Free)
+    intrinsics.atomic_store(&_state.resources_state[handle.index], .Free)
     return true
 }
 
