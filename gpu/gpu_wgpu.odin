@@ -13,8 +13,8 @@ when BACKEND == BACKEND_WGPU {
 
     _WGPU_CALLBACK_MODE: wgpu.CallbackMode: .AllowProcessEvents
 
-    _BIND_GROUP_CACHE_SIZE :: 512
-    _SAMPLER_CACHE_BUCKET :: 8
+    _MAX_SAMPLERS :: 32
+    _MAX_BIND_GROUP_LAYOUTS :: 32
 
     _State :: struct {
         instance:               wgpu.Instance,
@@ -29,47 +29,50 @@ when BACKEND == BACKEND_WGPU {
         render_pass_encoder:    wgpu.RenderPassEncoder,
         compute_pass_encoder:   wgpu.ComputePassEncoder,
         draw_data_buf:          wgpu.Buffer,
-
-        bind_group_hash:        [_BIND_GROUP_CACHE_SIZE]Hash,
-        bind_group_data:        [_BIND_GROUP_CACHE_SIZE]_Bind_Group,
         uniform_offset_align:   u32,
-
-        // filter, bounds x
-        sampler_cache:          [Filter][Texture_Bounds]Bucket(_SAMPLER_CACHE_BUCKET, Sampler_Desc, _Sampler),
+        samplers:               [dynamic; _MAX_SAMPLERS]_Sampler_State,
+        bind_group_layouts:     [dynamic; _MAX_BIND_GROUP_LAYOUTS]_Bind_Group_Layout,
     }
 
-    _Bind_Group_Handle :: Handle // currently gen unused
-
-    _Pipeline :: struct {
-        pip:        wgpu.RenderPipeline,
-        bind_group: _Bind_Group_Handle,
+    _Graphics_Pipeline_State :: struct #all_or_none {
+        pip:    wgpu.RenderPipeline,
     }
 
-    _Compute_Pipeline :: struct {
-        pip:        wgpu.ComputePipeline,
-        bind_group: _Bind_Group_Handle,
+    _Compute_Pipeline_State :: struct #all_or_none {
+        pip:    wgpu.ComputePipeline,
     }
 
-    _Shader :: struct {
+    _Bindings_State :: struct #all_or_none {
+        layout: wgpu.BindGroupLayout,
+        group:  wgpu.BindGroup,
+    }
+
+    _Shader_State :: struct #all_or_none {
         module: wgpu.ShaderModule,
     }
 
-    _Blend :: struct {
+    _Blend_State :: struct #all_or_none {
         blend: wgpu.BlendState,
     }
 
-    _Resource :: struct #raw_union {
+    _Resource_State :: struct #raw_union {
         buf:    wgpu.Buffer,
         using _: struct {
             tex:        wgpu.Texture,
             tex_view:   wgpu.TextureView,
+            surface:    wgpu.Surface,
         },
     }
 
-    _Sampler :: struct {
+    _Sampler_State :: struct #all_or_none {
         smp:    wgpu.Sampler,
+        desc:   Sampler_Desc,
     }
 
+    _Bind_Group_Layout :: struct #all_or_none {
+        bgl:    wgpu.BindGroupLayout,
+        desc:   [Resource_Kind]i32,
+    }
 
 
     /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -308,31 +311,27 @@ when BACKEND == BACKEND_WGPU {
     // MARK: Create
     //
 
-    _Bind_Group :: struct {
-        layout: wgpu.BindGroupLayout,
-        group:  wgpu.BindGroup,
+    _get_or_create_sampler :: proc(desc: Sampler_Desc) -> (result: wgpu.Sampler) {
+        // Only runs on pipeline creation, which must be rate.
+        for sampler in _state.samplers {
+            if sampler.desc == desc {
+                return sampler.smp
+            }
+        }
+        return _create_sampler(desc)
     }
 
-
-    _get_or_create_sampler :: proc(desc: Sampler_Desc) -> (result: _Sampler) {
-        bucket := &_state.sampler_cache[desc.filter][desc.bounds.x]
-        sampler := bucket_find_or_create(bucket, desc, _create_sampler)
-        return sampler
-    }
-
-    _create_sampler :: proc(desc: Sampler_Desc) -> (result: _Sampler) {
+    _create_sampler :: proc(desc: Sampler_Desc) -> (result: wgpu.Sampler) {
         base.log_debug("GPU: Creating WebGPU sampler")
 
-        min_filter, mag_filter, mip_filter := _wgpu_filter(desc.filter)
-
-        result.smp = wgpu.DeviceCreateSampler(_state.device, &wgpu.SamplerDescriptor{
+        result = wgpu.DeviceCreateSampler(_state.device, &wgpu.SamplerDescriptor{
             label = "<SMP>",
             addressModeU = _wgpu_texture_bounds(desc.bounds.x),
             addressModeV = _wgpu_texture_bounds(desc.bounds.y),
             addressModeW = _wgpu_texture_bounds(desc.bounds.z),
-            magFilter = mag_filter,
-            minFilter = min_filter,
-            mipmapFilter = mip_filter,
+            minFilter = .Min in desc.filter ? .Linear : .Nearest,
+            magFilter = .Mag in desc.filter ? .Linear : .Nearest,
+            mipmapFilter = .Mip in desc.filter ? .Linear : .Nearest,
             lodMinClamp = desc.mip_min,
             lodMaxClamp = desc.mip_max,
             // compare = _wgpu_comparison(desc.comparison),
@@ -340,32 +339,29 @@ when BACKEND == BACKEND_WGPU {
             maxAnisotropy = clamp(u16(desc.max_aniso), 1, 16),
         })
 
+        append(&_state.samplers, _Sampler_State{
+            smp = result,
+            desc = desc,
+        })
+
         return result
     }
 
-    _get_or_create_bind_group :: proc(desc: Pipeline_Bindings_Desc) -> (result: _Bind_Group, handle: _Bind_Group_Handle, ok: bool) {
-        hash := hash_pipeline_bindings_desc(desc)
-        index, prev := _table_find_empty_hash(&_state.bind_group_hash, hash) or_return
-
-        // Already exists
-        if prev != 0 {
-            return _state.bind_group_data[index], {index = Handle_Index(index), gen = 0}, true
+    _get_or_create_bind_group_layout :: proc(desc: [Resource_Kind]i32) -> (result: wgpu.BindGroupLayout, ok: bool) {
+        for layout in _state.bind_group_layouts {
+            if layout.desc == desc {
+                return layout
+            }
         }
-
-        result = _create_bind_group(desc) or_return
-
-        _state.bind_group_data[index] = result
-        _state.bind_group_hash[index] = hash
-
-        return result, {index = Handle_Index(index), gen = 0}, true
+        return _create_bind_group_layout(desc)
     }
 
-    _create_bind_group :: proc(desc: Pipeline_Bindings_Desc) -> (result: _Bind_Group, ok: bool) {
-        base.log_debug("GPU: Creating WebGPU bind group")
+    _create_bind_group_layout :: proc(desc: [Resource_Kind]i32) -> (result: wgpu.BindGroupLayout, ok: bool) {
+        base.log_debug("GPU: Creating WebGPU bind group layout")
 
         num_entries := 0
         layout_entries: [SAMPLER_BIND_SLOTS + CONSTANTS_BIND_SLOTS + RESOURCE_BIND_SLOTS]wgpu.BindGroupLayoutEntry
-        group_entries:  [SAMPLER_BIND_SLOTS + CONSTANTS_BIND_SLOTS + RESOURCE_BIND_SLOTS]wgpu.BindGroupEntry
+
 
         for smp, i in desc.samplers {
             sampler := _get_or_create_sampler(smp)
@@ -431,7 +427,7 @@ when BACKEND == BACKEND_WGPU {
             }
 
             switch res.kind {
-            case .Invalid, .Constants, .Index_Buffer, .Swapchain:
+            case .Invalid, .Constants:
                 assert(false)
 
             case .Buffer:
@@ -440,11 +436,6 @@ when BACKEND == BACKEND_WGPU {
                     hasDynamicOffset = false,
                     minBindingSize = 0,
                 }
-
-                assert(res.size.x % 4 == 0)
-
-                group_entries[num_entries].size = u64(res.size.x)
-                group_entries[num_entries].buffer = res.buf
 
             case .Texture2D, .Texture3D:
                 dim: wgpu.TextureViewDimension
@@ -463,8 +454,6 @@ when BACKEND == BACKEND_WGPU {
                     viewDimension = dim,
                     multisampled = false,
                 }
-
-                group_entries[num_entries].textureView = res.tex_view
             }
 
             num_entries += 1
@@ -567,26 +556,8 @@ when BACKEND == BACKEND_WGPU {
         return result, true
     }
 
-    _create_pipeline :: proc(name: string, desc: Pipeline_Desc) -> (result: _Pipeline, ok: bool) {
-        // base.log_debug("GPU: Creating WebGPU pipeline '%s'", name)
-
-        bindings := get_pipeline_desc_bindings(desc)
-        bind_group, bind_group_handle, bind_group_ok := _get_or_create_bind_group(bindings)
-        if !bind_group_ok {
-            base.log_err("WGPU: Failed to create pipeline: bind group creation failed")
-            return {}, false
-        }
-
-        pip_layout := wgpu.DeviceCreatePipelineLayout(_state.device, &wgpu.PipelineLayoutDescriptor{
-            label = name,
-            bindGroupLayoutCount = 1,
-            bindGroupLayouts = &bind_group.layout,
-        })
-
-        if pip_layout == nil {
-            base.log_err("WGPU: Failed to create pipeline layout")
-            return {}, false
-        }
+    _create_graphics_pipeline :: proc(name: string, desc: Graphics_Pipeline_Desc) -> (result: _Graphics_Pipeline_State, ok: bool) {
+        base.log_debug("GPU: Creating WebGPU pipeline '%s'", name)
 
         // NOTE: fill mode is ignored.
 
@@ -682,7 +653,7 @@ when BACKEND == BACKEND_WGPU {
 
         result.pip = wgpu.DeviceCreateRenderPipeline(_state.device, &{
             label = name,
-            layout = pip_layout,
+            layout = nil, // auto
             primitive = wgpu.PrimitiveState{
                 topology = _wgpu_topology(desc.topo),
                 stripIndexFormat = .Undefined,
@@ -719,32 +690,10 @@ when BACKEND == BACKEND_WGPU {
             return {}, false
         }
 
-        assert(bind_group_handle != {})
-        assert(bind_group.group != nil)
-
-        result.bind_group = bind_group_handle
-
         return result, true
     }
 
-    _create_compute_pipeline :: proc(name: string, desc: Compute_Pipeline_Desc) -> (result: _Compute_Pipeline, ok: bool) {
-        bind_group, bind_group_handle, bind_group_ok := _get_or_create_bind_group(desc.bindings)
-        if !bind_group_ok {
-            base.log_err("WGPU: Failed to create pipeline: bind group creation failed")
-            return {}, false
-        }
-
-        pip_layout := wgpu.DeviceCreatePipelineLayout(_state.device, &wgpu.PipelineLayoutDescriptor{
-            label = name,
-            bindGroupLayoutCount = 1,
-            bindGroupLayouts = &bind_group.layout,
-        })
-
-        if pip_layout == nil {
-            base.log_err("WGPU: Failed to create pipeline layout")
-            return {}, false
-        }
-
+    _create_compute_pipeline :: proc(name: string, desc: Compute_Pipeline_Desc) -> (result: _Compute_Pipeline_State, ok: bool) {
         cs, cs_ok := _get_shader(desc.cs)
         assert(cs_ok)
 
@@ -752,7 +701,7 @@ when BACKEND == BACKEND_WGPU {
             _state.device,
             &wgpu.ComputePipelineDescriptor{
                 label = name,
-                layout = pip_layout,
+                layout = nil, // auto
                 compute = wgpu.ComputeState{
                     module = cs.module,
                     entryPoint = "cs_main",
@@ -769,7 +718,7 @@ when BACKEND == BACKEND_WGPU {
         return result, true
     }
 
-    _update_swapchain :: proc(_: ^_Resource, _: rawptr, size: [2]i32) -> (ok: bool) {
+    _resize_swapchain :: proc(window: rawptr, size: [2]i32) -> (ok: bool) {
         _state.config = wgpu.SurfaceConfiguration {
             device      = _state.device,
             usage       = { .RenderAttachment },
@@ -794,7 +743,7 @@ when BACKEND == BACKEND_WGPU {
         name:       string,
         item_size:  i32,
         item_num:   i32,
-    ) -> (result: _Resource, ok: bool) {
+    ) -> (result: _Resource_State, ok: bool) {
 
         size: u64
         if item_num > 1 {
@@ -817,7 +766,7 @@ when BACKEND == BACKEND_WGPU {
         return result, true
     }
 
-    _create_shader :: proc(name: string, data: []u8, kind: Shader_Kind) -> (result: _Shader, ok: bool) {
+    _create_shader :: proc(name: string, data: []u8, kind: Shader_Kind) -> (result: _Shader_State, ok: bool) {
         result.module = wgpu.DeviceCreateShaderModule(_state.device, &wgpu.ShaderModuleDescriptor{
             nextInChain = &wgpu.ShaderSourceWGSL{
                 sType = .ShaderSourceWGSL,
@@ -843,7 +792,7 @@ when BACKEND == BACKEND_WGPU {
         render_texture: bool,
         rw_resource: bool,
         data: []byte,
-    ) -> (result: _Resource, ok: bool) {
+    ) -> (result: _Resource_State, ok: bool) {
         usage: wgpu.TextureUsageFlags = {.TextureBinding}
 
         if render_texture {
@@ -930,41 +879,15 @@ when BACKEND == BACKEND_WGPU {
 
     _create_buffer :: proc(
         name:   string,
+        kind:   Buffer_Kind,
         stride: i32,
         size:   i32,
         usage:  Usage,
         data:   []u8,
-    ) -> (result: _Resource, ok: bool) {
+    ) -> (result: _Resource_State, ok: bool) {
         result.buf = wgpu.DeviceCreateBuffer(_state.device, &{
             label            = name,
-            usage            = _wgpu_buffer_usage(usage) + {.Storage},
-            size             = u64(size),
-            mappedAtCreation = data != nil,
-        })
-
-        if result.buf == nil {
-            return {}, false
-        }
-
-        if data != nil {
-            mapping := wgpu.RawBufferGetMappedRange(result.buf, offset = 0, size = len(data))
-            intrinsics.mem_copy_non_overlapping(mapping, raw_data(data), len(data))
-
-            wgpu.BufferUnmap(result.buf)
-        }
-
-        return result, true
-    }
-
-    _create_index_buffer :: proc(
-        name:   string,
-        size:   i32,
-        data:   []u8,
-        usage:  Usage,
-    ) -> (result: _Resource, ok: bool) {
-        result.buf = wgpu.DeviceCreateBuffer(_state.device, &wgpu.BufferDescriptor{
-            label            = name,
-            usage            = _wgpu_buffer_usage(usage) + {.Index},
+            usage            = _wgpu_buffer_usage(usage) + _wgpu_buffer_kind(kind),
             size             = u64(size),
             mappedAtCreation = data != nil,
         })
@@ -975,9 +898,8 @@ when BACKEND == BACKEND_WGPU {
 
         if data != nil {
             assert(len(data) <= int(size))
-            mapping := wgpu.RawBufferGetMappedRange(result.buf, offset = 0, size = uint(size))
+            mapping := wgpu.RawBufferGetMappedRange(result.buf, offset = 0, size = len(data))
             intrinsics.mem_copy_non_overlapping(mapping, raw_data(data), len(data))
-
             wgpu.BufferUnmap(result.buf)
         }
 
@@ -996,10 +918,10 @@ when BACKEND == BACKEND_WGPU {
 
     _destroy_resource :: proc(resource: Resource_State) {
         switch resource.kind {
-        case .Invalid, .Swapchain:
+        case .Invalid:
             assert(false)
 
-        case .Buffer, .Constants, .Index_Buffer:
+        case .Buffer, .Constants:
             wgpu.BufferDestroy(resource.buf)
 
         case .Texture2D, .Texture3D:
@@ -1013,28 +935,25 @@ when BACKEND == BACKEND_WGPU {
     // MARK: Actions
     //
 
-    _begin_pass :: proc(name: string, desc: Pass_Desc) {
+    _begin_graphics_pass :: proc(name: string, desc: Graphics_Pass_Desc) {
         assert(_state.render_pass_encoder == nil)
 
-        // TODO
         num_color_atts := 0
         color_atts: [RENDER_TEXTURE_BIND_SLOTS]wgpu.RenderPassColorAttachment
 
         for color, i in desc.colors {
-            res := _get_resource(color.resource) or_break
-
             num_color_atts += 1
-
             view: wgpu.TextureView
-            #partial switch res.kind {
-            case .Texture2D:
-                view = res.tex_view
-
-            case .Swapchain:
+            if color.resource == SWAPCHAIN_HANDLE {
                 view = _state.surface_view
-
-            case:
-                base.log_err("Invalid pass color, must be a Texture2D")
+            } else {
+                res := _get_resource(color.resource) or_break
+                #partial switch res.kind {
+                case .Texture2D:
+                    view = res.tex_view
+                case:
+                    base.log_err("Invalid pass color, must be a Texture2D")
+                }
             }
 
             assert(view != nil)
@@ -1082,16 +1001,16 @@ when BACKEND == BACKEND_WGPU {
         )
     }
 
-    _end_pass :: proc() {
+    _end_graphics_pass :: proc() {
         assert(_state.render_pass_encoder != nil)
         wgpu.RenderPassEncoderEnd(_state.render_pass_encoder)
         _state.render_pass_encoder = nil
     }
 
-    _set_pipeline :: proc(
-        curr_pip: Pipeline_State,
-        curr: Pipeline_Desc,
-        prev: Pipeline_Desc,
+    _set_graphics_pipeline :: proc(
+        curr_pip: Graphics_Pipeline_State,
+        curr: Graphics_Pipeline_Desc,
+        prev: Graphics_Pipeline_Desc,
     ) {
         assert(curr_pip.pip != nil)
         assert(_state.render_pass_encoder != nil)
@@ -1123,13 +1042,124 @@ when BACKEND == BACKEND_WGPU {
         _state.compute_pass_encoder = nil
     }
 
-    _set_compute_pipeline :: proc(
-        curr_pip:   Compute_Pipeline_State,
-        curr:       Compute_Pipeline_Desc,
-        prev:       Compute_Pipeline_Desc,
-    ) {
+    _set_compute_pipeline :: proc(curr_pip: ^Compute_Pipeline_State) {
         assert(_state.compute_pass_encoder != nil)
         wgpu.ComputePassEncoderSetPipeline(_state.compute_pass_encoder, curr_pip.pip)
+    }
+
+    _set_bindings :: proc(state: Bindings_State) {
+        base.log_debug("GPU: Creating WebGPU bindings group")
+
+        num_entries := 0
+        group_entries:  [SAMPLER_BIND_SLOTS + CONSTANTS_BIND_SLOTS + RESOURCE_BIND_SLOTS]wgpu.BindGroupEntry
+
+        for smp, i in state.samplers {
+            sampler := _get_or_create_sampler(smp)
+
+            binding := u32(SAMPLER_SLOT_SHIFT + i)
+
+            group_entries[num_entries] = wgpu.BindGroupEntry{
+                binding = binding,
+                sampler = sampler,
+            }
+
+            num_entries += 1
+        }
+
+        for handle, i in state.constants {
+            res := _get_resource(handle) or_continue
+
+            assert(res.kind == .Constants)
+
+            binding := u32(CONSTANTS_SLOT_SHIFT + i)
+
+            group_entries[num_entries] = wgpu.BindGroupEntry{
+                binding = binding,
+                buffer = res.buf,
+                offset = 0,
+                size = u64(res.size.x),
+            }
+
+            num_entries += 1
+        }
+
+        for handle, i in state.resources {
+            res := _get_resource(handle) or_continue
+
+            binding := u32(RESOURCE_SLOT_SHIFT + i)
+
+            group_entries[num_entries] = wgpu.BindGroupEntry{
+                binding = binding,
+            }
+
+            switch res.kind {
+            case .Invalid, .Constants:
+                assert(false)
+
+            case .Buffer:
+                assert(res.size.x % 4 == 0)
+                group_entries[num_entries].size = u64(res.size.x)
+                group_entries[num_entries].buffer = res.buf
+
+            case .Texture2D, .Texture3D:
+                dim: wgpu.TextureViewDimension
+                if res.kind == .Texture3D {
+                    dim = ._3D
+                } else if res.size.z > 1 {
+                    dim = ._2DArray
+                } else {
+                    dim = ._2D
+                }
+
+                group_entries[num_entries].textureView = res.tex_view
+            }
+
+            num_entries += 1
+        }
+
+        for handle, i in state.rw_resources {
+            res := _get_resource(handle) or_continue
+
+            binding := u32(RW_RESOURCE_SLOT_SHIFT + i)
+
+            switch res.kind {
+            case .Invalid, .Constants:
+                assert(false)
+
+            case .Buffer:
+                assert(res.size.x % 4 == 0)
+                group_entries[num_entries].size = u64(res.size.x)
+                group_entries[num_entries].buffer = res.buf
+
+            case .Texture2D, .Texture3D:
+                dim: wgpu.TextureViewDimension
+                if res.kind == .Texture3D {
+                    dim = ._3D
+                } else if res.size.z > 1 {
+                    dim = ._2DArray
+                } else {
+                    dim = ._2DArray
+                }
+
+                group_entries[num_entries].textureView = res.tex_view
+            }
+
+            num_entries += 1
+        }
+
+        group = wgpu.DeviceCreateBindGroup(_state.device, &wgpu.BindGroupDescriptor{
+            label = base.get_debug_id_name(desc.id),
+            layout = layout,
+            entryCount = uint(num_entries),
+            entries = &group_entries[0],
+        })
+
+        if result.group == nil {
+            base.log_err("WGPU: Failed to create bind group")
+            return {}, false
+        }
+
+        return result, true
     }
 
     _update_buffer :: proc(res: ^Resource_State, offset: int, buffers: [][]byte) {
@@ -1200,7 +1230,7 @@ when BACKEND == BACKEND_WGPU {
     }
 
     _bind_constants_items :: proc(offsets: []u32) {
-        curr_pip, curr_pip_ok := _get_pipeline(_state.curr_pipeline)
+        curr_pip, curr_pip_ok := _get_graphics_pipeline(_state.encoder.graphics_pipeline)
 
         assert(curr_pip_ok)
         assert(_state.bind_group_hash[curr_pip.bind_group.index] != 0)
@@ -1212,9 +1242,7 @@ when BACKEND == BACKEND_WGPU {
         offsets_len := 0
         offsets_buf: [CONSTANTS_BIND_SLOTS]u32
 
-        // TODO: some of this should be cached on set_pipeline
         for offset, i in offsets {
-
             handle := _state.curr_pipeline_desc.constants[i]
 
             res := _get_resource(handle) or_continue
@@ -1244,8 +1272,7 @@ when BACKEND == BACKEND_WGPU {
         instance_num:   u32,
         const_offsets:  []u32,
     ) {
-        assert(_state.curr_pipeline != {})
-
+        assert(_state.encoder.mode == .Graphics)
         _bind_constants_items(const_offsets)
 
         wgpu.RenderPassEncoderDraw(
@@ -1263,6 +1290,7 @@ when BACKEND == BACKEND_WGPU {
         index_offset:   u32,
         const_offsets:  []u32,
     ) {
+        assert(_state.encoder.mode == .Graphics)
         _bind_constants_items(const_offsets)
 
         wgpu.RenderPassEncoderDrawIndexed(
@@ -1276,6 +1304,7 @@ when BACKEND == BACKEND_WGPU {
     }
 
     _dispatch_compute :: proc(size: [3]i32) {
+        assert(_state.encoder.mode == .Compute)
         wgpu.ComputePassEncoderDispatchWorkgroups(
             _state.compute_pass_encoder,
             workgroupCountX = u32(size.x),
@@ -1283,7 +1312,6 @@ when BACKEND == BACKEND_WGPU {
             workgroupCountZ = u32(size.z),
         )
     }
-
 
 
 
@@ -1321,6 +1349,16 @@ when BACKEND == BACKEND_WGPU {
         }
         assert(false)
         return .Load
+    }
+
+    _wgpu_buffer_kind :: proc(kind: Buffer_Kind) -> wgpu.BufferUsageFlags {
+        switch kind {
+        case .Invalid: return {}
+        case .Storage: return {.Storage}
+        case .Index:   return {.Index}
+        }
+        assert(false)
+        return {.CopyDst}
     }
 
     _wgpu_buffer_usage :: proc(usage: Usage) -> wgpu.BufferUsageFlags {
@@ -1438,21 +1476,6 @@ when BACKEND == BACKEND_WGPU {
         }
         assert(false)
         return wgpu.CompareFunction.Always
-    }
-
-    _wgpu_filter :: proc(filter: Filter) -> (min: wgpu.FilterMode, mag: wgpu.FilterMode, mip: wgpu.MipmapFilterMode) {
-        switch filter {
-        case .Unfiltered:       return .Nearest, .Nearest, .Nearest
-        case .Mip_Filtered:     return .Nearest, .Nearest, .Linear
-        case .Mag_Filtered:     return .Nearest, .Linear,  .Nearest
-        case .Mag_Mip_Filtered: return .Nearest, .Linear,  .Linear
-        case .Min_Filtered:     return .Linear,  .Nearest, .Nearest
-        case .Min_Mip_Filtered: return .Linear,  .Nearest, .Linear
-        case .Min_Mag_Filtered: return .Linear,  .Linear,  .Nearest
-        case .Filtered:         return .Linear,  .Linear,  .Linear
-        }
-        assert(false)
-        return .Nearest, .Nearest, .Nearest
     }
 
     _wgpu_texture_format :: proc(format: Texture_Format) -> wgpu.TextureFormat {

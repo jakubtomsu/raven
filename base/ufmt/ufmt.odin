@@ -13,6 +13,7 @@ NOTE: curly braces don't need to be doubled ({{ and }}) like in `core:fmt`
 Read https://jakubtomsu.github.io/posts/odin_comp_speed/ for more info.
 */
 #+no-instrumentation
+#+vet explicit-allocators unused style shadowing
 package ufmt
 
 import "base:runtime"
@@ -36,11 +37,14 @@ ctprintf :: proc(format: string, args: ..any) -> cstring {
     return cstring(raw_data(tprintf(format, args)))
 }
 
-
 tprintf :: proc(format: string, args: ..any) -> string {
+    return aprintf(format = format, args = args, allocator = context.temp_allocator)
+}
+
+aprintf :: proc(format: string, args: ..any, allocator := context.allocator) -> string {
     curr := format
 
-    buf := make([dynamic]byte, 0, len(format) + 256, context.temp_allocator)
+    buf := make([dynamic]byte, 0, len(format) + 256, allocator = allocator)
 
     curr_arg := 0
 
@@ -71,6 +75,7 @@ tprintf :: proc(format: string, args: ..any) -> string {
         consume_arg := true
         switch qual {
         case 's':
+
             switch val in arg {
             case string:  _append_string(&buf, val)
             case cstring: _append_string(&buf, string(val))
@@ -173,7 +178,7 @@ _append_rune :: proc(buf: ^[dynamic]byte, val: rune) {
     append_elem(buf, '\'')
 }
 
-_append_int :: proc(buf: ^[dynamic]byte, #any_int value: int) {
+_append_int :: proc(buf: ^[dynamic]byte, #any_int value: i64) {
     val := value
     if val < 0 {
         append_elem(buf, '-')
@@ -257,15 +262,34 @@ _is_type_simple :: proc(ti: ^runtime.Type_Info) -> bool {
     return false
 }
 
-_extract_int :: proc(ptr: rawptr, size: int) -> u64 {
-    switch size {
-    case 1: return u64((cast(^u8)ptr)^)
-    case 2: return u64((cast(^u16)ptr)^)
-    case 4: return u64((cast(^u32)ptr)^)
-    case 8: return (cast(^u64)ptr)^
-    case 16: return u64((cast(^u128)ptr)^)
+_extract_int :: proc(ptr: rawptr, size: int, signed: bool) -> i64 {
+    if signed {
+        switch size {
+        case 1:  return i64((cast(^i8)ptr)^)
+        case 2:  return i64((cast(^i16)ptr)^)
+        case 4:  return i64((cast(^i32)ptr)^)
+        case 8:  return     (cast(^i64)ptr)^
+        case 16: return i64((cast(^i128)ptr)^)
+        }
+    } else {
+        switch size {
+        case 1:  return i64((cast(^u8)ptr)^)
+        case 2:  return i64((cast(^u16)ptr)^)
+        case 4:  return i64((cast(^u32)ptr)^)
+        case 8:  return i64((cast(^u64)ptr)^)
+        case 16: return i64((cast(^u128)ptr)^)
+        }
     }
     panic("Integer size not supported")
+}
+
+_extract_float :: proc(ptr: rawptr, size: int) -> f64 {
+    switch size {
+    case 2: return f64((cast(^f16)ptr)^)
+    case 4: return f64((cast(^f32)ptr)^)
+    case 8: return    ((cast(^f64)ptr)^)
+    }
+    panic("Float size not supported")
 }
 
 _append_indent :: proc(buf: ^[dynamic]byte, num: int) {
@@ -315,36 +339,36 @@ _append_slice :: proc(buf: ^[dynamic]byte, data: rawptr, len: int, stride: int, 
 _append_any :: proc(buf: ^[dynamic]byte, value: any, pretty := false, depth := 0) {
     assert(depth < 64)
 
-    switch val in value {
-    case rune:      _append_rune(buf, val); return
-    case string:    _append_string(buf, val, quoted = depth > 0); return
-    case cstring:   _append_string(buf, string(val), quoted = depth > 0); return
-    case u8:        _append_int(buf, int(val)); return
-    case i8:        _append_int(buf, int(val)); return
-    case u16:       _append_int(buf, int(val)); return
-    case i16:       _append_int(buf, int(val)); return
-    case u32:       _append_int(buf, int(val)); return
-    case i32:       _append_int(buf, int(val)); return
-    case u64:       _append_int(buf, int(val)); return
-    case i64:       _append_int(buf, int(val)); return
-    case uint:      _append_int(buf, int(val)); return
-    case int:       _append_int(buf, int(val)); return
-    case f16:       _append_float(buf, f64(val)); return
-    case f32:       _append_float(buf, f64(val)); return
-    case f64:       _append_float(buf, f64(val)); return
-    case rawptr:    _append_hex(buf, u64(uintptr(val)), size_of(rawptr)); return
-    case uintptr:   _append_hex(buf, u64(val), size_of(uintptr)); return
-    }
-
-
     ti := type_info_of(value.id)
 
     switch v in ti.variant {
     case runtime.Type_Info_Named:
         _append_any(buf, any({data = value.data, id = v.base.id}), pretty, depth)
 
-    case runtime.Type_Info_Integer, runtime.Type_Info_Rune, runtime.Type_Info_Float, runtime.Type_Info_String:
-        unreachable()
+    case runtime.Type_Info_Integer:
+        data := _extract_int(value.data, ti.size, v.signed)
+        _append_int(buf, data)
+
+    case runtime.Type_Info_Rune:
+        _append_rune(buf, (cast(^rune)value.data)^)
+
+    case runtime.Type_Info_Float:
+        data := _extract_float(value.data, ti.size)
+        _append_float(buf, data)
+
+    case runtime.Type_Info_String:
+        str: string
+        switch v.encoding {
+        case .UTF_8:
+            if v.is_cstring {
+                str = string((cast(^cstring)value.data)^)
+            } else {
+                str = (cast(^string)value.data)^
+            }
+        case .UTF_16:
+            unimplemented()
+        }
+        _append_string(buf, str, quoted = depth > 0)
 
     case runtime.Type_Info_Pointer,
          runtime.Type_Info_Multi_Pointer,
@@ -352,7 +376,7 @@ _append_any :: proc(buf: ^[dynamic]byte, value: any, pretty := false, depth := 0
         _append_hex(buf, u64((cast(^uintptr)value.data)^), size_of(uintptr))
 
     case runtime.Type_Info_Boolean:
-        val := _extract_int(value.data, ti.size)
+        val := _extract_int(value.data, ti.size, false)
         _append_string(buf, val == 0 ? "false" : "true")
 
     case runtime.Type_Info_Complex:
@@ -450,9 +474,9 @@ _append_any :: proc(buf: ^[dynamic]byte, value: any, pretty := false, depth := 0
 
     case runtime.Type_Info_Enum:
         _ = v.base.variant.(runtime.Type_Info_Integer)
-        val := _extract_int(value.data, v.base.size)
+        val := _extract_int(value.data, v.base.size, false)
         for enum_val, i in v.values {
-            if val == u64(enum_val) {
+            if val == i64(enum_val) {
                 if depth > 0 {
                     append_elem(buf, '.')
                 }
@@ -462,7 +486,7 @@ _append_any :: proc(buf: ^[dynamic]byte, value: any, pretty := false, depth := 0
         }
 
     case runtime.Type_Info_Bit_Set:
-        val := _extract_int(value.data, v.elem.size)
+        val := _extract_int(value.data, v.elem.size, false)
 
         append_elem(buf, '{')
 
@@ -478,9 +502,9 @@ _append_any :: proc(buf: ^[dynamic]byte, value: any, pretty := false, depth := 0
                 append_elem(buf, '.')
                 index := 0
                 val := i - int(v.lower)
-                for i in 0..<len(ve.values) {
-                    if val == int(ve.values[i]) {
-                        index = i
+                for j in 0..<len(ve.values) {
+                    if val == int(ve.values[j]) {
+                        index = j
                         break
                     }
                 }
@@ -560,8 +584,8 @@ _append_any :: proc(buf: ^[dynamic]byte, value: any, pretty := false, depth := 0
         _append_any(buf, (cast(^any)value.data)^, pretty = pretty, depth = depth)
 
     case runtime.Type_Info_Type_Id:
-        ti := type_info_of((cast(^typeid)value.data)^)
-        #partial switch vt in ti.variant {
+        id_ti := type_info_of((cast(^typeid)value.data)^)
+        #partial switch vt in id_ti.variant {
         case runtime.Type_Info_Named:
             append_elem_string(buf, vt.name)
         case:

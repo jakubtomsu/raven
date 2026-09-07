@@ -4,12 +4,7 @@
 package ravn_gpu
 
 import "../base"
-import "core:hash/xxhash"
 import "base:runtime"
-
-// TODO: assertion messages
-// TODO: the non-backend-specific code should use #caller_location for validation
-// TODO: compress pipelines
 
 RELEASE :: #config(GPU_RELEASE, base.RELEASE)
 VALIDATION :: #config(GPU_VALIDATION, !RELEASE)
@@ -31,11 +26,13 @@ when ODIN_OS == .Windows {
     DEFAULT_BACKEND :: BACKEND_DUMMY
 }
 
-// Base metric for the minimum recommended triangles per mesh draw, to fully utilize the HW.
-// https://www.g-truc.net/post-0666.html
-// https://www.yosoygames.com.ar/wp/2018/03/vertex-formats-part-2-fetch-vs-pull/
-MINIMUM_TRIANGLES_PER_DRAW :: 256
-
+// If you ever hit the pipeline limit it's probably a good idea to investigate
+// *why* you have so many pipelines in the first place!
+MAX_GRAPHICS_PIPELINES  :: #config(GPU_MAX_GRAPHICS_PIPELINES, 256)
+MAX_COMPUTE_PIPELINES   :: #config(GPU_MAX_COMPUTE_PIPELINES, 128)
+MAX_RESOURCES           :: #config(GPU_MAX_RESOURCES, 1024)
+MAX_SHADERS             :: #config(GPU_MAX_SHADERS, 128)
+MAX_CONSTANTS           :: #config(GPU_MAX_CONSTANTS, 64)
 
 // Limits are based on the D3D11 resource limits, sometimes smaller to keep things in a reasonable range.
 // https://learn.microsoft.com/en-us/windows/win32/direct3d11/overviews-direct3d-11-resources-limits
@@ -51,35 +48,20 @@ SAMPLER_BIND_SLOTS :: 8
 RESOURCE_BIND_SLOTS :: 32
 RW_RESOURCE_BIND_SLOTS :: 32
 
-// Used in APIs which don't have per-resource-type spaces like D3D11.
+RENDER_TEXTURE_BIND_SLOTS :: 4
+
 SAMPLER_SLOT_SHIFT :: 0
 CONSTANTS_SLOT_SHIFT :: SAMPLER_SLOT_SHIFT + SAMPLER_BIND_SLOTS
 RESOURCE_SLOT_SHIFT :: CONSTANTS_SLOT_SHIFT + CONSTANTS_BIND_SLOTS
 RW_RESOURCE_SLOT_SHIFT :: RESOURCE_SLOT_SHIFT + RESOURCE_BIND_SLOTS
 
-RENDER_TEXTURE_BIND_SLOTS :: 4
+// Special handle to internal swapchain texture. Not an actual resource.
+SWAPCHAIN_HANDLE :: Resource_Handle{index = max(base.Handle_Index), gen = 0}
 
-// If you ever hit the pipeline limit it's probably a good idea to investigate
-// *why* you have so many pipelines in the first place, before raising it.
-MAX_PIPELINES           :: #config(GPU_MAX_PIPELINES, 256)
-MAX_COMPUTE_PIPELINES   :: #config(GPU_MAX_COMPUTE_PIPELINES, 128)
-MAX_RESOURCES           :: #config(GPU_MAX_RESOURCES, 1024)
-MAX_SHADERS             :: #config(GPU_MAX_SHADERS, 128)
-MAX_CONSTANTS           :: #config(GPU_MAX_CONSTANTS, 64)
-
-HASH_SEED :: #config(GPU_HASH_SEED, 0xf8dff210ad)
-MAX_HASH_PROBE_DIST :: 64
-
-Handle :: base.Handle
-Handle_Gen :: u8
-Handle_Index :: u16
-
-Hash :: u64
-
-Pipeline_Handle :: distinct Handle
-Compute_Pipeline_Handle :: distinct Handle
-Shader_Handle :: distinct Handle
-Resource_Handle :: distinct Handle
+Graphics_Pipeline_Handle :: distinct base.Handle
+Compute_Pipeline_Handle :: distinct base.Handle
+Shader_Handle :: distinct base.Handle
+Resource_Handle :: distinct base.Handle
 
 // Holds all global state.
 _state: ^State
@@ -89,99 +71,108 @@ State :: struct #align(4096) {
     in_frame:                       bool,
     init_context:                   runtime.Context,
     allocator:                      runtime.Allocator,
-    swapchain_res:                  Resource_Handle,
     // On WebGPU, the initialization is async.
     init_done:                      bool,
+    swapchain_size:                 [2]i32,
 
-    pipelines:                      base.Hash_Pool(MAX_PIPELINES, Pipeline_State, Pipeline_Handle),
-    pipelines_desc:                 [MAX_PIPELINES]Pipeline_Desc,
-    compute_pipelines:              base.Hash_Pool(MAX_COMPUTE_PIPELINES, Compute_Pipeline_State, Compute_Pipeline_Handle),
-    compute_pipelines_desc:         [MAX_COMPUTE_PIPELINES]Compute_Pipeline_Desc,
-
+    graphics_pipelines:             base.Pool(MAX_GRAPHICS_PIPELINES, Graphics_Pipeline_State, Graphics_Pipeline_Handle),
+    compute_pipelines:              base.Pool(MAX_COMPUTE_PIPELINES, Compute_Pipeline_State, Compute_Pipeline_Handle),
     resources:                      base.Pool(MAX_RESOURCES, Resource_State, Resource_Handle),
     shaders:                        base.Pool(MAX_SHADERS, Shader_State, Shader_Handle),
 
-    curr_pass_desc:                 Pass_Desc,
-    curr_pipeline:                  Pipeline_Handle,
-    curr_pipeline_desc:             Pipeline_Desc,
-    curr_num_pip_consts:            i32,
-
-    curr_compute_pass:              bool,
-    curr_compute_pipeline:          Compute_Pipeline_Handle,
-    curr_compute_pipeline_desc:     Compute_Pipeline_Desc,
+    bindings:                       Bindings_State,
+    encoder:                        Command_Encoder_State,
 }
 
-Pipeline_State :: struct {
-    using native:   _Pipeline,
-    loc:            runtime.Source_Code_Location,
+Command_Encoder_State :: struct {
+    mode:                       Command_Encoder_Mode,
+
+    graphics_pass_desc:         Graphics_Pass_Desc,
+    graphics_pipeline:          Graphics_Pipeline_Handle,
+    graphics_pipeline_desc:     Graphics_Pipeline_Desc,
+
+    compute_pipeline:           Compute_Pipeline_Handle,
+    compute_pipeline_desc:      Compute_Pipeline_Desc,
 }
 
-Compute_Pipeline_State :: struct {
-    using native:   _Compute_Pipeline,
-    loc:            runtime.Source_Code_Location,
+Bindings_State :: struct {
+    samplers:       [SAMPLER_BIND_SLOTS]Sampler_Desc,
+    constants:      [CONSTANTS_BIND_SLOTS]Resource_Handle,
+    resources:      [RESOURCE_BIND_SLOTS]Resource_Handle,
+    rw_resources:   [RW_RESOURCE_BIND_SLOTS]Resource_Handle,
+    num_consts:     i32,
 }
 
-Shader_State :: struct {
-    using native:   _Shader,
+Command_Encoder_Mode :: enum u8 {
+    None,
+    Graphics,
+    Compute,
+}
+
+Graphics_Pipeline_State :: struct #all_or_none {
+    using native:   _Graphics_Pipeline_State,
+    desc:           Graphics_Pipeline_Desc,
+    id:             base.Debug_ID,
+}
+
+Compute_Pipeline_State :: struct #all_or_none {
+    using native:   _Compute_Pipeline_State,
+    desc:           Compute_Pipeline_Desc,
+    id:             base.Debug_ID,
+}
+
+Shader_State :: struct #all_or_none {
+    using native:   _Shader_State,
     kind:           Shader_Kind,
-    loc:            runtime.Source_Code_Location,
+    id:             base.Debug_ID,
 }
 
-// TODO: more state validation
-Resource_State :: struct {
-    using native:   _Resource,
+Resource_State :: struct #all_or_none {
+    using native:   _Resource_State,
     kind:           Resource_Kind,
     format:         Texture_Format,
     usage:          Usage,
     size:           [3]i32,
-    loc:            runtime.Source_Code_Location,
+    id:             base.Debug_ID,
 }
 
-// Draw pipeline - contains all possible state for rendering.
-// WARNING: This structure is quite big.
-// TODO: figure out how to pack the data smaller.
-#assert(size_of(Pipeline_Desc) == 64 * 6)
-Pipeline_Desc :: struct #align(64) {
+Graphics_Pipeline_Desc :: struct #align(64) {
     topo:               Topology,
     cull:               Cull_Mode,
     fill:               Fill_Mode,
     depth_comparison:   Comparison_Op,
     depth_write:        bool,
     depth_bias:         i32,
-
     ps:                 Shader_Handle,
     vs:                 Shader_Handle,
-
     index:              Index_Buffer_Desc,
-
     blends:             [RENDER_TEXTURE_BIND_SLOTS]Blend_Desc,
     color_format:       [RENDER_TEXTURE_BIND_SLOTS]Texture_Format,
     depth_format:       Texture_Format,
-
-    // partial Pipeline_Bindings
-    samplers:           [SAMPLER_BIND_SLOTS]Sampler_Desc,
-    constants:          [CONSTANTS_BIND_SLOTS]Resource_Handle,
-    resources:          [RESOURCE_BIND_SLOTS]Resource_Handle,
 }
 
 Compute_Pipeline_Desc :: struct {
-    cs:                 Shader_Handle,
-    using bindings:     Pipeline_Bindings_Desc,
+    cs:     Shader_Handle,
 }
 
-Pipeline_Bindings_Desc :: struct {
-    samplers:           [SAMPLER_BIND_SLOTS]Sampler_Desc,
-    constants:          [CONSTANTS_BIND_SLOTS]Resource_Handle,
-    resources:          [RESOURCE_BIND_SLOTS]Resource_Handle,
-    rw_resources:       [RW_RESOURCE_BIND_SLOTS]Resource_Handle,
+Bindings_Layout_Desc :: struct {
+    samplers:       [SAMPLER_BIND_SLOTS]Sampler_Desc,
+    constants:      [CONSTANTS_BIND_SLOTS]Resource_Handle,
+    resources:      [RESOURCE_BIND_SLOTS]Resource_Handle,
+    rw_resources:   [RW_RESOURCE_BIND_SLOTS]Resource_Handle,
 }
 
-Pass_Desc :: struct {
-    colors: [RENDER_TEXTURE_BIND_SLOTS]Pass_Color_Desc,
+Layout_Slot_Desc :: struct {
+    kind:       Resource_Kind,
+    visibility: bit_set[Shader_Kind],
+}
+
+Graphics_Pass_Desc :: struct {
+    colors: [RENDER_TEXTURE_BIND_SLOTS]Graphics_Pass_Color_Desc,
     depth:  Pass_Depth_Desc,
 }
 
-Pass_Color_Desc :: struct {
+Graphics_Pass_Color_Desc :: struct {
     resource:   Resource_Handle,
     clear_mode: Clear_Mode,
     clear_val:  [4]f32,
@@ -198,6 +189,11 @@ Clear_Mode :: enum u8 {
     Clear,
 }
 
+Buffer_Kind :: enum u8 {
+    Invalid = 0,
+    Storage,
+    Index,
+}
 
 Index_Buffer_Desc :: struct {
     resource:   Resource_Handle,
@@ -206,7 +202,7 @@ Index_Buffer_Desc :: struct {
 }
 
 Sampler_Desc :: struct {
-    filter:         Filter,
+    filter:         bit_set[Filter],
     bounds:         [3]Texture_Bounds,
     comparison:     Comparison_Op,
     max_aniso:      u8,
@@ -287,11 +283,9 @@ Shader_Kind :: enum u8 {
 Resource_Kind :: enum u8 {
     Invalid = 0,
     Constants,
-    Index_Buffer,
     Buffer,
     Texture2D, // can be an array
     Texture3D,
-    Swapchain,
 }
 
 Index_Format :: enum u8 {
@@ -330,14 +324,9 @@ Cull_Mode :: enum u8 {
 }
 
 Filter :: enum u8 {
-    Unfiltered = 0,
-    Mip_Filtered,
-    Mag_Filtered,
-    Mag_Mip_Filtered,
-    Min_Filtered,
-    Min_Mip_Filtered,
-    Min_Mag_Filtered,
-    Filtered,
+    Min,
+    Mag,
+    Mip,
 }
 
 Texture_Bounds :: enum u8 {
@@ -357,7 +346,6 @@ Comparison_Op :: enum u8 {
     Never,
 }
 
-// TODO: rename the formats?
 Texture_Format :: enum u8 {
     Invalid,
     RGBA_F32,
@@ -407,7 +395,7 @@ Texture_Format :: enum u8 {
 
 
 // Alpha blending is default
-blend_desc :: proc(
+make_blend_desc :: proc(
     src_color:  Blend_Factor = .Src_Alpha,
     dst_color:  Blend_Factor = .One_Minus_Src_Alpha,
     src_alpha:  Blend_Factor = .Src_Alpha,
@@ -425,8 +413,8 @@ blend_desc :: proc(
     }
 }
 
-sampler_desc :: proc(
-    filter:         Filter,
+make_sampler_desc :: proc(
+    filter:         bit_set[Filter],
     bounds:         [3]Texture_Bounds = {.Wrap, .Wrap, .Wrap},
     mip_min:        f32 = 0,
     mip_max:        f32 = 10,
@@ -449,19 +437,10 @@ sampler_desc :: proc(
 // MARK: General
 //
 
-set_state_ptr :: proc(state: ^State) {
-    _state = state
-}
-
-get_state_ptr :: proc() -> (state: ^State) {
-    return _state
-}
-
 init :: proc(state: ^State, native_window: rawptr) -> bool {
     if _state != nil {
         return true
     }
-
     _state = state
     _state.init_context = context
 
@@ -471,44 +450,28 @@ init :: proc(state: ^State, native_window: rawptr) -> bool {
     return _init(native_window)
 }
 
-is_init_done :: proc() -> bool {
-    return _state.init_done
-}
-
 shutdown :: proc() {
     if _state == nil {
         return
     }
-
     assert(!_state.in_frame)
-
     _shutdown()
-
     _state = nil
 }
 
 // return value of false means skip frame
 begin_frame :: proc() -> (ok: bool) {
-    assert(is_init_done())
-
-    _state.curr_pass_desc = {}
-    _state.curr_pipeline = {}
-    _state.curr_pipeline_desc = {}
-    _state.curr_compute_pass = {}
-    _state.curr_compute_pipeline = {}
-    _state.curr_compute_pipeline_desc = {}
+    assert(_state.init_done)
+    assert(_state.encoder == {})
+    _state.encoder = {}
     _state.in_frame = true
-
     return _begin_frame()
 }
-
-
 
 end_frame :: proc(sync: bool = true, loc := #caller_location) {
     assert(_state != nil)
     assert(_state.in_frame)
-    assert(_state.curr_pass_desc == {})
-    assert(_state.curr_compute_pass == {})
+    assert(_state.encoder == {})
     _end_frame(sync)
     _state.in_frame = false
 }
@@ -520,35 +483,24 @@ end_frame :: proc(sync: bool = true, loc := #caller_location) {
 //
 
 @(require_results)
-pipeline_desc :: proc(
+make_graphics_pipeline_desc :: proc(
     ps:                 Shader_Handle,
     vs:                 Shader_Handle,
-
     out_colors:         []Texture_Format,
     out_depth:          Texture_Format = .Invalid,
     blends:             []Blend_Desc = {},
-
     index_resource:     Resource_Handle = {},
     index_format:       Index_Format = .Invalid,
     index_offset:       i32 = 0,
-
-    samplers:           []Sampler_Desc = {},
-    consts:             []Resource_Handle = {},
-    resources:          []Resource_Handle = {},
-
     topo:               Topology = .Triangles,
     cull:               Cull_Mode = .None,
     fill:               Fill_Mode = .Solid,
-
     depth_comparison:   Comparison_Op = .Always,
     depth_write:        bool = false,
     depth_bias:         i32 = 0,
-) -> (result: Pipeline_Desc) {
+) -> (result: Graphics_Pipeline_Desc) {
     assert(len(result.color_format) >= len(out_colors))
     assert(len(result.blends) >= len(blends))
-    assert(len(result.resources) >= len(resources))
-    assert(len(result.constants) >= len(consts))
-    assert(len(result.samplers) >= len(samplers))
 
     result = {
         ps = ps,
@@ -570,115 +522,58 @@ pipeline_desc :: proc(
 
     copy(result.color_format[:], out_colors)
     copy(result.blends[:], blends)
-    copy(result.resources[:], resources)
-    copy(result.constants[:], consts)
-    copy(result.samplers[:], samplers)
 
     return result
 }
 
-// The pipeline will get re-created only when necessary.
-@(require_results)
-create_pipeline :: proc(
-    name:   string,
-    desc:   Pipeline_Desc,
-    loc     := #caller_location,
-) -> (result: Pipeline_Handle, ok: bool) {
-    validate_pipeline_desc(desc)
-
-    hash := hash_pipeline_desc(desc)
-    handle, existing := base.hash_pool_find_free(_state.pipelines, hash) or_return
-
-    if existing {
-        assert(_state.pipelines_desc[handle.index] != {})
-        assert(desc == _state.pipelines_desc[handle.index], "Hash Collision")
-        return handle, true
-    }
-
-    base.log_debug("Creating pipeline '%s' %x", name, hash)
-
-    state: Pipeline_State
-    state.native = _create_pipeline(name, desc) or_return
-    state.loc = loc
-
-    _state.pipelines_desc[handle.index] = desc
-    base.hash_pool_insert(&_state.pipelines, hash, handle, state) or_return
-    return handle, true
-}
 
 @(require_results)
-hash_pipeline_desc :: proc(desc: Pipeline_Desc) -> Hash {
-    data := transmute([size_of(desc)]u8)desc
-    return xxhash.XXH3_64_with_seed(data[:], HASH_SEED)
-}
-
-@(require_results)
-hash_pipeline_bindings_desc :: proc(desc: Pipeline_Bindings_Desc) -> Hash {
-    data := transmute([size_of(desc)]u8)desc
-    return xxhash.XXH3_64_with_seed(data[:], HASH_SEED)
-}
-
-@(require_results)
-hash_compute_pipeline_desc :: proc(desc: Compute_Pipeline_Desc) -> Hash {
-    data := transmute([size_of(desc)]u8)desc
-    return xxhash.XXH3_64_with_seed(data[:], HASH_SEED)
-}
-
-
-@(require_results)
-compute_pipeline_desc :: proc(
-    cs:                 Shader_Handle,
-    samplers:           []Sampler_Desc = {},
-    consts:             []Resource_Handle = {},
-    resources:          []Resource_Handle = {},
-    rw_resources:       []Resource_Handle = {},
-) -> (result: Compute_Pipeline_Desc) {
-    assert(len(result.resources) >= len(resources))
-    assert(len(result.constants) >= len(consts))
-    assert(len(result.samplers) >= len(samplers))
-    assert(len(result.rw_resources) >= len(rw_resources))
-
+make_compute_pipeline_desc :: proc(cs: Shader_Handle) -> (result: Compute_Pipeline_Desc) {
+    assert(cs != {})
     result = {
         cs = cs,
     }
-
-    copy(result.resources[:], resources)
-    copy(result.rw_resources[:], rw_resources)
-    copy(result.constants[:], consts)
-    copy(result.samplers[:], samplers)
-
     return result
+}
+
+@(require_results)
+create_graphics_pipeline :: proc(
+    name:               string,
+    desc:               Graphics_Pipeline_Desc,
+    loc                 := #caller_location,
+) -> (result: Graphics_Pipeline_Handle, ok: bool) {
+    base.log_debug("Creating graphics pipeline '%s'", name)
+    validate_graphics_pipeline_desc(desc)
+    handle := base.pool_find_free(_state.graphics_pipelines) or_return
+    state := Graphics_Pipeline_State{
+        native = _create_graphics_pipeline(name, desc) or_return,
+        desc = desc,
+        id = base.create_debug_id(name, loc, context.allocator),
+    }
+    base.pool_insert(&_state.graphics_pipelines, handle, state) or_return
+    return handle, true
 }
 
 @(require_results)
 create_compute_pipeline :: proc(
-    name:   string,
-    desc:   Compute_Pipeline_Desc,
-    loc     := #caller_location,
+    name:               string,
+    desc:               Compute_Pipeline_Desc,
+    loc                 := #caller_location,
 ) -> (result: Compute_Pipeline_Handle, ok: bool) {
+    base.log_debug("Creating compute pipeline '%s'", name)
     validate_compute_pipeline_desc(desc, loc = loc)
-
-    hash := hash_compute_pipeline_desc(desc)
-    handle, existing := base.hash_pool_find_free(_state.compute_pipelines, hash) or_return
-
-    if existing {
-        assert(_state.compute_pipelines_desc[handle.index] != {})
-        assert(desc == _state.compute_pipelines_desc[handle.index], "Hash Collision")
-        return handle, true
+    handle := base.pool_find_free(_state.compute_pipelines) or_return
+    state := Compute_Pipeline_State{
+        native = _create_compute_pipeline(name, desc) or_return,
+        id = base.create_debug_id(name, loc, context.allocator),
+        desc = desc,
     }
-
-    base.log_debug("Creating compute pipeline '%s' %x", name, hash)
-
-    state: Compute_Pipeline_State
-    state.native = _create_compute_pipeline(name, desc) or_return
-    state.loc = loc
-
-    _state.compute_pipelines_desc[handle.index] = desc
-    base.hash_pool_insert(&_state.compute_pipelines, hash, handle, state) or_return
+    base.pool_insert(&_state.compute_pipelines, handle, state) or_return
     return handle, true
 }
 
-// Set 'item_num' to 2 or more to enable multi const buffers with dynamic offsets.
+
+// Set 'item_num' above 1 or more to enable multi const buffers with dynamic offsets.
 @(require_results)
 create_constants :: proc(name: string, item_size: i32, item_num: i32 = 1, loc := #caller_location) -> (result: Resource_Handle, ok: bool) {
     assert(item_size > 0)
@@ -692,11 +587,15 @@ create_constants :: proc(name: string, item_size: i32, item_num: i32 = 1, loc :=
         return {}, false
     }
 
-    state: Resource_State
-    state.size = {item_size, item_num, 1}
-    state.kind = .Constants
-    state.usage = .Dynamic
-    state.loc = loc
+    state := Resource_State{
+        size = {item_size, item_num, 1},
+        kind = .Constants,
+        usage = .Dynamic,
+        id = base.create_debug_id(name, loc, context.allocator),
+        format = .Invalid,
+        native = {},
+    }
+
     state.native, ok = _create_constants(name, item_size = item_size, item_num = item_num)
     if !ok {
         base.log_err("GPU: Failed to create native constants")
@@ -723,9 +622,12 @@ create_shader :: proc(
         return {}, false
     }
 
-    state: Shader_State
-    state.kind = kind
-    state.loc = loc
+    state := Shader_State{
+        kind = kind,
+        id = base.create_debug_id(name, loc, context.allocator),
+        native = {},
+    }
+
     state.native, ok = _create_shader(name, data = data, kind = kind)
     if !ok {
         base.log_err("GPU: failed to create a native shader")
@@ -738,43 +640,13 @@ create_shader :: proc(
 
 // Resources
 
-get_swapchain :: proc() -> (result: Resource_Handle) {
-    return _state.swapchain_res
-}
-
-// This creates or re-creates the swapchain if already exists.
-update_swapchain :: proc(window: rawptr, size: [2]i32, loc := #caller_location) -> (result: Resource_Handle, ok: bool) {
+resize_swapchain :: proc(window: rawptr, size: [2]i32) -> (ok: bool) {
     assert(size.x > 0, "Swapchain must be non-zero width")
     assert(size.y > 0, "Swapchain must be non-zero height")
-
-    existing, existing_ok := _get_resource(_state.swapchain_res)
-    if existing_ok {
-        assert(existing.kind == .Swapchain)
-        if existing.size.xy == size {
-            return _state.swapchain_res, true
-        }
-
-        existing.size = {size.x, size.y, 1}
-
-        _update_swapchain(&existing.native, window, size) or_return
-
-        result = _state.swapchain_res
-
-    } else {
-        result = base.pool_find_free(_state.resources) or_return
-
-        state: Resource_State
-        state.kind = .Swapchain
-        state.size = {size.x, size.y, 1}
-        state.usage = .Default
-        state.loc = loc
-        _update_swapchain(&state.native, window, size) or_return
-
-        base.pool_insert(&_state.resources, result, state) or_else panic("Failed to insert")
-        _state.swapchain_res = result
+    if size == _state.swapchain_size {
+        return true
     }
-
-    return result, true
+    return _resize_swapchain(window, size)
 }
 
 // TODO: Mips to zero to gen?
@@ -822,12 +694,14 @@ create_texture_2d :: proc(
 
     result = base.pool_find_free(_state.resources) or_return
 
-    state: Resource_State
-    state.kind = .Texture2D
-    state.size = {size.x, size.y, array_depth}
-    state.usage = usage
-    state.format = format
-    state.loc = loc
+    state := Resource_State{
+        kind = .Texture2D,
+        size = {size.x, size.y, array_depth},
+        usage = usage,
+        format = format,
+        id = base.create_debug_id(name, loc, context.allocator),
+        native = {},
+    }
 
     state.native = _create_texture_2d(
         name = name,
@@ -849,6 +723,7 @@ create_texture_2d :: proc(
 @(require_results)
 create_buffer :: proc(
     name:               string,
+    kind:               Buffer_Kind,
     #any_int stride:    i32,
     #any_int size:      i32 = 0,
     usage:              Usage = .Default,
@@ -873,62 +748,27 @@ create_buffer :: proc(
 
     if usage == .Immutable {
         assert(data != nil)
-    }
-
-    if usage == .Immutable {
         assert(len(data) > 0)
     }
 
     result = base.pool_find_free(_state.resources) or_return
 
-    state: Resource_State
-    state.kind = .Buffer
-    state.size = {size, 1, 1}
-    state.usage = usage
-    state.loc = loc
+    state := Resource_State{
+        kind = .Buffer,
+        size = {i32(runtime.align_forward_int(int(size), 64)), 1, 1},
+        usage = usage,
+        id = base.create_debug_id(name, loc, context.allocator),
+        format = .Invalid,
+        native = {},
+    }
 
     state.native = _create_buffer(
         name = name,
-        size = size,
+        kind = kind,
+        size = state.size.x,
         stride = stride,
         usage = usage,
         data = data,
-    ) or_return
-
-    base.pool_insert(&_state.resources, result, state) or_else panic("Failed to insert")
-    return result, true
-}
-
-// Must set size or data.
-@(require_results)
-create_index_buffer :: proc(
-    name:           string,
-    #any_int size:  i32 = 0,
-    data:           []u8 = nil,
-    usage:          Usage = .Default,
-    loc             := #caller_location,
-) -> (result: Resource_Handle, ok: bool) #optional_ok {
-    size := size
-
-    if size == 0 && data != nil {
-        size = i32(len(data))
-    }
-
-    assert(size > 0)
-
-    result = base.pool_find_free(_state.resources) or_return
-
-    state: Resource_State
-    state.kind = .Index_Buffer
-    state.size = {i32(runtime.align_forward_int(int(size), 64)), 1, 1}
-    state.usage = usage
-    state.loc = loc
-
-    state.native = _create_index_buffer(
-        name = name,
-        size = i32(state.size.x),
-        data = data,
-        usage = usage,
     ) or_return
 
     base.pool_insert(&_state.resources, result, state) or_else panic("Failed to insert")
@@ -964,65 +804,73 @@ destroy_resource :: proc(handle: Resource_Handle) -> bool {
 // MARK: Actions
 //
 
-@(deferred_none = end_pass)
-scope_pass :: proc(name: string, desc: Pass_Desc) -> bool {
-    begin_pass(name, desc)
-    return true
-}
-
-begin_pass :: proc(name: string, desc: Pass_Desc) {
-    assert(_state.curr_pass_desc == {}, "begin_pass/end_pass mismatch")
-    assert(desc != {}, "Empty pass is not valid")
-    validate_pass_desc(desc)
-    _begin_pass(name, desc)
-    _state.curr_pipeline = {}
-    _state.curr_pipeline_desc = {}
-    _state.curr_pass_desc = desc
-}
-
-end_pass :: proc() {
-    assert(_state.curr_pass_desc != {})
-    _end_pass()
-    _state.curr_pipeline = {}
-    _state.curr_pipeline_desc = {}
-    _state.curr_pass_desc = {}
-}
-
-set_pipeline :: proc(handle: Pipeline_Handle) {
-    if _state.curr_pipeline == handle {
-        return
-    }
-
-    pip, pip_ok := _get_pipeline(handle)
-
-    if !pip_ok {
-        base.log_err("GPU: trying to begin invalid pipeline:", handle)
-        return
-    }
-
-    pip_desc := _state.pipelines_desc[handle.index]
-
-    validate_pipeline_desc(pip_desc)
-    validate_pipeline_for_pass(pip_desc, _state.curr_pass_desc)
-
-    prev_desc := _state.curr_pipeline_desc
-
-    _state.curr_pipeline = handle
-    _state.curr_pipeline_desc = _state.pipelines_desc[handle.index]
+// strictly for a specific pipeline..?
+set_bindings :: proc(
+    samplers:           []Sampler_Desc = {},
+    consts:             []Resource_Handle = {},
+    resources:          []Resource_Handle = {},
+    rw_resources:       []Resource_Handle = {},
+) {
 
     // Needed for validation
     num_consts: i32
-    for handle in _state.curr_pipeline_desc.constants {
+    for handle in consts {
         if handle == {} {
             break
         }
         num_consts += 1
     }
-    _state.curr_num_pip_consts = num_consts
+    _state.bindings.num_consts = num_consts
+}
 
-    _set_pipeline(
-        curr_pip = pip^,
-        curr = pip_desc,
+@(deferred_none = end_graphics_pass)
+scope_graphics_pass :: proc(name: string, desc: Graphics_Pass_Desc) -> bool {
+    begin_graphics_pass(name, desc)
+    return true
+}
+
+begin_graphics_pass :: proc(name: string, desc: Graphics_Pass_Desc) {
+    assert(_state.encoder.mode == .None, "begin_pass/end_pass mismatch")
+    validate_pass_desc(desc)
+    _begin_graphics_pass(name, desc)
+    _state.encoder = {
+        mode = .Graphics,
+        graphics_pipeline = {},
+        graphics_pipeline_desc = {},
+        graphics_pass_desc = desc,
+    }
+}
+
+end_graphics_pass :: proc() {
+    assert(_state.encoder.mode == .Graphics)
+    _end_graphics_pass()
+    _state.encoder = {}
+}
+
+set_graphics_pipeline :: proc(handle: Graphics_Pipeline_Handle) {
+    assert(_state.encoder.mode == .Graphics)
+
+    if _state.encoder.graphics_pipeline == handle {
+        return
+    }
+
+    pip, pip_ok := _get_graphics_pipeline(handle)
+
+    if !pip_ok {
+        base.log_err("GPU: trying to set invalid pipeline:", handle)
+        return
+    }
+
+    validate_graphics_pipeline_desc(pip.desc)
+    validate_graphics_pipeline_for_pass(pip.desc, _state.encoder.graphics_pass_desc)
+
+    prev_desc := _state.encoder.graphics_pipeline_desc
+
+    _state.encoder.graphics_pipeline = handle
+    _state.encoder.graphics_pipeline_desc = pip.desc
+
+    _set_graphics_pipeline(pip^,
+        curr = pip.desc,
         prev = prev_desc,
     )
 }
@@ -1034,15 +882,17 @@ scope_compute_pass :: proc(name: string) -> bool {
 }
 
 begin_compute_pass :: proc(name: string) {
-    assert(_state.curr_compute_pass == {}, "begin_compute_pass/end_compute_pass mismatch")
+    assert(_state.encoder.mode == .None, "begin_compute_pass/end_compute_pass mismatch")
     _begin_compute_pass(name)
-    _state.curr_compute_pass = true
+    _state.encoder = {
+        mode = .Compute,
+    }
 }
 
 end_compute_pass :: proc() {
-    assert(_state.curr_compute_pass != {})
+    assert(_state.encoder.mode == .Compute)
     _end_compute_pass()
-    _state.curr_compute_pass = {}
+    _state.encoder = {}
 }
 
 set_compute_pipeline :: proc(handle: Compute_Pipeline_Handle) {
@@ -1053,25 +903,16 @@ set_compute_pipeline :: proc(handle: Compute_Pipeline_Handle) {
         return
     }
 
-    pip_desc := _state.compute_pipelines_desc[handle.index]
+    validate_compute_pipeline_desc(pip.desc)
 
-    validate_compute_pipeline_desc(pip_desc)
+    _state.encoder.compute_pipeline = handle
+    _state.encoder.compute_pipeline_desc = pip.desc
 
-    prev_desc := _state.curr_compute_pipeline_desc
-
-    _state.curr_compute_pipeline = handle
-    _state.curr_compute_pipeline_desc = _state.compute_pipelines_desc[handle.index]
-
-    _set_compute_pipeline(
-        curr_pip = pip^,
-        curr = pip_desc,
-        prev = prev_desc,
-    )
+    _set_compute_pipeline(pip)
 }
 
-// WARNING: currently 'data' is not internally copied before use, make sure to keep it alive and valid for the whole pass.
 update_constants :: proc(handle: Resource_Handle, data: []byte, loc := #caller_location) {
-    assert(_state.curr_pass_desc == {}, "You must do all constant updates before rendering", loc = loc)
+    assert(_state.encoder.mode == .None, "You must do all constant updates before rendering", loc = loc)
 
     res, res_ok := _get_resource(handle)
     if !res_ok {
@@ -1084,7 +925,10 @@ update_constants :: proc(handle: Resource_Handle, data: []byte, loc := #caller_l
     assert(res.size.y >= 1, loc = loc)
     assert(res.size.z == 1, loc = loc)
 
-    _update_constants(res, data)
+    data_clone := make([]byte, len(data), context.temp_allocator)
+    copy(data_clone, data)
+
+    _update_constants(res, data_clone)
 }
 
 // "buffers" can be multiple separate slices of CPU memory, written consecutively to the GPU memory.
@@ -1092,7 +936,7 @@ update_constants :: proc(handle: Resource_Handle, data: []byte, loc := #caller_l
 // This way the backend can sometimes more efficiently copy the data to the native buffer,
 // compared to always allocating a temp buffer to combine the writes.
 update_buffer :: proc(handle: Resource_Handle, offset: int, buffers: ..[]byte, loc := #caller_location) {
-    assert(_state.curr_pass_desc == {}, "You must do all buffer updates before rendering", loc = loc)
+    assert(_state.encoder.mode == .None, "You must do all buffer updates outside passes", loc = loc)
 
     if len(buffers) == 0 {
         return
@@ -1109,7 +953,7 @@ update_buffer :: proc(handle: Resource_Handle, offset: int, buffers: ..[]byte, l
         total_len += len(buf)
     }
 
-    assert(res.kind == .Buffer || res.kind == .Index_Buffer, loc = loc)
+    assert(res.kind == .Buffer, loc = loc)
     assert(total_len <= int(res.size.x), loc = loc)
     assert(res.size.y == 1 && res.size.z == 1, loc = loc)
     assert(res.usage != .Immutable, loc = loc)
@@ -1118,7 +962,7 @@ update_buffer :: proc(handle: Resource_Handle, offset: int, buffers: ..[]byte, l
 }
 
 update_texture_2d :: proc(handle: Resource_Handle, data: []byte, #any_int slice: i32 = 0) -> bool {
-    assert(_state.curr_pass_desc == {}, "You must do all texture updates before rendering")
+    assert(_state.encoder.mode == .None, "You must do all texture updates before rendering")
 
     res, res_ok := _get_resource(handle)
     if !res_ok {
@@ -1137,11 +981,12 @@ draw_non_indexed :: proc(
     #any_int instance_num:      u32 = 1,
     const_offsets:              []u32 = nil,
 ) {
-    assert(_state.curr_pipeline != {})
-    assert(_state.curr_pipeline_desc.topo != .Invalid)
-    assert(_state.curr_pipeline_desc.vs != {})
-    assert(_state.curr_pipeline_desc.ps != {})
-    assert(len(const_offsets) <= int(_state.curr_num_pip_consts))
+    assert(_state.encoder.mode == .Graphics)
+    assert(_state.encoder.graphics_pipeline != {})
+    assert(_state.encoder.graphics_pipeline_desc.topo != .Invalid)
+    assert(_state.encoder.graphics_pipeline_desc.vs != {})
+    assert(_state.encoder.graphics_pipeline_desc.ps != {})
+    assert(len(const_offsets) <= int(_state.bindings.num_consts))
 
     _draw_non_indexed(
         vertex_num = vertex_num,
@@ -1156,11 +1001,12 @@ draw_indexed :: proc(
     #any_int index_offset:      u32 = 0,
     const_offsets:              []u32 = nil,
 ) {
-    assert(_state.curr_pipeline_desc.vs != {})
-    assert(_state.curr_pipeline_desc.ps != {})
-    assert(_state.curr_pipeline_desc.index.resource != {})
-    assert(_state.curr_pipeline_desc.index.format != .Invalid)
-    assert(len(const_offsets) <= int(_state.curr_num_pip_consts))
+    assert(_state.encoder.mode == .Graphics)
+    assert(_state.encoder.graphics_pipeline_desc.vs != {})
+    assert(_state.encoder.graphics_pipeline_desc.ps != {})
+    assert(_state.encoder.graphics_pipeline_desc.index.resource != {})
+    assert(_state.encoder.graphics_pipeline_desc.index.format != .Invalid)
+    assert(len(const_offsets) <= int(_state.bindings.num_consts))
 
     _draw_indexed(
         index_num = index_num,
@@ -1172,6 +1018,7 @@ draw_indexed :: proc(
 
 
 dispatch_compute :: proc(size: [3]i32) {
+    assert(_state.encoder.mode == .Compute)
     assert(size.x > 0 && size.x < MAX_DISPATCH_SIZE)
     assert(size.y > 0 && size.y < MAX_DISPATCH_SIZE)
     assert(size.z > 0 && size.z < MAX_DISPATCH_SIZE)
@@ -1184,7 +1031,7 @@ dispatch_compute :: proc(size: [3]i32) {
 // MARK: Validation
 //
 
-validate_pass_desc :: proc(desc: Pass_Desc) {
+validate_pass_desc :: proc(desc: Graphics_Pass_Desc) {
     num_colors := 0
     resolution: [2]i32
 
@@ -1206,7 +1053,7 @@ validate_pass_desc :: proc(desc: Pass_Desc) {
         assert(res_ok)
 
         #partial switch res.kind {
-        case .Texture2D, .Swapchain:
+        case .Texture2D:
         case:
             assert(false)
         }
@@ -1230,7 +1077,7 @@ validate_pass_desc :: proc(desc: Pass_Desc) {
     }
 }
 
-validate_pipeline_desc :: proc(desc: Pipeline_Desc) {
+validate_graphics_pipeline_desc :: proc(desc: Graphics_Pipeline_Desc) {
     assert(desc.topo != .Invalid)
     assert(desc.fill != .Invalid)
     assert(desc.cull != .Invalid)
@@ -1287,31 +1134,9 @@ validate_pipeline_desc :: proc(desc: Pipeline_Desc) {
         _, index_ok := _get_resource(desc.index.resource)
         assert(index_ok)
     }
-
-    for handle in desc.constants {
-        if handle == {} {
-            continue
-        }
-        res, res_ok := _get_resource(handle)
-        assert(res_ok)
-        assert(res.kind == .Constants)
-    }
-
-    for handle in desc.resources {
-        if handle == {} {
-            continue
-        }
-        res, res_ok := _get_resource(handle)
-        assert(res_ok)
-        #partial switch res.kind {
-        case .Buffer, .Texture2D, .Texture3D:
-        case:
-            assert(false)
-        }
-    }
 }
 
-validate_pipeline_for_pass :: proc(pip: Pipeline_Desc, pass: Pass_Desc) {
+validate_graphics_pipeline_for_pass :: proc(pip: Graphics_Pipeline_Desc, pass: Graphics_Pass_Desc) {
     for col, i in pass.colors {
         _, res_ok := _get_resource(col.resource)
         // TODO: assert format
@@ -1331,12 +1156,8 @@ validate_pipeline_for_pass :: proc(pip: Pipeline_Desc, pass: Pass_Desc) {
     }
 }
 
-validate_compute_pipeline_desc :: proc(desc: Compute_Pipeline_Desc, loc := #caller_location) {
-    sh, sh_ok := _get_shader(desc.cs)
-    assert(sh_ok)
-    assert(sh.kind == .Compute)
-
-    for handle in desc.constants {
+validate_bindings_state :: proc(state: Bindings_State) {
+    for handle in state.constants {
         if handle == {} {
             continue
         }
@@ -1345,7 +1166,7 @@ validate_compute_pipeline_desc :: proc(desc: Compute_Pipeline_Desc, loc := #call
         assert(res.kind == .Constants)
     }
 
-    for handle in desc.resources {
+    for handle in state.resources {
         if handle == {} {
             continue
         }
@@ -1358,7 +1179,7 @@ validate_compute_pipeline_desc :: proc(desc: Compute_Pipeline_Desc, loc := #call
         }
     }
 
-    for handle in desc.rw_resources {
+    for handle in state.rw_resources {
         if handle == {} {
             continue
         }
@@ -1371,14 +1192,20 @@ validate_compute_pipeline_desc :: proc(desc: Compute_Pipeline_Desc, loc := #call
         }
     }
 
-    for handle in desc.resources {
+    for handle in state.resources {
         if handle == {} {
             continue
         }
-        for rw_handle in desc.rw_resources {
+        for rw_handle in state.rw_resources {
             assert(handle != rw_handle, "A resource cannot be bounds as read-only and read-write at the same time")
         }
     }
+}
+
+validate_compute_pipeline_desc :: proc(desc: Compute_Pipeline_Desc, loc := #caller_location) {
+    sh, sh_ok := _get_shader(desc.cs)
+    assert(sh_ok)
+    assert(sh.kind == .Compute)
 }
 
 
@@ -1388,13 +1215,13 @@ validate_compute_pipeline_desc :: proc(desc: Compute_Pipeline_Desc, loc := #call
 //
 
 @(require_results)
-_get_pipeline :: proc(handle: Pipeline_Handle) -> (^Pipeline_State, bool) {
-    return base.hash_pool_get(&_state.pipelines, handle)
+_get_graphics_pipeline :: proc(handle: Graphics_Pipeline_Handle) -> (^Graphics_Pipeline_State, bool) {
+    return base.pool_get(&_state.graphics_pipelines, handle)
 }
 
 @(require_results)
 _get_compute_pipeline :: proc(handle: Compute_Pipeline_Handle) -> (^Compute_Pipeline_State, bool) {
-    return base.hash_pool_get(&_state.compute_pipelines, handle)
+    return base.pool_get(&_state.compute_pipelines, handle)
 }
 
 @(require_results)
@@ -1405,16 +1232,6 @@ _get_resource :: proc(handle: Resource_Handle) -> (^Resource_State, bool) {
 @(require_results)
 _get_shader :: proc(handle: Shader_Handle) -> (^Shader_State, bool) {
     return base.pool_get(&_state.shaders, handle)
-}
-
-@(require_results)
-get_pipeline_desc_bindings :: proc(desc: Pipeline_Desc) -> Pipeline_Bindings_Desc {
-    return {
-        samplers = desc.samplers,
-        constants = desc.constants,
-        resources = desc.resources,
-        rw_resources = {},
-    }
 }
 
 @(require_results)

@@ -194,3 +194,43 @@ hash_splittable64 :: proc "contextless" (x: u64) -> u64 {
     x ~= x >> 31
     return x
 }
+
+Debug_ID :: struct {
+    name_ptr:   [^]byte,
+    file_ptr:   [^]byte,
+    name_len:   i16,
+    file_len:   i16,
+    line:       i32,
+}
+
+create_debug_id :: proc(name: string, loc := #caller_location, allocator := context.allocator) -> Debug_ID {
+    name := name
+    if name == "" {
+        name = "AnonID"
+    }
+    name_clone := make([]byte, len(name), allocator)
+    copy(name_clone, name)
+    return {
+        name_ptr = raw_data(name_clone),
+        name_len = i16(len(name_clone)),
+        file_ptr = raw_data(loc.file_path),
+        file_len = i16(len(loc.file_path)),
+        line = loc.line,
+    }
+}
+
+destroy_debug_id :: proc(id: ^Debug_ID) {
+    delete(transmute(string)(id.name_ptr[:id.name_len]))
+}
+
+format_debug_id :: proc(id: Debug_ID) -> string {
+    return ufmt.aprintf("%s(%s:%i)", id.name_ptr[:id.name_len], id.file_ptr[:id.file_len], id.line)
+}
+
+get_debug_id_name :: proc(id: Debug_ID) -> string {
+    return transmute(string)(id.name_ptr[:id.name_len])
+}
+
+get_debug_id_file :: proc(id: Debug_ID) -> string {
+    return transmute(string)(id.file_ptr[:id.file_len])
+}
