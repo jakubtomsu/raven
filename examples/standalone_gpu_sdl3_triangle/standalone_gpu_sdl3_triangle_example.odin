@@ -11,7 +11,15 @@ when gpu.BACKEND == gpu.BACKEND_WGPU {
     SHADER_TARGET :: shader_compiler.Target.DXBC
 }
 
+verts := []Vertex{
+    {pos = {-0.5, -0.5, 0, 1}, col = {1, 0, 0, 1}},
+    {pos = {0.5, -0.5, 0, 1}, col = {0, 1, 0, 1}},
+    {pos = {0, 0.5, 0, 1}, col = {0, 0, 1, 1}},
+}
+
 main :: proc() {
+    base.eprintfln("Hello")
+
     assert(sdl.Init({.VIDEO}))
     defer sdl.Quit()
 
@@ -30,8 +38,6 @@ main :: proc() {
     gpu_state := new(gpu.State)
     gpu.init(gpu_state, native_window)
 
-    gpu.update_swapchain(native_window, size)
-
     shc: shader_compiler.State
     if !shader_compiler.init(&shc, SHADER_TARGET) {
         panic("No shader compiler")
@@ -39,17 +45,24 @@ main :: proc() {
     ps_blob := shader_compiler.compile(&shc, "triangle.hlsl", _shader_code, {stage = .Pixel}) or_else panic("ps_blob")
     vs_blob := shader_compiler.compile(&shc, "triangle.hlsl", _shader_code, {stage = .Vertex}) or_else panic("vs_blob")
 
-    pip := gpu.create_pipeline("triangle-pip", gpu.pipeline_desc(
+    vbuf := gpu.create_buffer("verts", .Storage, size_of(Vertex), data = base.slice_bytes(verts)) or_else panic("buf")
+
+    layout := gpu.create_bindings_layout("tri-lay", {slots = {
+        {index=0, kind=.Resource_Buffer, stages={.Vertex, .Pixel}},
+    }}) or_else panic("layout")
+
+    binds := gpu.create_bindings("tri-binds", {
+        layout = layout,
+        slots = {
+            {index = 0, resource = vbuf},
+        },
+    }) or_else panic("binds")
+
+    pip := gpu.create_graphics_pipeline("triangle-pip", gpu.make_graphics_pipeline_desc(
         ps = gpu.create_shader("triangle-ps", ps_blob, .Pixel) or_else panic("ps"),
         vs = gpu.create_shader("triangle-vs", vs_blob, .Vertex) or_else panic("vs"),
-        out_colors = {.RGBA_U8}, // TODO
-        resources = {
-            gpu.create_buffer("verts", size_of(Vertex), data = gpu.slice_bytes([]Vertex{
-                {pos = {-0.5, -0.5, 0, 1}, col = {1, 0, 0, 1}},
-                {pos = {0.5, -0.5, 0, 1}, col = {0, 1, 0, 1}},
-                {pos = {0, 0.5, 0, 1}, col = {0, 0, 1, 1}},
-            })) or_else panic("buf"),
-        }
+        layout = layout,
+        out_colors = {0 = .Swapchain},
     )) or_else panic("pip")
 
     sdl.ShowWindow(window)
@@ -67,29 +80,20 @@ main :: proc() {
             }
         }
 
-        prev_size := size
         sdl.GetWindowSize(window, &size.x, &size.y)
-        if size != prev_size {
-            base.log_debug("Resizing swapchain", size)
-            gpu.update_swapchain(native_window, size)
-        }
+        gpu.resize_swapchain(native_window, size)
 
         gpu.begin_frame()
 
-        gpu.begin_pass("main", {
-            colors = {
-                0 = {
-                    resource = gpu.get_swapchain(),
-                    clear_mode = .Clear,
-                    clear_val = {0.01, 0.1, 0.2, 1},
-                },
-            },
+        gpu.begin_graphics_pass("main", {
+            colors = {0 = {resource = gpu.SWAPCHAIN_HANDLE, clear_mode = .Clear, clear_val = {0.01, 0.1, 0.2, 1}}},
         })
 
-        gpu.set_pipeline(pip)
+        gpu.set_bindings(binds)
+        gpu.set_graphics_pipeline(pip)
         gpu.draw_non_indexed(3)
 
-        gpu.end_pass()
+        gpu.end_graphics_pass()
 
         gpu.end_frame(sync = true)
     }
@@ -101,13 +105,13 @@ Vertex :: struct {
 }
 
 @(rodata)
-_shader_code := `
+_shader_code := #load("../../data/ravn.hlsli", string) + `
 struct Vertex {
     float4 pos;
     float4 col;
 };
 
-StructuredBuffer<Vertex> verts : register(t0);
+RV_RESOURCE_SLOT(0, StructuredBuffer<Vertex> verts);
 
 struct Vertex_Out {
     float4 pos : SV_Position;
