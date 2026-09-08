@@ -17,54 +17,71 @@ when BACKEND == BACKEND_D3D11 {
     _SAMPLER_CACHE_BUCKET :: 8
     _RASTERIZER_CACHE_BUCKET :: 8
     _BLEND_CACHE_BUCKET :: 32
+    _MAX_DEPTH_STENCILS :: 8
+    _MAX_SAMPLERS :: 32
+    _MAX_RASTERIZERS :: 32
+    _MAX_BLENDS :: 32
 
     _State :: struct {
         device:                 ^d3d.IDevice,
         device_context:         ^d3d.IDeviceContext,
         dxgi_factory:           ^dxgi.IFactory2,
         swapchain:              ^dxgi.ISwapChain1,
+        swapchain_tex:          ^d3d.ITexture2D,
+        swapchain_rtv:          ^d3d.IRenderTargetView,
         render_texture:         ^d3d.ITexture2D,
         render_texture_view:    ^d3d.IRenderTargetView,
 
         info_queue:             ^d3d.IInfoQueue,
 
-        depth_stencil_cache:    [Comparison_Op][2]_Depth_Stencil, // no need for buckets
-        sampler_cache:          [Filter][Texture_Bounds]Bucket(_SAMPLER_CACHE_BUCKET, Sampler_Desc, _Sampler), // filter, bounds x
-        rasterizer_cache:       [Cull_Mode][Fill_Mode]Bucket(_RASTERIZER_CACHE_BUCKET, _Rasterizer_Desc, _Rasterizer),
-        blend_cache:            Bucket(_BLEND_CACHE_BUCKET, [RENDER_TEXTURE_BIND_SLOTS]Blend_Desc, _Blend),
+        depth_stencils:         [_MAX_DEPTH_STENCILS]_Depth_Stencil_State,
+        samplers:               [_MAX_SAMPLERS]_Sampler_State,
+        rasterizers:            [_MAX_RASTERIZERS]_Rasterizer_State,
+        blends:                 [_MAX_BLENDS]_Blend_State,
     }
 
-    _Pipeline :: struct {
+    _Graphics_Pipeline_State :: struct #all_or_none {
+        blend:          ^d3d.IBlendState,
+        rasterizer:     ^d3d.IRasterizerState,
+        depth_stencil:  ^d3d.IDepthStencilState,
+    }
+
+    _Compute_Pipeline_State :: struct #all_or_none {
 
     }
 
-    _Compute_Pipeline :: struct {
-
-    }
-
-    _Sampler :: struct {
+    _Sampler_State :: struct #all_or_none {
         smp:    ^d3d.ISamplerState,
+        desc:   Sampler_Desc,
     }
 
-    _Depth_Stencil :: struct {
+    _Depth_Stencil_State :: struct #all_or_none {
         dss:    ^d3d.IDepthStencilState,
+        desc:   _Depth_Stencil_Desc,
     }
 
-    _Blend :: struct {
+    _Blend_State :: struct #all_or_none {
         bs:     ^d3d.IBlendState,
+        descs:  [RENDER_TEXTURE_BIND_SLOTS]Blend_Desc,
     }
 
-    _Rasterizer :: struct {
+    _Rasterizer_State :: struct #all_or_none {
         rs:     ^d3d.IRasterizerState,
+        desc:   _Rasterizer_Desc,
     }
 
-    _Rasterizer_Desc :: struct {
+    _Rasterizer_Desc :: struct #all_or_none {
         cull:       Cull_Mode,
         fill:       Fill_Mode,
         depth_bias: i32,
     }
 
-    _Resource :: struct {
+    _Depth_Stencil_Desc :: struct #all_or_none {
+        comparison: Comparison_Op,
+        write:      bool,
+    }
+
+    _Resource_State :: struct #all_or_none {
         srv:    ^d3d.IShaderResourceView,
         uav:    ^d3d.IUnorderedAccessView,
         using _: struct #raw_union {
@@ -82,7 +99,7 @@ when BACKEND == BACKEND_D3D11 {
         },
     }
 
-    _Shader :: struct {
+    _Shader_State :: struct #all_or_none {
         using _: struct #raw_union {
             vs: ^d3d.IVertexShader,
             ps: ^d3d.IPixelShader,
@@ -90,10 +107,23 @@ when BACKEND == BACKEND_D3D11 {
         },
     }
 
-    _Constants :: struct {
+    _Constants_State :: struct #all_or_none {
         cbuf:   ^d3d.IBuffer,
     }
 
+    _Bindings_Layout_State :: struct #all_or_none {
+
+    }
+
+    _Bindings_State :: struct #all_or_none {
+        smps:           [dynamic; SAMPLER_BIND_SLOTS]^d3d.ISamplerState,
+        cbufs:          [dynamic; CONSTANTS_BIND_SLOTS]^d3d.IBuffer,
+        srvs:           [dynamic; RESOURCE_BIND_SLOTS]^d3d.IShaderResourceView,
+        uavs:           [dynamic; RW_RESOURCE_BIND_SLOTS]^d3d.IUnorderedAccessView,
+        smp_stages:     bit_set[Shader_Kind],
+        cbuf_stages:    bit_set[Shader_Kind],
+        srv_stages:     bit_set[Shader_Kind],
+    }
 
     _init :: proc(native_window: rawptr) -> bool {
         base_device: ^d3d.IDevice
@@ -159,11 +189,8 @@ when BACKEND == BACKEND_D3D11 {
 
     _begin_frame :: proc() -> bool {
         _d3d11_messages()
-        _unbind_cs_rw_resources()
-        _unbind_index_buffer()
-        _unbind_resources({.Vertex, .Pixel, .Compute})
-        _unbind_constants({.Vertex, .Pixel, .Compute})
-        _unbind_samplers({.Vertex, .Pixel, .Compute})
+        _state.device_context->IASetIndexBuffer(nil, .R32_UINT, 0)
+        _d3d11_messages()
         return true
     }
 
@@ -180,15 +207,104 @@ when BACKEND == BACKEND_D3D11 {
     // MARK: Create
     //
 
-    _create_pipeline :: proc(name: string, desc: Pipeline_Desc) -> (result: _Pipeline, ok: bool) {
+    _create_graphics_pipeline :: proc(name: string, desc: Graphics_Pipeline_Desc) -> (result: _Graphics_Pipeline_State, ok: bool) {
+        result.blend = _get_or_create_blend(desc.blends).bs
+        result.depth_stencil = _get_or_create_depth_stencil(_Depth_Stencil_Desc{
+            comparison = desc.depth_comparison,
+            write = desc.depth_write,
+        }).dss
+        result.rasterizer = _get_or_create_rasterizer(_Rasterizer_Desc{
+            cull = desc.cull,
+            fill = desc.fill,
+            depth_bias = desc.depth_bias,
+        }).rs
+        return result, true
+    }
+
+    _create_compute_pipeline :: proc(name: string, desc: Compute_Pipeline_Desc) -> (result: _Compute_Pipeline_State, ok: bool) {
         return {}, true
     }
 
-    _create_compute_pipeline :: proc(name: string, desc: Compute_Pipeline_Desc) -> (result: _Compute_Pipeline, ok: bool) {
+    _create_bindings_layout :: proc(name: string, desc: Bindings_Layout_Desc) -> (result: _Bindings_Layout_State, ok: bool) {
         return {}, true
     }
 
-    _create_rasterizer :: proc(desc: _Rasterizer_Desc) -> (result: _Rasterizer) {
+    _create_bindings :: proc(name: string, desc: Bindings_Desc) -> (result: _Bindings_State, ok: bool) {
+        layout, layout_ok := _get_bindings_layout(desc.layout)
+        assert(layout_ok)
+
+        for slot in layout.desc.slots {
+            switch slot.kind {
+            case .Sampler:
+                result.smp_stages += slot.stages
+
+            case .Constants, .Constants_Dynamic:
+                result.cbuf_stages += slot.stages
+
+            case .Resource_Buffer,
+                 .Resource_Texture_2D,
+                 .Resource_Texture_2D_Array,
+                 .Resource_Texture_3D:
+                result.srv_stages += slot.stages
+
+            case .RW_Resource_Buffer,
+                 .RW_Resource_Texture_2D,
+                 .RW_Resource_Texture_2D_Array,
+                 .RW_Resource_Texture_3D:
+                // UAV stages ignored, compute only
+            }
+        }
+
+        for slot, i in desc.slots {
+            if slot.resource != {} {
+                assert(slot.sampler == {})
+
+                res, res_ok := _get_resource(slot.resource)
+                assert(res_ok)
+
+                switch res.kind {
+                case .Invalid:
+                    assert(false)
+
+                case .Constants:
+                    assert(res.buf != nil)
+                    resize(&result.cbufs, slot.index + 1)
+                    result.cbufs[slot.index] = res.buf
+
+                case .Buffer:
+                    assert(res.srv != nil)
+                    resize(&result.srvs, slot.index + 1)
+                    result.srvs[slot.index] = res.srv
+
+                case .Texture2D, .Texture3D:
+                    if _is_bindings_layout_slot_rw(layout.desc.slots[i].kind) {
+                        assert(res.uav != nil)
+                        resize(&result.uavs, slot.index + 1)
+                        result.uavs[slot.index] = res.uav
+                    } else {
+                        assert(res.srv != nil)
+                        resize(&result.srvs, slot.index + 1)
+                        result.srvs[slot.index] = res.srv
+                    }
+                }
+
+            } else {
+                assert(slot.sampler != {})
+                resize(&result.smps, slot.index + 1)
+                result.smps[slot.index] = _get_or_create_sampler(slot.sampler).smp
+            }
+        }
+
+        return result, true
+    }
+
+    _get_or_create_rasterizer :: proc(desc: _Rasterizer_Desc) -> (result: _Rasterizer_State) {
+        for existing in _state.rasterizers {
+            if existing.desc == desc {
+                return existing
+            }
+        }
+
         base.log_debug("GPU: Creating D3D11 rasterizer")
 
         rasterizer_desc := d3d.RASTERIZER_DESC{
@@ -203,23 +319,26 @@ when BACKEND == BACKEND_D3D11 {
             MultisampleEnable       = false,
             AntialiasedLineEnable   = false,
         }
-
         _d3d11_check(_state.device->CreateRasterizerState(&rasterizer_desc, &result.rs))
 
         _d3d11_messages()
-
         return result
     }
 
-    _create_depth_stencil :: proc(comparison: Comparison_Op, write: bool) -> (result: _Depth_Stencil) {
+    _get_or_create_depth_stencil :: proc(desc: _Depth_Stencil_Desc) -> (result: _Depth_Stencil_State) {
+        for existing in _state.depth_stencils {
+            if existing.desc == desc {
+                return existing
+            }
+        }
+
         base.log_debug("GPU: Creating D3D11 depth stencil")
 
-        enable := true
-
+        result.desc = desc
         depth_stencil_desc := d3d.DEPTH_STENCIL_DESC{
-            DepthEnable         = d3d.BOOL(_depth_enable(comparison, write)),
-            DepthWriteMask      = _d3d11_depth_write(write),
-            DepthFunc           = _d3d11_comparison(comparison),
+            DepthEnable         = d3d.BOOL(_depth_enable(desc.comparison, desc.write)),
+            DepthWriteMask      = _d3d11_depth_write(desc.write),
+            DepthFunc           = _d3d11_comparison(desc.comparison),
             StencilEnable       = false,
             StencilReadMask     = d3d.DEFAULT_STENCIL_READ_MASK,
             StencilWriteMask    = d3d.DEFAULT_STENCIL_WRITE_MASK,
@@ -236,16 +355,19 @@ when BACKEND == BACKEND_D3D11 {
                 StencilFunc         = .ALWAYS,
             },
         }
-
         _d3d11_check(_state.device->CreateDepthStencilState(&depth_stencil_desc, &result.dss))
 
         _d3d11_messages()
-
         return result
     }
 
+    _get_or_create_sampler :: proc(desc: Sampler_Desc) -> (result: _Sampler_State) {
+        for existing in _state.samplers {
+            if existing.desc == desc {
+                return existing
+            }
+        }
 
-    _create_sampler :: proc(desc: Sampler_Desc) -> (result: _Sampler) {
         base.log_debug("GPU: Creating D3D11 sampler")
 
         desc := d3d.SAMPLER_DESC{
@@ -260,20 +382,24 @@ when BACKEND == BACKEND_D3D11 {
             BorderColor     = {},
             MaxAnisotropy   = u32(clamp(desc.max_aniso, 1, 16)),
         }
-
         _d3d11_check(_state.device->CreateSamplerState(&desc, &result.smp))
 
         _d3d11_messages()
-
         return result
     }
 
-    _create_blend :: proc(descs: [RENDER_TEXTURE_BIND_SLOTS]Blend_Desc) -> (result: _Blend) {
-        base.log_debug("GPU: Creating D3D11 blend state")
-
+    _get_or_create_blend :: proc(descs: [RENDER_TEXTURE_BIND_SLOTS]Blend_Desc) -> (result: _Blend_State) {
         if descs == {} {
             return {}
         }
+
+        for existing in _state.blends {
+            if existing.descs == descs {
+                return existing
+            }
+        }
+
+        base.log_debug("GPU: Creating D3D11 blend state")
 
         blend_desc := d3d.BLEND_DESC{
             AlphaToCoverageEnable = false,
@@ -287,7 +413,6 @@ when BACKEND == BACKEND_D3D11 {
         _d3d11_check(_state.device->CreateBlendState(&blend_desc, &result.bs))
 
         _d3d11_messages()
-
         return result
 
         _d3d11_blend_desc :: proc(desc: Blend_Desc) -> d3d.RENDER_TARGET_BLEND_DESC {
@@ -307,15 +432,15 @@ when BACKEND == BACKEND_D3D11 {
         }
     }
 
-    _update_swapchain :: proc(swapchain: ^_Resource, window: rawptr, size: [2]i32) -> (ok: bool) {
-        assert(swapchain != nil)
+    _resize_swapchain :: proc(window: rawptr, size: [2]i32) -> (ok: bool) {
+        assert(window != nil)
         assert(size.x > 0)
         assert(size.y > 0)
         assert(_state.device != nil)
         assert(_state.device_context != nil)
 
         if _state.swapchain == nil {
-            swapchain_desc := dxgi.SWAP_CHAIN_DESC1 {
+            swapchain_desc := dxgi.SWAP_CHAIN_DESC1{
                 Width  = u32(size.x),
                 Height = u32(size.y),
                 Format = .B8G8R8A8_UNORM,
@@ -334,15 +459,13 @@ when BACKEND == BACKEND_D3D11 {
             )) or_return
 
         } else {
+            assert(_state.swapchain_tex != nil)
+            assert(_state.swapchain_rtv != nil)
+
             _state.device_context->OMSetRenderTargets(0, nil, nil)
             _state.device_context->Flush()
-            if swapchain.tex2d != nil {
-                swapchain.tex2d->Release()
-            }
-
-            if swapchain.rtv != nil {
-                swapchain.rtv->Release()
-            }
+            _state.swapchain_tex->Release()
+            _state.swapchain_rtv->Release()
 
             _d3d11_check(_state.swapchain->ResizeBuffers(
                 BufferCount = 0,
@@ -355,19 +478,16 @@ when BACKEND == BACKEND_D3D11 {
 
         _d3d11_messages()
 
-        _d3d11_check(_state.swapchain->GetBuffer(0, d3d.ITexture2D_UUID, cast(^rawptr)&swapchain.tex2d)) or_return
-        _d3d11_check(_state.device->CreateRenderTargetView(swapchain.tex2d, nil, &swapchain.rtv)) or_return
-        _d3d11_setlabel(swapchain.tex2d, "Swapchain")
+        _d3d11_check(_state.swapchain->GetBuffer(0, d3d.ITexture2D_UUID, cast(^rawptr)&_state.swapchain_tex)) or_return
+        _d3d11_check(_state.device->CreateRenderTargetView(_state.swapchain_tex, nil, &_state.swapchain_rtv)) or_return
+        _d3d11_setlabel(_state.swapchain_tex, "Swapchain")
 
-        viewports := [1]d3d.VIEWPORT{
-            {
-                Width  = f32(size.x),
-                Height = f32(size.y),
-                MinDepth = 0,
-                MaxDepth = 1,
-            },
-        }
-        _state.device_context->RSSetViewports(len(viewports), &viewports[0])
+        _state.device_context->RSSetViewports(1, &d3d.VIEWPORT{
+            Width  = f32(size.x),
+            Height = f32(size.y),
+            MinDepth = 0,
+            MaxDepth = 1,
+        })
 
         _d3d11_messages()
 
@@ -375,10 +495,10 @@ when BACKEND == BACKEND_D3D11 {
     }
 
     // data: DXBC bytecode
-    _create_shader :: proc(name: string, data: []u8, kind: Shader_Kind) -> (result: _Shader, ok: bool) {
+    _create_shader :: proc(name: string, data: []u8, kind: Shader_Kind) -> (result: _Shader_State, ok: bool) {
         switch kind {
         case .Invalid:
-            unreachable()
+            assert(false)
 
         case .Vertex:
             _d3d11_check(_state.device->CreateVertexShader(
@@ -416,15 +536,23 @@ when BACKEND == BACKEND_D3D11 {
         return result, true
     }
 
-
     _create_buffer :: proc(
         name:   string,
+        kind:   Buffer_Kind,
         size:   i32,
         stride: i32,
         usage:  Usage,
         data:   []u8,
-    ) -> (result: _Resource, ok: bool) {
-        bind_flags: d3d.BIND_FLAGS = {.SHADER_RESOURCE}
+    ) -> (result: _Resource_State, ok: bool) {
+        bind_flags: d3d.BIND_FLAGS
+        switch kind {
+        case .Invalid:
+            assert(false)
+        case .Storage:
+            bind_flags = {.SHADER_RESOURCE}
+        case .Index:
+            bind_flags = {.INDEX_BUFFER}
+        }
 
         desc := d3d.BUFFER_DESC{
             ByteWidth           = u32(size),
@@ -449,48 +577,16 @@ when BACKEND == BACKEND_D3D11 {
         _d3d11_messages()
         _d3d11_setlabel(result.buf, name)
 
-        _d3d11_check(_state.device->CreateShaderResourceView(result.buf, nil, &result.srv)) or_return
-
-        _d3d11_messages()
-        _d3d11_setlabel(result.srv, name)
+        if kind == .Storage {
+            _d3d11_check(_state.device->CreateShaderResourceView(result.buf, nil, &result.srv)) or_return
+            _d3d11_messages()
+            _d3d11_setlabel(result.srv, name)
+        }
 
         return result, true
     }
 
-    _create_index_buffer :: proc(
-        name:   string,
-        size:   i32,
-        data:   []u8,
-        usage:  Usage,
-    ) -> (result: _Resource, ok: bool) {
-        bind_flags: d3d.BIND_FLAGS = {.INDEX_BUFFER}
-
-        desc := d3d.BUFFER_DESC{
-            ByteWidth = u32(size),
-            Usage = _d3d11_usage(usage),
-            BindFlags = bind_flags,
-            CPUAccessFlags = _d3d11_cpu_access(usage),
-        }
-
-        initial_data := d3d.SUBRESOURCE_DATA{
-            pSysMem = raw_data(data),
-        }
-
-        initial_data_ptr: ^d3d.SUBRESOURCE_DATA
-        if data != nil {
-            initial_data_ptr = &initial_data
-        }
-
-        _d3d11_check(_state.device->CreateBuffer(&desc, initial_data_ptr, &result.buf)) or_return
-
-        _d3d11_messages()
-        _d3d11_setlabel(result.buf, name)
-
-        return result, true
-    }
-
-
-    _create_constants :: proc(name: string, item_size: i32, item_num: i32) -> (result: _Resource, ok: bool) {
+    _create_constants :: proc(name: string, item_size: i32, item_num: i32) -> (result: _Resource_State, ok: bool) {
         // Create a single buffer and rely on driver buffer renaming.
 
         desc := d3d.BUFFER_DESC{
@@ -518,7 +614,7 @@ when BACKEND == BACKEND_D3D11 {
         render_texture:      bool,
         rw_resource:        bool,
         data:               []byte,
-    ) -> (result: _Resource, ok: bool) {
+    ) -> (result: _Resource_State, ok: bool) {
         bind_flags: d3d.BIND_FLAGS
 
         if render_texture {
@@ -625,77 +721,37 @@ when BACKEND == BACKEND_D3D11 {
 
 
 
-    // _generate_mips_texture_2d :: proc(res: Resource) {
-    //     _state.device_context->GenerateMips(res.srv)
-    // }
-
-
-
-
     /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
     // Destroy
     //
 
-    _destroy_rasterizer :: proc(rasterizer: _Rasterizer) {
-        rasterizer.rs->Release()
-        _d3d11_messages()
-    }
-
-    _destroy_depth_stencil :: proc(depth_stencil: _Depth_Stencil) {
-        depth_stencil.dss->Release()
-        _d3d11_messages()
-    }
-
-    _destroy_sampler :: proc(sampler: _Sampler) {
-        sampler.smp->Release()
-        _d3d11_messages()
-    }
-
-    _destroy_blend :: proc(blend: _Blend) {
-        blend.bs->Release()
-        _d3d11_messages()
-    }
-
     _destroy_shader :: proc(shader: Shader_State) {
         switch shader.kind {
-        case .Invalid:
-            return
-
-        case .Vertex:
-            shader.vs->Release()
-
-        case .Pixel:
-            shader.ps->Release()
-
-        case .Compute:
-            shader.cs->Release()
+        case .Invalid:  return
+        case .Vertex:   shader.vs->Release()
+        case .Pixel:    shader.ps->Release()
+        case .Compute:  shader.cs->Release()
         }
-
         _d3d11_messages()
     }
 
     _destroy_resource :: proc(res: Resource_State) {
         switch res.kind {
-        case .Invalid, .Swapchain:
+        case .Invalid:
             assert(false)
             return
-
-        case .Buffer, .Constants, .Index_Buffer:
+        case .Buffer, .Constants:
             res.buf->Release()
-
         case .Texture2D:
             res.tex2d->Release()
-
             if res.dsv != nil {
                 res.dsv->Release()
             }
-
             if res.rtv != nil {
                 res.rtv->Release()
             }
-
         case .Texture3D:
-            unimplemented()
+            res.tex3d->Release()
         }
 
         if res.srv != nil {
@@ -715,82 +771,33 @@ when BACKEND == BACKEND_D3D11 {
     // MARK: Set
     //
 
-    _set_topology :: proc(topo: Topology) {
-        _state.device_context->IASetPrimitiveTopology(_d3d11_topology(topo))
-
-        _d3d11_messages()
-    }
-
-    _set_depth_stencil :: proc(depth_stencil: _Depth_Stencil) {
-        _state.device_context->OMSetDepthStencilState(depth_stencil.dss, 0)
-
-        _d3d11_messages()
-    }
-
-    // TODO: independent blend
-    _set_blend :: proc(blend: _Blend) {
-        _state.device_context->OMSetBlendState(
-            pBlendState = blend.bs,
-            BlendFactor = nil,
-            SampleMask = 0xffff_ffff,
-        )
-
-        _d3d11_messages()
-    }
-
-    _set_rasterizer :: proc(rasterizer: _Rasterizer) {
-        _state.device_context->RSSetState(rasterizer.rs)
-
-        _d3d11_messages()
-    }
-
     _set_shader :: proc(shader: Shader_State) {
-        // NOTE: no unbinding yet
-
         switch shader.kind {
-        case .Invalid:
-            assert(false)
-            return
-
-        case .Vertex:
-            _state.device_context->VSSetShader(shader.vs, nil, 0)
-
-        case .Pixel:
-            _state.device_context->PSSetShader(shader.ps, nil, 0)
-
-        case .Compute:
-            _state.device_context->CSSetShader(shader.cs, nil, 0)
+        case .Invalid: assert(false)
+        case .Vertex:  _state.device_context->VSSetShader(shader.vs, nil, 0)
+        case .Pixel:   _state.device_context->PSSetShader(shader.ps, nil, 0)
+        case .Compute: _state.device_context->CSSetShader(shader.cs, nil, 0)
         }
-
         _d3d11_messages()
     }
 
     _set_resources :: proc(shaders: bit_set[Shader_Kind], srvs: []^d3d.IShaderResourceView, start_slot: i32) {
-        if .Vertex in shaders {
-            _state.device_context->VSSetShaderResources(
-                StartSlot = u32(start_slot),
-                NumViews = u32(len(srvs)),
-                ppShaderResourceViews = raw_data(srvs),
-            )
-        }
-
-        if .Pixel in shaders {
-            _state.device_context->PSSetShaderResources(
-                StartSlot = u32(start_slot),
-                NumViews = u32(len(srvs)),
-                ppShaderResourceViews = raw_data(srvs),
-            )
-        }
-
-        if .Compute in shaders {
-            _state.device_context->CSSetShaderResources(
-                StartSlot = u32(start_slot),
-                NumViews = u32(len(srvs)),
-                ppShaderResourceViews = raw_data(srvs),
-            )
-        }
-
+        if .Vertex  in shaders do _state.device_context->VSSetShaderResources(StartSlot = u32(start_slot), NumViews = u32(len(srvs)), ppShaderResourceViews = raw_data(srvs))
+        if .Pixel   in shaders do _state.device_context->PSSetShaderResources(StartSlot = u32(start_slot), NumViews = u32(len(srvs)), ppShaderResourceViews = raw_data(srvs))
+        if .Compute in shaders do _state.device_context->CSSetShaderResources(StartSlot = u32(start_slot), NumViews = u32(len(srvs)), ppShaderResourceViews = raw_data(srvs))
         _d3d11_messages()
+    }
+
+    _set_constants :: proc(shaders: bit_set[Shader_Kind], cbufs: []^d3d.IBuffer, start_slot: i32) {
+        if .Vertex  in shaders do _state.device_context->VSSetConstantBuffers(StartSlot = u32(start_slot), NumBuffers = u32(len(cbufs)), ppConstantBuffers = raw_data(cbufs))
+        if .Pixel   in shaders do _state.device_context->PSSetConstantBuffers(StartSlot = u32(start_slot), NumBuffers = u32(len(cbufs)), ppConstantBuffers = raw_data(cbufs))
+        if .Compute in shaders do _state.device_context->CSSetConstantBuffers(StartSlot = u32(start_slot), NumBuffers = u32(len(cbufs)), ppConstantBuffers = raw_data(cbufs))
+    }
+
+    _set_samplers :: proc(shaders: bit_set[Shader_Kind], smps: []^d3d.ISamplerState, start_slot: i32) {
+        if .Vertex  in shaders do _state.device_context->VSSetSamplers(StartSlot = u32(start_slot), NumSamplers = u32(len(smps)), ppSamplers = raw_data(smps))
+        if .Pixel   in shaders do _state.device_context->PSSetSamplers(StartSlot = u32(start_slot), NumSamplers = u32(len(smps)), ppSamplers = raw_data(smps))
+        if .Compute in shaders do _state.device_context->CSSetSamplers(StartSlot = u32(start_slot), NumSamplers = u32(len(smps)), ppSamplers = raw_data(smps))
     }
 
     _set_cs_rw_resources :: proc(uavs: []^d3d.IUnorderedAccessView, start_slot: i32) {
@@ -802,76 +809,24 @@ when BACKEND == BACKEND_D3D11 {
         )
     }
 
-
-    _set_constants :: proc(shaders: bit_set[Shader_Kind], cbufs: []^d3d.IBuffer, index_offset: i32) {
-        if .Vertex in shaders {
-            _state.device_context->VSSetConstantBuffers(
-                StartSlot = u32(index_offset),
-                NumBuffers = u32(len(cbufs)),
-                ppConstantBuffers = raw_data(cbufs),
-            )
-        }
-
-        if .Pixel in shaders {
-            _state.device_context->PSSetConstantBuffers(
-                StartSlot = u32(index_offset),
-                NumBuffers = u32(len(cbufs)),
-                ppConstantBuffers = raw_data(cbufs),
-            )
-        }
-
-        if .Compute in shaders {
-            _state.device_context->CSSetConstantBuffers(
-                StartSlot = u32(index_offset),
-                NumBuffers = u32(len(cbufs)),
-                ppConstantBuffers = raw_data(cbufs),
-            )
-        }
-    }
-
-    _set_samplers :: proc(shaders: bit_set[Shader_Kind], smps: []^d3d.ISamplerState, index_offset: i32) {
-        if .Vertex in shaders {
-            _state.device_context->VSSetSamplers(
-                StartSlot = u32(index_offset),
-                NumSamplers = u32(len(smps)),
-                ppSamplers = raw_data(smps),
-            )
-        }
-
-        if .Pixel in shaders {
-            _state.device_context->PSSetSamplers(
-                StartSlot = u32(index_offset),
-                NumSamplers = u32(len(smps)),
-                ppSamplers = raw_data(smps),
-            )
-        }
-
-        if .Compute in shaders {
-            _state.device_context->CSSetSamplers(
-                StartSlot = u32(index_offset),
-                NumSamplers = u32(len(smps)),
-                ppSamplers = raw_data(smps),
-            )
-        }
-    }
-
-    _set_index_buffer :: proc(res: _Resource, format: Index_Format, offset: i32) {
+    _set_index_buffer :: proc(res: ^Resource_State, format: Index_Format, offset: u64) {
         _state.device_context->IASetIndexBuffer(
             pIndexBuffer = res.buf,
             Format = _d3d11_index_format(format),
             Offset = u32(offset),
         )
-
         _d3d11_messages()
+    }
+
+    _unbind_shaders :: proc(shaders: bit_set[Shader_Kind]) {
+        if .Vertex  in shaders do _state.device_context->VSSetShader(nil, nil, 0)
+        if .Pixel   in shaders do _state.device_context->PSSetShader(nil, nil, 0)
+        if .Compute in shaders do _state.device_context->CSSetShader(nil, nil, 0)
     }
 
     _unbind_cs_rw_resources :: proc() {
         uavs: [RW_RESOURCE_BIND_SLOTS]^d3d.IUnorderedAccessView
         _state.device_context->CSSetUnorderedAccessViews(0, len(uavs), &uavs[0], nil)
-    }
-
-    _unbind_index_buffer :: proc() {
-        _state.device_context->IASetIndexBuffer(nil, .R32_UINT, 0)
     }
 
     _unbind_resources :: proc(shaders: bit_set[Shader_Kind]) {
@@ -900,7 +855,7 @@ when BACKEND == BACKEND_D3D11 {
     // MARK: Actions
     //
 
-    _begin_pass :: proc(name: string, desc: Pass_Desc) {
+    _begin_graphics_pass :: proc(name: string, desc: Graphics_Pass_Desc) {
         rtvs: [d3d.SIMULTANEOUS_RENDER_TARGET_COUNT]^d3d.IRenderTargetView
         dsv: ^d3d.IDepthStencilView
 
@@ -913,30 +868,36 @@ when BACKEND == BACKEND_D3D11 {
             switch desc.depth.clear_mode {
             case .Keep:
             case .Clear:
-                _clear_depth_texture(depth, desc.depth.clear_val)
+                assert(depth.dsv != nil)
+                _state.device_context->ClearDepthStencilView(depth.dsv, {.DEPTH}, Depth = desc.depth.clear_val, Stencil = 0)
             }
         }
 
         resolution: [2]i32
         for color, i in desc.colors {
-            res := _get_resource(color.resource) or_continue
-
-            #partial switch res.kind {
-            case .Texture2D:
-            case .Swapchain:
-            case:
-                assert(false)
+            color := color
+            rtv: ^d3d.IRenderTargetView
+            if color.resource == SWAPCHAIN_HANDLE {
+                rtv = _state.swapchain_rtv
+                resolution = _state.swapchain_size
+            } else {
+                res := _get_resource(color.resource) or_continue
+                #partial switch res.kind {
+                case .Texture2D:
+                case:
+                    assert(false)
+                }
+                rtv = res.rtv
+                resolution = res.size.xy
             }
-            assert(res.rtv != nil)
 
-            rtvs[i] = res.rtv
-
-            resolution = res.size.xy
+            assert(rtv != nil)
+            rtvs[i] = rtv
 
             switch color.clear_mode {
             case .Keep:
             case .Clear:
-                _clear_render_texture(res, color.clear_val)
+                _state.device_context->ClearRenderTargetView(rtv, &color.clear_val)
             }
         }
 
@@ -945,10 +906,6 @@ when BACKEND == BACKEND_D3D11 {
             ppRenderTargetViews = &rtvs[0],
             pDepthStencilView = dsv,
         )
-
-        // NOTE: currently the viewport is tied to RT for simplicity.
-        // This might get changed in the future.
-
 
         viewport := d3d.VIEWPORT{
             TopLeftX = 0,
@@ -962,53 +919,58 @@ when BACKEND == BACKEND_D3D11 {
         _state.device_context->RSSetViewports(1, &viewport)
     }
 
-    _end_pass :: proc() {
-        // no-op
+    _end_graphics_pass :: proc() {
+        _unbind_cs_rw_resources()
+        _unbind_shaders({.Vertex, .Pixel, .Compute})
+        _unbind_resources({.Vertex, .Pixel, .Compute})
+        _unbind_constants({.Vertex, .Pixel, .Compute})
+        _unbind_samplers({.Vertex, .Pixel, .Compute})
     }
 
-    // This is really ugly...
-    _set_pipeline :: proc(
-        curr_pip: Pipeline_State,
-        curr: Pipeline_Desc,
-        prev: Pipeline_Desc,
+    _set_bindings :: proc(bindings: ^Bindings_State, offsets: []u32) {
+        for offset, i in offsets {
+            res := _get_resource(bindings.dyn_consts[i]) or_continue
+            assert(res.kind == .Constants)
+            assert(res.size.y > 1)
+            assert(res.const_buf_data != nil)
+
+            mapped: d3d.MAPPED_SUBRESOURCE
+            if !_d3d11_check(_state.device_context->Map(
+                res.buf,
+                Subresource = 0,
+                MapType = .WRITE_DISCARD,
+                MapFlags = {},
+                pMappedResource = &mapped,
+            )) {
+                return
+            }
+
+            runtime.mem_copy_non_overlapping(mapped.pData, &res.const_buf_data[offset], int(res.size.x))
+
+            _state.device_context->Unmap(res.buf, 0)
+        }
+
+        _set_samplers(bindings.smp_stages, bindings.smps[:], start_slot = 0)
+        _set_resources(bindings.srv_stages, bindings.srvs[:], start_slot = 0)
+        _set_constants(bindings.cbuf_stages, bindings.cbufs[:], start_slot = 0)
+
+        if _state.encoder.mode == .Compute {
+            _set_cs_rw_resources(bindings.uavs[:], start_slot = 0)
+        }
+    }
+
+    _set_graphics_pipeline :: proc(
+        pip: ^Graphics_Pipeline_State,
+        curr: Graphics_Pipeline_Desc,
+        prev: Graphics_Pipeline_Desc,
     ) {
         if curr.topo != prev.topo {
-            _set_topology(curr.topo)
+            _state.device_context->IASetPrimitiveTopology(_d3d11_topology(curr.topo))
         }
 
-        if curr.index != prev.index && curr.index.format != .Invalid {
-            res, res_ok := _get_resource(curr.index.resource)
-            assert(res_ok)
-            assert(res.kind == .Index_Buffer)
-            _set_index_buffer(res, curr.index.format, curr.index.offset)
-        }
-
-        if curr.blends == {} {
-            _set_blend({})
-        } else if curr.blends != prev.blends {
-            bucket := &_state.blend_cache
-            blend := bucket_find_or_create(bucket, curr.blends, _create_blend)
-            _set_blend(blend)
-        }
-
-        if curr.cull != prev.cull || curr.fill != prev.fill || curr.depth_bias != prev.depth_bias {
-            raster_desc := _Rasterizer_Desc{
-                cull = curr.cull,
-                fill = curr.fill,
-                depth_bias = curr.depth_bias,
-            }
-            bucket := &_state.rasterizer_cache[curr.cull][curr.fill]
-            raster := bucket_find_or_create(bucket, raster_desc, _create_rasterizer)
-            _set_rasterizer(raster)
-        }
-
-        if curr.depth_comparison != prev.depth_comparison || curr.depth_write != prev.depth_write || prev.depth_format == .Invalid {
-            depth_stencil := &_state.depth_stencil_cache[curr.depth_comparison][curr.depth_write ? 1 : 0]
-            if depth_stencil.dss == nil {
-                depth_stencil^ = _create_depth_stencil(curr.depth_comparison, curr.depth_write)
-            }
-            _set_depth_stencil(depth_stencil^)
-        }
+        _state.device_context->OMSetBlendState(pBlendState = pip.blend, BlendFactor = nil, SampleMask = 0xffff_ffff)
+        _state.device_context->RSSetState(pip.rasterizer)
+        _state.device_context->OMSetDepthStencilState(pip.depth_stencil, 0)
 
         if curr.vs != prev.vs {
             if shader, shader_ok := _get_shader(curr.vs); shader_ok {
@@ -1024,35 +986,6 @@ when BACKEND == BACKEND_D3D11 {
             }
         }
 
-        if curr.resources != prev.resources {
-            srvs: [RESOURCE_BIND_SLOTS]^d3d.IShaderResourceView
-            for res, i in curr.resources {
-                res := _get_resource(res) or_continue
-                assert(res.srv != nil)
-                srvs[i] = res.srv
-            }
-            _set_resources({.Vertex, .Pixel}, srvs[:], 0)
-        }
-
-        if curr.constants != prev.constants {
-            cbufs: [CONSTANTS_BIND_SLOTS]^d3d.IBuffer
-            for handle, i in curr.constants {
-                const := _get_resource(handle) or_continue
-                cbufs[i] = const.buf
-            }
-            _set_constants({.Vertex, .Pixel}, cbufs[:], 0)
-        }
-
-        if curr.samplers != prev.samplers {
-            smps: [SAMPLER_BIND_SLOTS]^d3d.ISamplerState
-            for smp, i in curr.samplers {
-                bucket := &_state.sampler_cache[smp.filter][smp.bounds.x]
-                sampler := bucket_find_or_create(bucket, smp, _create_sampler)
-                smps[i] = sampler.smp
-            }
-            _set_samplers({.Vertex, .Pixel}, smps[:], 0)
-        }
-
         _d3d11_messages()
     }
 
@@ -1064,57 +997,13 @@ when BACKEND == BACKEND_D3D11 {
         _unbind_cs_rw_resources()
     }
 
-    _set_compute_pipeline :: proc(
-        curr_pip:   Compute_Pipeline_State,
-        curr:       Compute_Pipeline_Desc,
-        prev:       Compute_Pipeline_Desc,
-    ) {
-        if curr.cs != prev.cs {
-            if shader, shader_ok := _get_shader(curr.cs); shader_ok {
+    _set_compute_pipeline :: proc(curr: ^Compute_Pipeline_State, prev: Compute_Pipeline_Desc) {
+        if curr.desc.cs != prev.cs {
+            if shader, shader_ok := _get_shader(curr.desc.cs); shader_ok {
                 assert(shader.kind == .Compute)
                 _set_shader(shader^)
             }
         }
-
-        if curr.resources != prev.resources {
-            srvs: [RESOURCE_BIND_SLOTS]^d3d.IShaderResourceView
-            for res, i in curr.resources {
-                res := _get_resource(res) or_continue
-                assert(res.srv != nil)
-                srvs[i] = res.srv
-            }
-            _set_resources({.Compute}, srvs[:], 0)
-        }
-
-        if curr.rw_resources != prev.rw_resources {
-            uavs: [RW_RESOURCE_BIND_SLOTS]^d3d.IUnorderedAccessView
-            for res, i in curr.rw_resources {
-                res := _get_resource(res) or_continue
-                assert(res.uav != nil)
-                uavs[i] = res.uav
-            }
-            _set_cs_rw_resources(uavs[:], 0)
-        }
-
-        if curr.constants != prev.constants {
-            cbufs: [CONSTANTS_BIND_SLOTS]^d3d.IBuffer
-            for handle, i in curr.constants {
-                const := _get_resource(handle) or_continue
-                cbufs[i] = const.buf
-            }
-            _set_constants({.Compute}, cbufs[:], 0)
-        }
-
-        if curr.samplers != prev.samplers {
-            smps: [SAMPLER_BIND_SLOTS]^d3d.ISamplerState
-            for smp, i in curr.samplers {
-                bucket := &_state.sampler_cache[smp.filter][smp.bounds.x]
-                sampler := bucket_find_or_create(bucket, smp, _create_sampler)
-                smps[i] = sampler.smp
-            }
-            _set_samplers({.Compute}, smps[:], 0)
-        }
-
         _d3d11_messages()
     }
 
@@ -1195,133 +1084,39 @@ when BACKEND == BACKEND_D3D11 {
         }
     }
 
-    _map_buffer :: proc(res: _Resource) -> [^]byte {
-        mapped: d3d.MAPPED_SUBRESOURCE
-        if !_d3d11_check(_state.device_context->Map(
-            res.buf,
-            Subresource = 0,
-            MapType = .WRITE_DISCARD,
-            MapFlags = {},
-            pMappedResource = &mapped,
-        )) {
-            return {}
-        }
-
-        _d3d11_messages()
-
-        return (cast([^]byte)mapped.pData)
-    }
-
-    _unmap_buffer :: proc(res: _Resource) {
-        _state.device_context->Unmap(res.buf, 0)
-
-        _d3d11_messages()
-    }
-
-    _update_texture_2d :: proc(res: Resource_State, data: []byte, slice: i32) {
+    _update_texture_2d :: proc(res: ^Resource_State, data: []byte, slice: i32) {
         sub := _d3d11_calc_subresource(0, slice, 1)
-
         _state.device_context->UpdateSubresource(
             pDstResource = res.tex2d,
             DstSubresource = sub,
             pDstBox = nil,
             pSrcData = raw_data(data),
-            SrcRowPitch = u32(res.size.x * texture_pixel_size(res.format)),
+            SrcRowPitch = u32(res.size.x * texture_pixel_size(res.tex_format)),
             SrcDepthPitch = 0,
         )
-
         _d3d11_messages()
     }
 
-    _clear_render_texture :: proc(tex: _Resource, color: [4]f32) {
-        color := color
-        assert(tex.rtv != nil)
-        _state.device_context->ClearRenderTargetView(tex.rtv, &color)
-
-        _d3d11_messages()
-    }
-
-    _clear_depth_texture :: proc(tex: _Resource, value: f32) {
-        assert(tex.dsv != nil)
-        _state.device_context->ClearDepthStencilView(tex.dsv, {.DEPTH}, Depth = value, Stencil = 0)
-
-        _d3d11_messages()
-    }
-
-    _update_draw_constants :: proc(const_offsets: []u32) {
-        // TODO: some of this should be cached on set_pipeline
-        for offset, i in const_offsets {
-            if offset == max(u32) {
-                continue
-            }
-
-            handle := _state.curr_pipeline_desc.constants[i]
-
-            res := _get_resource(handle) or_continue
-
-            assert(res.kind == .Constants)
-
-            if res.size.y == 1 {
-                continue
-            }
-
-            assert(res.const_buf_data != nil)
-
-            data := &res.const_buf_data[int(offset) * int(res.size.x)]
-
-            mapped: d3d.MAPPED_SUBRESOURCE
-            if !_d3d11_check(_state.device_context->Map(
-                res.buf,
-                Subresource = 0,
-                MapType = .WRITE_DISCARD,
-                MapFlags = {},
-                pMappedResource = &mapped,
-            )) {
-                return
-            }
-
-            runtime.mem_copy_non_overlapping(mapped.pData, data, int(res.size.x))
-
-            _state.device_context->Unmap(res.buf, 0)
-        }
-    }
-
-    _draw_non_indexed :: proc(
-        vertex_num:     u32,
-        instance_num:   u32,
-        const_offsets:  []u32,
-    ) {
-        _update_draw_constants(const_offsets)
-
+    _draw_non_indexed :: proc(vertex_num: u32, instance_num: u32) {
         _state.device_context->DrawInstanced(
             VertexCountPerInstance = vertex_num,
             InstanceCount = instance_num,
             StartVertexLocation = 0,
             StartInstanceLocation = 0,
         )
-
         _d3d11_messages()
     }
 
-    _draw_indexed :: proc(
-        index_num:      u32,
-        instance_num:   u32,
-        index_offset:   u32,
-        const_offsets:  []u32,
-    ) {
-        _update_draw_constants(const_offsets)
-
+    _draw_indexed :: proc(index_num: u32, instance_num: u32, index_offset: u32) {
         _state.device_context->DrawIndexedInstanced(
             IndexCountPerInstance = index_num,
             InstanceCount = instance_num,
             StartIndexLocation = index_offset,
-            BaseVertexLocation = 0, // NOTE: not supported since vertex buffers must be structured buffers
+            BaseVertexLocation = 0, // not supported
             StartInstanceLocation = 0,
         )
-
         _d3d11_messages()
     }
-
 
     _dispatch_compute :: proc(size: [3]i32) {
         _state.device_context->Dispatch(
@@ -1329,7 +1124,6 @@ when BACKEND == BACKEND_D3D11 {
             ThreadGroupCountY = u32(size.y),
             ThreadGroupCountZ = u32(size.z),
         )
-
         _d3d11_messages()
     }
 
@@ -1338,7 +1132,6 @@ when BACKEND == BACKEND_D3D11 {
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////
     // MARK: d3d11 utils
     //
-
 
     _d3d11_setlabel :: proc(self: ^d3d.IDeviceChild, label: string) {
         buf: [128]u16
@@ -1559,16 +1352,16 @@ when BACKEND == BACKEND_D3D11 {
         return .ALWAYS
     }
 
-    _d3d11_filter :: proc(filter: Filter) -> d3d.FILTER {
+    _d3d11_filter :: proc(filter: bit_set[Filter]) -> d3d.FILTER {
         switch filter {
-        case .Unfiltered:       return .MIN_MAG_MIP_POINT
-        case .Mip_Filtered:     return .MIN_MAG_POINT_MIP_LINEAR
-        case .Mag_Filtered:     return .MIN_POINT_MAG_LINEAR_MIP_POINT
-        case .Mag_Mip_Filtered: return .MIN_POINT_MAG_MIP_LINEAR
-        case .Min_Filtered:     return .MIN_LINEAR_MAG_MIP_POINT
-        case .Min_Mip_Filtered: return .MIN_LINEAR_MAG_POINT_MIP_LINEAR
-        case .Min_Mag_Filtered: return .MIN_MAG_LINEAR_MIP_POINT
-        case .Filtered:         return .MIN_MAG_MIP_LINEAR
+        case {}:                 return .MIN_MAG_MIP_POINT
+        case {.Mip}:             return .MIN_MAG_POINT_MIP_LINEAR
+        case {.Mag}:             return .MIN_POINT_MAG_LINEAR_MIP_POINT
+        case {.Mag, .Mip}:       return .MIN_POINT_MAG_MIP_LINEAR
+        case {.Min}:             return .MIN_LINEAR_MAG_MIP_POINT
+        case {.Min, .Mip}:       return .MIN_LINEAR_MAG_POINT_MIP_LINEAR
+        case {.Min, .Mag}:       return .MIN_MAG_LINEAR_MIP_POINT
+        case {.Min, .Mag, .Mip}: return .MIN_MAG_MIP_LINEAR
         }
         assert(false)
         return .MIN_MAG_MIP_POINT
@@ -1577,6 +1370,7 @@ when BACKEND == BACKEND_D3D11 {
     _d3d11_texture_format :: proc(format: Texture_Format) -> dxgi.FORMAT {
         switch format {
         case .Invalid:          return .UNKNOWN
+        case .Swapchain:        return .B8G8R8A8_UNORM
         case .RGBA_F32:         return .R32G32B32A32_FLOAT
         case .RGBA_U32:         return .R32G32B32A32_UINT
         case .RGBA_S32:         return .R32G32B32A32_SINT
